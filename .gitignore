@@ -1,0 +1,19 @@
+# Instruction files are private per repository-tiering-policy.md §5.3 —
+# both names, because AGENTS.md is canonical and CLAUDE.md is its symlink.
+AGENTS.md
+CLAUDE.md
+
+# The real config. Only config.example.yaml is tracked — see README "Configuration".
+# A topology literal reaching this repo is the one defect that makes the published
+# artifact unusable to anyone else (console-policy.md §1.1, §2.3).
+config.yaml
+config.*.yaml
+!config.example.yaml
+*.local
+
+node_modules/
+dist/
+build/
+coverage/
+.DS_Store
+*.log

@@ -1,0 +1,8 @@
+nousergon-console
+Copyright (c) 2026 Nous Ergon
+
+Licensed under the GNU Affero General Public License v3.0.
+See LICENSE for the full text.
+
+Developed as a dogfooded tool: Nous Ergon runs the published artifact plus
+private configuration, never an internal fork. See CONTRIBUTING.md.

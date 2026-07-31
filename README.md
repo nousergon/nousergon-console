@@ -1,0 +1,84 @@
+# nousergon-console
+
+**A read-only fleet index that persists nothing and reports what it cannot see.**
+
+Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answer to the questions its author had at authoring time — but monitoring is the business of being asked questions nobody anticipated: *why is this stale · what else touched that artifact · what did this cycle cost · which of these has never run · who breaks if this one does.* Each of those is a traversal, not a tile.
+
+This is an **index over a typed entity graph** instead. Point it at the artifacts you already have; it builds a catalog you can search, link to, and walk.
+
+> **Status: pre-implementation.** The contract below is settled and normative. The implementation is not written yet. See [Roadmap](#roadmap).
+
+## What makes it different
+
+|  | Service / metadata catalogs | This |
+|---|---|---|
+| **Target** | teams on cloud-native stacks (Kubernetes, Terraform, dbt, Airflow) | one operator or a small team, over heterogeneous sources — object-store keys, cron jobs, systemd units, state machines, YAML registries, CI |
+| **State** | a database plus ingestion pipelines | **persists nothing** — every figure is a projection of a fact durable somewhere else |
+| **Headline number** | catalog coverage | **the transparency-gap count** — how much of your system the surface cannot see |
+
+That last row is the point. A surface that renders nine of fourteen services *in depth* is worse than a coarse one rendering all fourteen, because the five it omits are indistinguishable from five that are fine. So this one publishes its own blind spots as a first-class metric, and the objective for that number is zero.
+
+If you already run Backstage, Port, OpenMetadata or DataHub over a standard cloud-native stack, use those — their connector libraries are the reason they exist. This is for the case where none of your sources has a stock connector.
+
+## The entity model
+
+Everything rendered is a fact about exactly one of seven kinds:
+
+| Kind | Is | Identified by |
+|---|---|---|
+| **Component** | anything that runs unattended and can fail with no human present | `component_id` |
+| **Run** | one execution of a component | run id |
+| **Cycle** | the business period runs belong to — a day, a weekly cadence, a deploy | cycle id |
+| **Artifact** | a durable thing produced or consumed — an object key, a table, a report | its key |
+| **Signal** | one named measurement over time, with its baseline | metric name |
+| **Decision** | a ruling, a gate, a queued question, a policy clause | tracker reference |
+| **Incident** | a failure record with its severity and class | incident id |
+
+**Cost is not a kind.** It is a facet of Run, Cycle and Component, so *"what did this cycle cost"* is a traversal rather than a separate system with its own component list that will disagree with yours.
+
+## Three ways to reach everything
+
+Every entity is reachable **by name** (search), **by structure** (navigation), and **by relation** (a link from anything adjacent). Three paths, independently sufficient — because a fact reachable only one way is reachable only by someone who already knows it exists, and that is a forensic tool rather than a measurement.
+
+The relation direction that matters most is the reverse one. *What did this produce* is usually written down somewhere. *Who breaks if this is stale* exists nowhere unless the index derives it — and it is the only question an incident actually asks.
+
+## Adapters
+
+One adapter per source of truth. An adapter is a function from configuration to entities and edges, and it is the **only** thing that knows its source's shape.
+
+- Adapters do not know about each other. Cross-source relations are formed by the index over entity identifiers, never inside an adapter.
+- **Every literal naming a bucket, ARN, host, port, path or component comes from configuration.** None is compiled in — which is what makes this artifact usable by anyone but its author.
+- An adapter declares what it cannot supply. A source with no freshness stamp or no baseline says so, and its entities carry the corresponding state rather than a silent default.
+- An unreachable source renders its entities `UNREPORTED` and the adapter `FAILED`. It never empties the surface and never removes rows.
+- Adding a source is adding an adapter — no change to the model, the index, the router, or any view.
+
+## Configuration
+
+`config.example.yaml` is the tracked shape; your real `config.yaml` is gitignored. It declares which adapters are enabled, what each points at, and which facets matter in your fleet. Nothing about your topology belongs anywhere else in this repository.
+
+## Rendering rules
+
+Every rendered fact carries four fields — **state · source · as-of · evidence link**. A dot that cannot say how it knows is not yet trustworthy.
+
+- A row older than its declared cadence renders **stale**, not as its last value in normal styling.
+- Any roll-up states its denominator inline (`12 / 14 reporting`). One that cannot is not rendered.
+- A number with no baseline is rendered as telemetry, never coloured as a verdict.
+- Zero, null, empty, never-ran and not-measured are five different facts and render as five different things. **No data is never drawn as green, and never drawn as nothing.**
+- Every addressable state has a URL built from entity identifiers. Paste it anywhere; it reproduces the view on a cold load.
+
+## Roadmap
+
+1. The adapter contract and reference adapters (filesystem/YAML registry, object store, Git host API, CI).
+2. The entity index, its URL scheme, and the relation graph.
+3. Generated navigation, global search, entity pages.
+4. The seven self-grading numbers, published on the surface itself.
+
+The implementation stack is not yet chosen; it is decided with item 1.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). One thing worth stating up front: this is a dogfooded tool, so its roadmap is driven by its authors' own use until there is a second real user. A feature request grounded in your actual use is welcome and is exactly what moves that line.
+
+## Licence
+
+AGPL-3.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

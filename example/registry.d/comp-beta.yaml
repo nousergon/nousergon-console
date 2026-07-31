@@ -1,0 +1,8 @@
+# Example registry row — synthetic component, no fleet topology.
+component_id: comp-beta
+owning_repo: example-repo
+substrate: ec2-always-on
+origin: aws:ec2:i-example
+owner: example-owner
+lifecycle: in-service
+authority_tier: unknown

@@ -1,0 +1,98 @@
+# nousergon-console — configuration shape.
+#
+# Copy to `config.yaml` (gitignored) and fill in. Everything specific to YOUR
+# systems lives here and nowhere else in this repository: if a bucket name, ARN,
+# host, port, path or component id has to be compiled into source for the console
+# to work, that is a defect in the adapter, not a reason to hardcode it.
+#
+# Nothing below is read at build time. The console reads this at start and
+# derives its entity index, navigation, search index and relation graph from
+# whatever the enabled adapters return.
+
+console:
+  # Where the process listens. Loopback is the default and is what makes the
+  # absence of authentication correct rather than negligent — change it only
+  # alongside a real authentication story.
+  bind: 127.0.0.1
+  port: 5180
+
+  # How old a row may be, relative to its own declared cadence, before it renders
+  # as stale rather than as its last value. A multiplier, not an absolute.
+  staleness_factor: 1.5
+
+# The component denominator. The console renders what it knows about and reports
+# the difference between this set and what it can actually see — that difference
+# is the transparency-gap count, and it is published on the surface.
+#
+# Without a registry the console still runs: it indexes whatever the adapters
+# return and reports population completeness as unknown rather than as 1.0.
+registry:
+  adapter: yaml-directory
+  path: ./example/registry.d          # one file per component
+  id_field: component_id
+
+# One entry per source of truth. Each is handled by exactly one adapter, and no
+# adapter knows about any other — cross-source relations are formed by the index
+# over entity identifiers, never inside an adapter.
+adapters:
+
+  - name: checks
+    kind: object-store               # s3-compatible
+    enabled: false
+    produces: [component, run, artifact]
+    config:
+      bucket: your-bucket
+      prefix: ops/checks/
+      # How a key maps to an entity id. Named groups become entity fields.
+      key_pattern: "ops/checks/(?P<component_id>[^/]+)/latest.json"
+      cadence: 1h                    # declared, so staleness is computable
+
+  - name: repos
+    kind: git-host                   # github / gitlab api
+    enabled: false
+    produces: [decision, incident]
+    config:
+      org: your-org
+      # Trackers to index. Issues and pull requests become Decision entities;
+      # anything carrying an incident label becomes an Incident.
+      repos: []
+      incident_label: incident
+
+  - name: pipelines
+    kind: state-machine              # step functions / airflow / equivalent
+    enabled: false
+    produces: [run, cycle, artifact]
+    config:
+      region: your-region
+      state_machines: []
+      # What a "cycle" means here — the join key for "what else broke when this
+      # broke" and "what did this cycle cost".
+      cycle_key: execution_date
+
+  - name: schedules
+    kind: local-units                # systemd / launchd / cron
+    enabled: false
+    produces: [component, run]
+    config:
+      # A unit present here but absent from the registry renders UNREGISTERED;
+      # a registry row with no unit renders ABSENT. Both are findings, and they
+      # are different findings.
+      unit_prefixes: []
+
+# Facets are fields on entities, faceted uniformly by the index. No view
+# implements its own filtering. Listing a facet here makes it a slicing
+# dimension everywhere; omitting one does not hide the field.
+facets:
+  - owner
+  - substrate
+  - repo
+  - environment
+  - authority_tier
+  - lifecycle
+
+# Optional. Where the console's own execution telemetry goes — it is a component
+# like any other, and a surface that cannot be seen to have stopped is the
+# failure this whole project is about.
+self:
+  component_id: nousergon-console
+  emit: stdout

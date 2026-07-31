@@ -1,0 +1,8 @@
+# Example registry row — synthetic component, no fleet topology.
+component_id: comp-alpha
+owning_repo: example-repo
+substrate: lambda
+origin: aws:lambda:comp-alpha
+owner: example-owner
+lifecycle: in-service
+authority_tier: unknown

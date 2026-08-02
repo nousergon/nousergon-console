@@ -57,14 +57,14 @@ def fetch(
             unavailable=("state_machines",),
         )
     if reader is None:
-        # No production SF client is bundled; a deployment injects one (boto3).
-        # Absent a client the adapter declares itself unable rather than
-        # silently returning zero rows — absence renders as itself (§5.5).
-        return AdapterResult(
-            name=config.get("_name", name),
-            status=AdapterStatus.FAILED,
-            unavailable=("reader",),
-        )
+        reader = _default_reader()
+        if reader is None:
+            # boto3 not installed — declare unable rather than silently zero (§5.5).
+            return AdapterResult(
+                name=config.get("_name", name),
+                status=AdapterStatus.FAILED,
+                unavailable=("reader",),
+            )
 
     entities: list[Entity] = []
     edges: list[Edge] = []
@@ -308,6 +308,51 @@ def _parse_jsonish(value: Any) -> Any:
         except (TypeError, ValueError):
             return value
     return value
+
+
+def _default_reader() -> ExecutionReader | None:
+    """boto3-backed reader when the optional AWS extra is installed.
+
+    Pages ``list_executions`` fully and hydrates each summary with
+    ``describe_execution`` so input/output (cycle key, durable keys) are
+    available. Returns None when boto3 is absent so the adapter fails loud.
+    """
+    try:
+        import boto3  # type: ignore
+        from botocore.exceptions import BotoCoreError, ClientError  # type: ignore
+    except ImportError:
+        return None
+
+    def reader(region: str, arn: str) -> list[ExecutionRecord]:
+        client = boto3.client("stepfunctions", region_name=region)
+        records: list[ExecutionRecord] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"stateMachineArn": arn, "maxResults": 1000}
+            if token:
+                kwargs["nextToken"] = token
+            try:
+                page = client.list_executions(**kwargs)
+            except (BotoCoreError, ClientError):
+                raise
+            for summary in page.get("executions") or []:
+                execution_arn = summary.get("executionArn")
+                rec: ExecutionRecord = dict(summary)
+                if execution_arn:
+                    try:
+                        detail = client.describe_execution(executionArn=execution_arn)
+                        rec.update(detail)
+                    except (BotoCoreError, ClientError):
+                        # Keep the summary; input/output simply unavailable for
+                        # this one execution — cycle/artifact derivation skips it.
+                        pass
+                records.append(rec)
+            token = page.get("nextToken")
+            if not token:
+                break
+        return records
+
+    return reader
 
 
 def _as_of(value: Any) -> str | None:

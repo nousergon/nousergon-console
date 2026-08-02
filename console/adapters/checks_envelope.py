@@ -31,6 +31,7 @@ over recorded fixtures with no live bucket (groom-sweep §8.1).
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -68,18 +69,20 @@ def fetch(
             unavailable=("all",),
         )
     if lister is None or reader is None:
-        # No production S3 client is bundled; a deployment injects both. Absent
-        # either half the adapter declares itself unable (§5.5).
+        default_lister, default_reader = _default_s3()
+        lister = lister or default_lister
+        reader = reader or default_reader
         missing = []
         if lister is None:
             missing.append("lister")
         if reader is None:
             missing.append("reader")
-        return AdapterResult(
-            name=config.get("_name", name),
-            status=AdapterStatus.FAILED,
-            unavailable=tuple(missing),
-        )
+        if missing:
+            return AdapterResult(
+                name=config.get("_name", name),
+                status=AdapterStatus.FAILED,
+                unavailable=tuple(missing),
+            )
 
     regex = re.compile(pattern)
     staleness_factor = float(config.get("staleness_factor", 1.5))
@@ -265,3 +268,49 @@ def _status_to_state(status: str) -> State:
     if not status:
         return State.UNKNOWN
     return State.UNKNOWN
+
+
+def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
+    """boto3-backed lister + body reader when the optional AWS extra is installed.
+
+    Returns ``(None, None)`` when boto3 is absent so the adapter fails loud
+    rather than silently returning zero rows (§5.5).
+    """
+    try:
+        import boto3  # type: ignore
+        from botocore.exceptions import BotoCoreError, ClientError  # type: ignore
+    except ImportError:
+        return None, None
+
+    def lister(bucket: str, prefix: str) -> list[StoredObject]:
+        client = boto3.client("s3")
+        out: list[StoredObject] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            page = client.list_objects_v2(**kwargs)
+            for obj in page.get("Contents") or []:
+                key = obj.get("Key") or ""
+                lm = obj.get("LastModified")
+                if hasattr(lm, "isoformat"):
+                    stamp = lm.isoformat()
+                else:
+                    stamp = str(lm) if lm else None
+                out.append((key, stamp))
+            if not page.get("IsTruncated"):
+                break
+            token = page.get("NextContinuationToken")
+        return out
+
+    def reader(bucket: str, key: str) -> dict[str, Any]:
+        client = boto3.client("s3")
+        try:
+            resp = client.get_object(Bucket=bucket, Key=key)
+            body = resp["Body"].read()
+        except (BotoCoreError, ClientError):
+            raise
+        return json.loads(body.decode("utf-8"))
+
+    return lister, reader

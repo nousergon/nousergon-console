@@ -196,7 +196,10 @@ def test_missing_bucket_is_failed():
     assert result.status is AdapterStatus.FAILED
 
 
-def test_no_lister_or_reader_is_failed():
+def test_no_lister_or_reader_is_failed(monkeypatch):
+    # With no injectable lister/reader the adapter falls back to the boto3
+    # default. Force the "boto3 absent" path so the test is hermetic.
+    monkeypatch.setattr(checks_envelope, "_default_s3", lambda: (None, None))
     result = checks_envelope.fetch(_cfg(), now=NOW)
     assert result.status is AdapterStatus.FAILED
     assert "lister" in result.unavailable

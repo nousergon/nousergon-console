@@ -189,7 +189,10 @@ def test_missing_machines_is_failed():
     assert "state_machines" in result.unavailable
 
 
-def test_no_reader_is_failed_not_empty():
+def test_no_reader_is_failed_not_empty(monkeypatch):
+    # With no injectable reader the adapter falls back to the boto3 default.
+    # Force the "boto3 absent" path so the test is hermetic on every host.
+    monkeypatch.setattr(state_machine, "_default_reader", lambda: None)
     result = state_machine.fetch(_cfg())
     assert result.status is AdapterStatus.FAILED
     assert "reader" in result.unavailable

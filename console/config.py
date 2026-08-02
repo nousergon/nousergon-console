@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from .adapters import git_host, object_store, yaml_directory
+from .adapters import git_host, local_units, object_store, yaml_directory
 from .index.graph import Index
 from .model.envelope import AdapterStatus
 
@@ -23,6 +23,7 @@ ADAPTERS = {
     "yaml-directory": yaml_directory,
     "git-host": git_host,
     "object-store": object_store,
+    "local-units": local_units,
 }
 
 

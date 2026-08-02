@@ -22,7 +22,7 @@ PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=/home/ec2-user/nousergon-console
-MemoryMax=256M
+MemoryMax=112M
 OOMPolicy=restart
 
 [Install]

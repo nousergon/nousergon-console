@@ -82,6 +82,15 @@ class Index:
     def all(self) -> list[Entity]:
         return list(self._entities.values())
 
+    def edges(self) -> list[Edge]:
+        """Every forward edge declared across the ingested set (§3.3).
+
+        The reverse edges are derived and never stored; this returns the
+        forward declarations only, in ingest order — the projection a dump
+        or consumer needs to reproduce the relation graph.
+        """
+        return [e for out in self._out.values() for e in out]
+
     def related(self, entity_id: str) -> list[Edge]:
         """Every edge touching this entity, both directions (§3.3).
 

@@ -6,7 +6,7 @@ Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answe
 
 This is an **index over a typed entity graph** instead. Point it at the artifacts you already have; it builds a catalog you can search, link to, and walk.
 
-> **Status: pre-implementation.** The contract below is settled and normative. The implementation is not written yet. See [Roadmap](#roadmap).
+> **Status: initial implementation.** The contract below is settled and normative; the adapter layer, the entity index, search and the server are implemented. The implementation stack is Python + stdlib server — see [docs/stack-decision.md](docs/stack-decision.md) and the [Roadmap](#roadmap).
 
 ## What makes it different
 
@@ -68,12 +68,12 @@ Every rendered fact carries four fields — **state · source · as-of · eviden
 
 ## Roadmap
 
-1. The adapter contract and reference adapters (filesystem/YAML registry, object store, Git host API, CI).
-2. The entity index, its URL scheme, and the relation graph.
-3. Generated navigation, global search, entity pages.
+1. The adapter contract and reference adapters — **done** (filesystem/YAML registry, object store, Git host API, systemd units).
+2. The entity index, its URL scheme, and the relation graph — **done**.
+3. Generated navigation, global search, entity pages — **done**.
 4. The seven self-grading numbers, published on the surface itself.
 
-The implementation stack is not yet chosen; it is decided with item 1.
+The implementation stack is Python + stdlib server — decided in [docs/stack-decision.md](docs/stack-decision.md).
 
 ## Contributing
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=nousergon-console (read-only fleet index)
+Documentation=https://github.com/nousergon/nousergon-console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/nousergon-console
+# Real config.yaml is delivered to this path by deploy-on-merge.sh from SSM
+# (never baked into the repo). The process binds loopback only — nginx is the
+# sole ingress; Cloudflare Access is the sole authenticator (console-policy §1.2).
+Environment=AWS_REGION=us-east-1
+ExecStart=/home/ec2-user/nousergon-console/.venv/bin/python -m console serve --config /home/ec2-user/nousergon-console/config.yaml --host 127.0.0.1 --port 5180
+Restart=always
+RestartSec=5
+# shared-application-host-policy.md T0-6 / T1-1 / T1-2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/ec2-user/nousergon-console
+MemoryMax=256M
+OOMPolicy=restart
+
+[Install]
+WantedBy=multi-user.target

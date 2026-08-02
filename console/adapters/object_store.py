@@ -50,14 +50,14 @@ def fetch(
             unavailable=("all",),
         )
     if lister is None:
-        # No production S3 client is bundled; a deployment injects one (boto3).
-        # Absent a client the adapter declares itself unable rather than
-        # silently returning zero rows — absence renders as itself (§5.5).
-        return AdapterResult(
-            name=config.get("_name", name),
-            status=AdapterStatus.FAILED,
-            unavailable=("lister",),
-        )
+        lister = _default_lister()
+        if lister is None:
+            # boto3 not installed — declare unable rather than silently zero (§5.5).
+            return AdapterResult(
+                name=config.get("_name", name),
+                status=AdapterStatus.FAILED,
+                unavailable=("lister",),
+            )
 
     regex = re.compile(pattern)
     cadence = _parse_cadence(config.get("cadence"))
@@ -129,6 +129,38 @@ def _state(
         return State.UNKNOWN
     age = (now - ts).total_seconds()
     return State.HEALTHY if age <= cadence_seconds * staleness_factor else State.STALE
+
+
+def _default_lister() -> StoreLister | None:
+    """boto3-backed lister when the optional AWS extra is installed."""
+    try:
+        import boto3  # type: ignore
+    except ImportError:
+        return None
+
+    def lister(bucket: str, prefix: str) -> list[StoredObject]:
+        client = boto3.client("s3")
+        out: list[StoredObject] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            page = client.list_objects_v2(**kwargs)
+            for obj in page.get("Contents") or []:
+                key = obj.get("Key") or ""
+                lm = obj.get("LastModified")
+                if hasattr(lm, "isoformat"):
+                    stamp = lm.isoformat()
+                else:
+                    stamp = str(lm) if lm else None
+                out.append((key, stamp))
+            if not page.get("IsTruncated"):
+                break
+            token = page.get("NextContinuationToken")
+        return out
+
+    return lister
 
 
 def _parse_cadence(cadence: Any) -> float | None:

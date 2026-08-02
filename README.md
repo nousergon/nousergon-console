@@ -68,7 +68,7 @@ Every rendered fact carries four fields — **state · source · as-of · eviden
 
 ## Roadmap
 
-1. The adapter contract and reference adapters — **done** (filesystem/YAML registry, object store, Git host API, systemd units).
+1. The adapter contract and reference adapters — **done** (filesystem/YAML registry, object store, checks-envelope, state-machine, Git host API, systemd units). See [docs/adapters.md](docs/adapters.md).
 2. The entity index, its URL scheme, and the relation graph — **done**.
 3. Generated navigation, global search, entity pages — **done**.
 4. The seven self-grading numbers, published on the surface itself.

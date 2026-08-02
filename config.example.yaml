@@ -37,7 +37,7 @@ registry:
 adapters:
 
   - name: checks
-    kind: object-store               # s3-compatible
+    kind: object-store               # s3-compatible — keys → Artifact entities
     enabled: false
     produces: [component, run, artifact]
     config:
@@ -46,6 +46,20 @@ adapters:
       # How a key maps to an entity id. Named groups become entity fields.
       key_pattern: "ops/checks/(?P<component_id>[^/]+)/latest.json"
       cadence: 1h                    # declared, so staleness is computable
+
+  # Fleet-flavoured example (synthetic names only). Prefer checks-envelope
+  # over object-store when the objects are fleet check-result envelopes: the
+  # body carries status/ran_at/cadence and the entity kind is Component, not
+  # Artifact. See docs/adapters.md.
+  - name: fleet-checks
+    kind: checks-envelope            # ops/checks/<id>/latest.json → Component
+    enabled: false
+    produces: [component, run, artifact]
+    config:
+      bucket: your-bucket
+      prefix: ops/checks/
+      key_pattern: "ops/checks/(?P<component_id>[^/]+)/latest\\.json"
+      staleness_factor: 1.5          # multiplier on each envelope's cadence_minutes
 
   - name: repos
     kind: git-host                   # github / gitlab api
@@ -64,9 +78,12 @@ adapters:
     produces: [run, cycle, artifact]
     config:
       region: your-region
-      state_machines: []
+      # Synthetic example shape — real ARNs live only in the private config.yaml.
+      state_machines:
+        - arn:aws:states:xx-example-1:000000000000:stateMachine:example-pipeline
       # What a "cycle" means here — the join key for "what else broke when this
-      # broke" and "what did this cycle cost".
+      # broke" and "what did this cycle cost". Must match a field in each
+      # execution's input payload.
       cycle_key: execution_date
 
   - name: schedules

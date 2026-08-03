@@ -64,7 +64,21 @@ write_json(
 
 **Every field is optional with a declared default.** A required field added later is a fleet-wide breaking change dressed as a schema improvement, and it lands on every emitter at once — most of which nobody is going to redeploy. The schema is published at `console/schemas/component_report.schema.json` and is part of the product contract.
 
-A module's own numbers come along without any rendering code that knows about it: `fields` carries a descriptor per value — type, unit, baseline, and one render hint from a closed set — and the console renders what it has never seen.
+A module's own numbers come along **without any rendering code that knows about it**. `fields` carries a descriptor per value:
+
+```python
+fields={
+    "tickers_scanned": {"value": 903, "unit": "tickers",
+                        "baseline": 900, "render": "count"},
+    "p99_latency":     {"value": 4.2, "unit": "s",
+                        "baseline": None, "render": "duration"},
+}
+```
+
+- **`unit` is required for a number.** A measurement whose unit is inferred from context is the defect that emitted a normalized ratio, consumed it as raw share volume, and silently failed 901 of 903 tickers for months.
+- **`baseline: null` is a declaration**, and the number then renders as telemetry — plain, uncoloured. Green means *better than the baseline*; where there is no baseline there is no colour. An absent baseline and a `null` one are different facts and render differently.
+- **An unrecognised field renders opaque and is counted, never dropped.** A dropped field is a fact the emitter believes is on the surface and is not, and it fails silently on their side of a boundary they cannot see.
+- The `render` set is **closed** — an open one becomes a plugin API, and a plugin API is a per-module rendering path with a nicer name.
 
 The cost of onboarding the next thing is a **published number** (target: zero edits). A surface whose coverage is bounded by how much adapter code somebody felt like writing will always render a subset while looking complete.
 

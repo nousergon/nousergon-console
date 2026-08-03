@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from console.index.graph import Index, NamespaceCollision
-from console.model.envelope import AdapterResult, AdapterStatus
+from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
 from tests.fixtures import component, fixture_graph, prov
 from console.model.entity import Entity
@@ -40,18 +40,66 @@ def test_relation_traversable_from_both_ends():
     assert "comp-consumer" in consumers
 
 
-def test_namespace_collision_fails_loudly():
-    a = component("dup-id")
-    b = component("dup-id")
+def test_same_kind_duplicate_merges_rather_than_raising():
+    """§2.5: two sources describing one thing is the NORMAL case.
+
+    This test previously asserted the opposite. The index raised on the second
+    claim for one id, which made the fleet's own intended configuration — a
+    registry declaring a component plus telemetry observing it — crash the
+    surface, and made `UNREGISTERED`/`ABSENT` uncomputable by construction.
+    """
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="dup-id",
+                         state=State.UNREPORTED, provenance=prov("registry")),),
+    ))
+    idx.add_result(AdapterResult(
+        name="telemetry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="dup-id",
+                         state=State.HEALTHY, provenance=prov("telemetry")),),
+    ))
+    assert len(idx.all()) == 1
+    merged = idx.entity("dup-id")
+    # The declaration ranks first, so its UNREPORTED wins the state — the
+    # registry says it exists and nothing observed it into health yet... except
+    # telemetry DID, and that is exactly what precedence must not swallow.
+    # A declaration supplies existence and lifecycle; it does not supply state,
+    # so an in-service row's UNREPORTED must lose to a real observation.
+    assert merged.state is State.HEALTHY
+    assert merged.source_of("state").source == "telemetry"
+
+
+def test_different_kind_duplicate_still_fails_loudly():
+    """§3.6 is unchanged: two DIFFERENT things sharing a name is a collision,
+    and `kind` disagreement is the discriminator no precedence rule can fix."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="a", status=AdapterStatus.OK,
+        entities=(Entity(kind=Kind.COMPONENT, id="dup-id", state=State.HEALTHY,
+                         provenance=prov("a")),)))
+    idx.add_result(AdapterResult(
+        name="b", status=AdapterStatus.OK,
+        entities=(Entity(kind=Kind.ARTIFACT, id="dup-id", state="fresh",
+                         provenance=prov("b")),)))
     with pytest.raises(NamespaceCollision):
-        _index_with([a, b], [])
+        idx.all()
 
 
 def test_failed_adapter_marks_entities_unreported_not_dropped():
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges, status=AdapterStatus.FAILED)
     assert len(idx.all()) == 3  # nothing dropped
-    assert all(e.state is State.UNREPORTED for e in idx.all())
+    # Components carry §8.3's UNREPORTED; non-component kinds carry the raw
+    # value (§5.1's second half) — an artifact is not "unreported", its SOURCE
+    # is, and the two read differently to whoever is looking.
+    for e in idx.all():
+        if e.kind in (Kind.COMPONENT, Kind.RUN):
+            assert e.state is State.UNREPORTED
+        else:
+            assert e.state == "unreported-by-source"
 
 
 def test_reachability_ratio_names_denominator():

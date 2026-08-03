@@ -62,6 +62,29 @@ class Entity:
     # Free-form kind-specific fields (a Run's exit code, a Signal's baseline,
     # an Artifact's schema version). Rendered, never indexed on.
     detail: dict[str, object] = field(default_factory=dict)
+    # Set by the index when several claims about this identifier merged (§2.5).
+    # Maps a field name to the Provenance of the claim that WON it, so §5.1's
+    # `source` stays truthful on a merged row: a row assembled from three
+    # sources names three sources, per field, rather than collapsing to
+    # whichever adapter happened to run last. Empty on an unmerged entity —
+    # `provenance` is then the source of every field.
+    field_sources: dict[str, Provenance] = field(default_factory=dict)
+    # Claims that LOST a contested field, retained so the disagreement stays
+    # visible on the entity page rather than being silently discarded (§2.5).
+    # Each is (field name, the value it proposed, its Provenance).
+    superseded: tuple[tuple[str, object, Provenance], ...] = ()
+    # Field names where two claims of EQUAL rank disagreed and precedence
+    # could not settle it. Non-empty means the entity renders DEGRADED with
+    # the disagreement named, and it counts toward §9.9.
+    conflicts: tuple[str, ...] = ()
+
+    def source_of(self, field_name: str) -> Provenance:
+        """Which claim supplied this field (§5.1's `source`, per field).
+
+        Falls back to the entity's own provenance, which is the right answer
+        for an unmerged entity: one claim supplied everything.
+        """
+        return self.field_sources.get(field_name, self.provenance)
 
     def __post_init__(self) -> None:
         """A Component or Run MUST carry a §8.3 state — no raw value, ever.

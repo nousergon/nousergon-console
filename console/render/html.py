@@ -86,6 +86,46 @@ def _table(entities: list[Entity]) -> str:
     )
 
 
+def _claims_section(ent: Entity) -> str:
+    """What several sources said about this entity, and who won (§2.5).
+
+    Both halves are rendered on purpose. The winners answer §5.1's "how does
+    this row know what it claims", per field rather than once. The losers are
+    the half a merge normally destroys — "systemd says this unit is masked" is
+    worth reading next to "the registry says it is in service", and a surface
+    that shows only the verdict cannot be checked by the person reading it.
+    """
+    if not ent.field_sources and not ent.superseded and not ent.conflicts:
+        return ""
+    won = "".join(
+        f"<tr><td>{esc(f)}</td><td>{esc(p.source)}</td>"
+        f'<td>{esc(p.as_of) if p.as_of else "<em>no stamp</em>"}</td></tr>'
+        for f, p in sorted(ent.field_sources.items())
+    )
+    lost = "".join(
+        f"<li>{esc(f)} = <code>{esc(_value_of(v))}</code> "
+        f"<small>from {esc(p.source)}</small></li>"
+        for f, v, p in ent.superseded
+    ) or '<li class="absent">nothing superseded — one source supplied this row</li>'
+    conflict = (
+        f'<p class="state-DEGRADED">unresolved disagreement on: '
+        f'{esc(", ".join(ent.conflicts))} — two sources of equal standing '
+        f"disagree, and neither is authoritative over the other (§2.5)</p>"
+        if ent.conflicts else ""
+    )
+    return (
+        "<h2>claims</h2>"
+        f"{conflict}"
+        "<table><thead><tr><th>field</th><th>source</th><th>as-of</th></tr></thead>"
+        f"<tbody>{won}</tbody></table>"
+        f"<h3>superseded</h3><ul>{lost}</ul>"
+    )
+
+
+def _value_of(value: object) -> str:
+    return value.value if isinstance(value, State) else str(value)
+
+
 def entity_page(index: Index, ent: Entity) -> str:
     """Everything known about one thing, including its relations (§4.1)."""
     related = index.related(ent.id)
@@ -100,6 +140,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
 <h2>relations</h2><ul>{rel_items}</ul>
+{_claims_section(ent)}
 </body></html>"""
 
 
@@ -125,6 +166,7 @@ def landing_page(index: Index) -> str:
     state and age, then the transparency-gap count. No aggregate green light."""
     exceptions = [e for e in index.all() if is_exception(e)]
     unreported = [e for e in index.all() if e.state is State.UNREPORTED]
+    conflicts = index.conflicts()
     reach = index.reachability()
     ratio = reach["ratio"]
     ratio_txt = (
@@ -134,7 +176,7 @@ def landing_page(index: Index) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
-<p>{len(exceptions)} not healthy · {len(unreported)} unreported · index reachability {esc(ratio_txt)}</p>
+<p>{len(exceptions)} not healthy · {len(unreported)} unreported · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {_table(exceptions)}
 </body></html>"""
 

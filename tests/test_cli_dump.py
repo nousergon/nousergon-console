@@ -32,7 +32,7 @@ def test_dump_is_versioned_json_of_the_index(capsys, tmp_path):
     assert main(["--config", str(cfg), "index"]) == 0
     doc = json.loads(capsys.readouterr().out)
 
-    assert doc["schema_version"] == 1
+    assert doc["schema_version"] == 2
     ids = {e["id"] for e in doc["entities"]}
     assert ids == {"comp-one"}
     ent = doc["entities"][0]

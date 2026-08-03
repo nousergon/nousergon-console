@@ -22,8 +22,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+
+#: Execution history is an OBSERVATION (§2.5) — what ran, when, and how it ended.
+CLAIM_CLASS = ClaimClass.OBSERVATION
 
 name = "pipelines"
 produces = ("run", "cycle", "artifact")
@@ -46,12 +49,14 @@ def fetch(
     cycle_key = config.get("cycle_key") or "execution_date"
     if not region:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("region",),
         )
     if not machines:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("state_machines",),
@@ -61,6 +66,7 @@ def fetch(
         if reader is None:
             # boto3 not installed — declare unable rather than silently zero (§5.5).
             return AdapterResult(
+                claim_class=CLAIM_CLASS,
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=("reader",),
@@ -123,6 +129,7 @@ def fetch(
     unavailable: list[str] = ["cost"]  # SF executions carry no cost tag by default
     if failed and machines_read == 0:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -142,6 +149,7 @@ def fetch(
     ]
 
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

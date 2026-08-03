@@ -23,8 +23,13 @@ from typing import Any
 import yaml
 
 from ..model.entity import Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import DECLARED_LIFECYCLE_STATES, Kind, State
+
+#: A registry directory is a DECLARATION (§2.5): it says what EXISTS and what
+#: its declared lifecycle, owner and authority tier are. It does not say how
+#: anything is doing — that is an observation's job, and _state_rank encodes it.
+CLAIM_CLASS = ClaimClass.DECLARATION
 
 name = "registry"
 produces = ("component",)
@@ -39,6 +44,7 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
         # known components, so the entity list is empty and the status carries
         # the finding.
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -73,6 +79,7 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
             )
         )
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

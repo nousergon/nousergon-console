@@ -31,13 +31,16 @@ def test_missing_directory_is_failed_state_not_exception():
     assert "all" in result.unavailable
 
 
-def test_retired_lifecycle_renders_absent(tmp_path):
+def test_declared_lifecycle_renders_the_declared_state(tmp_path):
     (tmp_path / "old.yaml").write_text(
         "component_id: comp-old\nlifecycle: retired\nowner: x\n"
     )
     result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
     ent = result.entities[0]
-    assert ent.state is State.ABSENT
+    # §8.3: DISABLED/DEPRECATED/RETIRED are DECLARED in the registry and
+    # nothing else may produce them. ABSENT is a different finding entirely —
+    # the registry expects it and the substrate lacks it.
+    assert ent.state is State.RETIRED
 
 
 def test_registry_row_is_declared_not_measured(tmp_path):
@@ -46,5 +49,8 @@ def test_registry_row_is_declared_not_measured(tmp_path):
     (tmp_path / "c.yaml").write_text("component_id: comp-x\nlifecycle: in-service\n")
     result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
     ent = result.entities[0]
-    assert ent.state is State.UNKNOWN
+    # An in-service row with no observation is UNREPORTED — "registered, in
+    # service, emitting nothing", which IS the transparency-gap count. It is
+    # never UNKNOWN: §8.3 forbids that escape hatch by name.
+    assert ent.state is State.UNREPORTED
     assert ent.provenance.as_of is None

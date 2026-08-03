@@ -240,8 +240,13 @@ def _component_state(
     now: datetime,
 ) -> State:
     """Status first, then staleness. A dying check's last write is almost
-    always ``ok`` — ``ran_at`` + ``cadence_minutes`` are what mark it STALE
-    when it stops publishing, whatever status it last wrote."""
+    always ``ok`` — ``ran_at`` + ``cadence_minutes`` are what catch it when it
+    stops publishing, whatever status it last wrote.
+
+    Past its cadence the component is §8.3's **MISSED**: the schedule fired or
+    should have and no run started, which is a failure UPSTREAM of the
+    component, in its trigger. Not STALLED (nothing reported a start) and not
+    FAILED (it did not stop, it never began)."""
     base = _status_to_state(status)
     if ran_at is None or cadence_minutes in (None, "", 0):
         # No freshness inputs → cannot compute staleness; return the status
@@ -254,7 +259,7 @@ def _component_state(
         return base
     age = (now - ts).total_seconds()
     if age > cadence_s * staleness_factor:
-        return State.STALE
+        return State.MISSED
     return base
 
 
@@ -264,10 +269,11 @@ def _status_to_state(status: str) -> State:
     if status == "attention":
         return State.DEGRADED
     if status == "error":
-        return State.FAILING
-    if not status:
-        return State.UNKNOWN
-    return State.UNKNOWN
+        return State.FAILED
+    # A missing status, or one outside the envelope's own vocabulary, is a
+    # component this classifier cannot place. §8.3's answer is UNREPORTED —
+    # loud, and a finding — never a fall-through and never green.
+    return State.UNREPORTED
 
 
 def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:

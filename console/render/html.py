@@ -8,8 +8,9 @@ structural: the HTML for a URL is a pure function of the resolved request and
 the index, with no client state to reconstruct.
 
 Rendering rules honoured here:
-- Absence renders as itself (§5.5): UNREPORTED/UNKNOWN/NEVER_RAN are distinct
-  states, never drawn as green and never as nothing.
+- Absence renders as itself (§5.5): UNREPORTED, NEVER_RAN, MISSED and
+  ABSENT are four different facts and render as four different things, never
+  drawn as green and never as nothing.
 - A number without a baseline is telemetry, not a verdict (§5.4): states are
   labelled, not colour-coded by quality.
 - The exception list is the default (§4.3): the landing view leads with what
@@ -21,14 +22,32 @@ import html
 
 from ..index.graph import Index
 from ..model.entity import Entity
-from ..model.kinds import Kind, State
+from ..model.kinds import EXCEPTION_VALUES, Kind, State
 from ..server.router import path_for_entity
 
-#: States that mean "look at me" on the exception-first landing view (§4.3).
-EXCEPTION_STATES = frozenset(
-    {State.FAILING, State.DEGRADED, State.STALE, State.UNREPORTED,
-     State.ABSENT, State.FAILED, State.UNREGISTERED}
-)
+#: Component states that mean "look at me" on the exception-first landing view
+#: (§4.3). The three DECLARED states are deliberately absent: DISABLED,
+#: DEPRECATED and RETIRED are decisions already taken, and paging someone about
+#: a decision is what observability-policy.md §8.3's DISABLED/MISSED pair
+#: exists to prevent. NEVER_RAN IS here — a component that has never executed
+#: has never been tested, and its first failure is still ahead of it.
+EXCEPTION_STATES = frozenset({
+    State.FAILED, State.STALLED, State.MISSED, State.DEGRADED,
+    State.UNREPORTED, State.ABSENT, State.UNREGISTERED, State.NEVER_RAN,
+})
+
+
+def is_exception(ent: Entity) -> bool:
+    """Whether this row belongs on the exception-first landing view (§4.3).
+
+    Handles both halves of §5.1: a component state is checked against the
+    twelve, and a raw value (an Artifact's freshness, a tracker's open/closed)
+    against the small set of values that mean the same thing. An open decision
+    is NOT an exception — it is the "waiting on Brian" half of the same view.
+    """
+    if isinstance(ent.state, State):
+        return ent.state in EXCEPTION_STATES
+    return str(ent.state).strip().lower() in EXCEPTION_VALUES
 
 
 def esc(s: object) -> str:
@@ -44,9 +63,9 @@ def row(ent: Entity) -> str:
         else '<em class="absent">no link</em>'
     )
     return (
-        f'<tr class="state-{ent.state.value}">'
+        f'<tr class="state-{esc(ent.state_value)}">'
         f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(ent.id)}</a></td>'
-        f"<td>{esc(ent.state.value)}</td>"
+        f"<td>{esc(ent.state_value)}</td>"
         f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"
         f"<td>{evidence}</td>"
@@ -78,7 +97,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 <title>{esc(ent.id)} · {esc(ent.kind.value)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; <a href="/{esc(ent.kind.route)}">{esc(ent.kind.value)}</a> &rsaquo; {esc(ent.id)}</nav>
 <h1>{esc(ent.id)}</h1>
-<p class="state-{ent.state.value}">state: {esc(ent.state.value)}</p>
+<p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
 <h2>relations</h2><ul>{rel_items}</ul>
 </body></html>"""
@@ -104,7 +123,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str]) -> str:
 def landing_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
     state and age, then the transparency-gap count. No aggregate green light."""
-    exceptions = [e for e in index.all() if e.state in EXCEPTION_STATES]
+    exceptions = [e for e in index.all() if is_exception(e)]
     unreported = [e for e in index.all() if e.state is State.UNREPORTED]
     reach = index.reachability()
     ratio = reach["ratio"]

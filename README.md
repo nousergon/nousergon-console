@@ -63,7 +63,9 @@ Every rendered fact carries four fields — **state · source · as-of · eviden
 - A row older than its declared cadence renders **stale**, not as its last value in normal styling.
 - Any roll-up states its denominator inline (`12 / 14 reporting`). One that cannot is not rendered.
 - A number with no baseline is rendered as telemetry, never coloured as a verdict.
-- Zero, null, empty, never-ran and not-measured are five different facts and render as five different things. **No data is never drawn as green, and never drawn as nothing.**
+- Zero, null, empty, never-ran, never-triggered and never-observed are different facts and render as different things. **No data is never drawn as green, and never drawn as nothing.**
+- Component state comes from one closed, total vocabulary of twelve, and it has **no fall-through**. There is no `UNKNOWN`, no `PENDING`, no `N/A`: where the classifier cannot place a component the answer is `UNREPORTED`, which is loud and is a finding. What a component is deliberately *not* doing — `DISABLED`, `DEPRECATED`, `RETIRED` — is **declared**, never inferred, because a decision and a defect are indistinguishable from telemetry alone.
+- Not everything is a component. An artifact is fresh or stale; an issue is open or closed. Those rows carry the source's own value rather than being forced into a vocabulary that has no word for them.
 - Every addressable state has a URL built from entity identifiers. Paste it anywhere; it reproduces the view on a cold load.
 
 ## Roadmap

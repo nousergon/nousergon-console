@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 
-from .kinds import Kind, State
+from .kinds import COMPONENT_STATE_KINDS, Kind, State
 
 
 @dataclass(frozen=True)
@@ -51,12 +51,37 @@ class Entity:
 
     kind: Kind
     id: str
-    state: State
+    # console-policy.md §5.1: one of observability-policy.md §8.3's twelve for
+    # anything that resolves to a component state (Component, Run); otherwise
+    # the source's own value, verbatim. An Artifact is fresh or stale; an issue
+    # is open or closed. Forcing those into a component vocabulary is what
+    # produced the `UNKNOWN` fall-through §8.3 forbids by name.
+    state: State | str
     provenance: Provenance
     facets: dict[str, str] = field(default_factory=dict)
     # Free-form kind-specific fields (a Run's exit code, a Signal's baseline,
     # an Artifact's schema version). Rendered, never indexed on.
     detail: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """A Component or Run MUST carry a §8.3 state — no raw value, ever.
+
+        This is the totality invariant made structural: the one place a
+        fall-through could re-enter is a component whose adapter reached for a
+        string because the enum had no comfortable member. It cannot.
+        """
+        if self.kind in COMPONENT_STATE_KINDS and not isinstance(self.state, State):
+            raise ValueError(
+                f"{self.kind.value} {self.id!r} carries state {self.state!r}: a "
+                "component state must be one of observability-policy.md §8.3's "
+                "twelve (§5.1). Where the classifier cannot place it, the "
+                "answer is State.UNREPORTED — loud, not blank."
+            )
+
+    @property
+    def state_value(self) -> str:
+        """The rendered token, whichever half of §5.1 this row is on."""
+        return self.state.value if isinstance(self.state, State) else str(self.state)
 
     @property
     def route(self) -> str:

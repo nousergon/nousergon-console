@@ -56,21 +56,59 @@ FACETS: tuple[str, ...] = (
 )
 
 
-#: The twelve-state closed vocabulary is normative in observability-policy.md
-#: §8.3; the console renders it (console-policy.md §5.1) and does not redefine
-#: it. The subset the surface needs to distinguish for staleness and the
-#: exception list is named here so renderers share one spelling. "No data" is
-#: its own state and is never drawn as green and never as nothing (§5.5).
+#: The twelve-state closed vocabulary is NORMATIVE in observability-policy.md
+#: §8.3. This console renders it and does not define one: console-policy.md's
+#: superordinate note says §8.3's vocabulary "is the only state vocabulary this
+#: policy renders". Adding a member here is a PR against observability-policy.md
+#: first, and this enum second.
+#:
+#: The vocabulary is TOTAL and has no fall-through. §8.3 forbids `UNKNOWN`,
+#: `OTHER`, `PENDING` and `N/A` BY NAME — they are the escape hatch it exists to
+#: remove, and the fall-through is always eventually rendered green. Where the
+#: classifier genuinely cannot place a component the answer is `UNREPORTED`,
+#: which is loud, and the component is a finding rather than a blank.
+#:
+#: The informative content is in the pairs, so nothing here may collapse them:
+#: DISABLED vs MISSED (a decision vs a defect) · RETIRED vs ABSENT (a stated
+#: absence vs an unexplained one) · NEVER_RAN vs MISSED (untested vs
+#: untriggered) · UNREPORTED vs HEALTHY (never, under any circumstance).
 class State(enum.Enum):
-    HEALTHY = "HEALTHY"
-    DEGRADED = "DEGRADED"
-    FAILING = "FAILING"
-    STALE = "STALE"
-    UNREPORTED = "UNREPORTED"
-    ABSENT = "ABSENT"
-    UNKNOWN = "UNKNOWN"
-    NOT_MEASURED = "NOT_MEASURED"
-    NEVER_RAN = "NEVER_RAN"
-    FAILED = "FAILED"  # an adapter whose source is unreachable (§2.3)
-    NA_NOT_IMPL = "N/A-NOT-IMPL"  # §11 carve-out, first cycle only
-    UNREGISTERED = "UNREGISTERED"  # discovered but not in the registry
+    HEALTHY = "HEALTHY"            # ran inside its window, ended ok
+    DEGRADED = "DEGRADED"          # completed, but a deliverable or quality signal is short
+    FAILED = "FAILED"              # ran and ended non-ok
+    STALLED = "STALLED"            # started, never finished, heartbeat past cadence
+    MISSED = "MISSED"              # the schedule fired or should have; no run started
+    NEVER_RAN = "NEVER_RAN"        # registered and in service, no run in its history
+    DISABLED = "DISABLED"          # deliberately off — DECLARED, never inferred
+    DEPRECATED = "DEPRECATED"      # end-of-life declared, successor named
+    RETIRED = "RETIRED"            # removed on purpose; the row persists so the absence is stated
+    ABSENT = "ABSENT"              # the registry expects it; the substrate does not have it
+    UNREGISTERED = "UNREGISTERED"  # found running on a substrate with no registry row
+    UNREPORTED = "UNREPORTED"      # registered, in service, emitting nothing — the transparency gap
+
+
+#: The three states a registry `lifecycle` field DECLARES (§8.3: "declared in
+#: the registry, never inferred"). An adapter reading a registry maps through
+#: this and nothing else; an adapter reading telemetry may never produce one.
+DECLARED_LIFECYCLE_STATES: dict[str, State] = {
+    "disabled": State.DISABLED,
+    "deprecated": State.DEPRECATED,
+    "retired": State.RETIRED,
+}
+
+
+#: console-policy.md §5.1: a row carries "exactly one value from §8.3's
+#: twelve-state closed vocabulary, FOR ANYTHING THAT RESOLVES TO A COMPONENT
+#: STATE; otherwise the value itself." Component and Run resolve to component
+#: states. Artifact, Signal, Decision and Incident do not — an issue is not
+#: HEALTHY or FAILED, it is open or closed — so those kinds carry the source's
+#: own value verbatim, as a string. That is deliberately NOT a second
+#: vocabulary: a second enum would be one, and the superordinate note bars it.
+COMPONENT_STATE_KINDS: frozenset[Kind] = frozenset({Kind.COMPONENT, Kind.RUN})
+
+#: Raw values (from the "otherwise the value itself" half) that belong on the
+#: exception-first landing view alongside the non-HEALTHY component states.
+#: Lower-cased at comparison, so an adapter's casing is not load-bearing.
+EXCEPTION_VALUES: frozenset[str] = frozenset({
+    "stale", "no-freshness-stamp", "no-cadence-declared", "unreadable",
+})

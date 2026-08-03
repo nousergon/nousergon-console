@@ -24,7 +24,7 @@ import yaml
 
 from ..model.entity import Entity, Provenance
 from ..model.envelope import AdapterResult, AdapterStatus
-from ..model.kinds import Kind, State
+from ..model.kinds import DECLARED_LIFECYCLE_STATES, Kind, State
 
 name = "registry"
 produces = ("component",)
@@ -103,11 +103,24 @@ def _as_of(row: dict[str, Any]) -> str | None:
 
 
 def _state_from_row(row: dict[str, Any]) -> State:
-    """A registry row is a declaration, not telemetry. The row's own state is
-    UNKNOWN (declared, not measured) — the telemetry adapters are what promote
-    a component to HEALTHY/UNREPORTED. A lifecycle of not-in-service maps to
-    ABSENT so retired components don't page the exception list."""
-    lifecycle = row.get("lifecycle")
-    if lifecycle and lifecycle != "in-service":
-        return State.ABSENT
-    return State.UNKNOWN
+    """A registry row is a DECLARATION claim (§2.5), never an observation.
+
+    Two halves, and observability-policy.md §8.3 fixes both:
+
+    - A declared `lifecycle` of disabled/deprecated/retired maps to the
+      matching state and NOTHING else may produce those three — "declared in
+      the registry, never inferred". This is the `DISABLED` vs `MISSED` pair:
+      a decision and a defect are indistinguishable from telemetry alone, so
+      only the declaration can tell them apart.
+    - An in-service row with no observation is `UNREPORTED` — "registered, in
+      service, emitting nothing", which is the transparency-gap count itself.
+      It is emphatically NOT `ABSENT` (the registry expects it and the
+      substrate lacks it — a different finding, produced by the reconciler),
+      and never a fall-through: a declaration claim losing to an observation
+      claim at merge (§2.5) is how a row becomes HEALTHY.
+    """
+    lifecycle = str(row.get("lifecycle") or "in-service").strip().lower()
+    declared = DECLARED_LIFECYCLE_STATES.get(lifecycle)
+    if declared is not None:
+        return declared
+    return State.UNREPORTED

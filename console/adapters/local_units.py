@@ -196,38 +196,47 @@ def _component_state(active: str, load: str) -> State:
     """The unit's own statement about itself — never a guessed verdict.
 
     ``masked`` is the one inactive case with an operator intent the source
-    itself supplies (the unit was explicitly disabled), which renders ABSENT;
-    every other inactive unit is UNKNOWN because whether it SHOULD be running
-    lives in the registry, which an adapter must not read (§2.3)."""
+    itself supplies, which renders DISABLED; every other inactive unit is
+    UNREPORTED because whether it SHOULD be running lives in the registry,
+    which an adapter must not read (§2.3)."""
     if load == "masked":
-        return State.ABSENT
+        # The one inactive case carrying an operator intent the SOURCE supplies:
+        # masking is a deliberate off-switch, which is §8.3's DISABLED. Not
+        # ABSENT — the unit is present, and ABSENT means the substrate lacks it.
+        return State.DISABLED
     if active == "active":
         return State.HEALTHY
     if active in ("activating", "deactivating", "reloading"):
         return State.DEGRADED
     if active == "failed":
-        return State.FAILING
-    return State.UNKNOWN  # inactive / unreadable — declared, not guessed
+        return State.FAILED
+    # Inactive or unreadable. Whether it SHOULD be running lives in the
+    # registry, which an adapter must not read (§2.3) — so this adapter cannot
+    # place it, and §8.3's answer for that is UNREPORTED. Loud, and a finding.
+    return State.UNREPORTED
 
 
 def _run_state(active: str, result: str) -> State:
     """An activation's state: a live run is HEALTHY, a failed unit's run
-    FAILING, and a finished activation's outcome is the ``Result`` systemd
-    recorded — success is HEALTHY, any other recorded outcome FAILING, and
-    no recorded outcome is UNKNOWN (§2.3)."""
+    FAILED, and a finished activation's outcome is the ``Result`` systemd
+    recorded — success is HEALTHY, any other recorded outcome FAILED, and no
+    recorded outcome at all is NEVER_RAN (§8.3)."""
     if active == "active":
         return State.HEALTHY
     if active == "activating":
         return State.DEGRADED
     if active == "failed":
-        return State.FAILING
+        return State.FAILED
     if active == "inactive":
         if result == "success":
             return State.HEALTHY
         if result:
-            return State.FAILING
-        return State.UNKNOWN
-    return State.UNKNOWN
+            return State.FAILED
+        # systemd records no Result before a unit has ever activated. That is
+        # §8.3's NEVER_RAN precisely — never executed, therefore never tested,
+        # and its first failure is still ahead of it. Distinct from MISSED.
+        return State.NEVER_RAN
+    return State.UNREPORTED
 
 
 def _as_of(timestamp: object) -> str | None:

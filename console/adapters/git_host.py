@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable
 
 from ..model.entity import Entity, Provenance
 from ..model.envelope import AdapterResult, AdapterStatus
-from ..model.kinds import Kind, State
+from ..model.kinds import Kind
 
 name = "repos"
 produces = ("decision", "incident")
@@ -106,13 +106,19 @@ def _to_entity(
     )
 
 
-def _state(item: dict[str, Any], is_incident: bool) -> State:
-    """A tracker's open/closed maps onto the state vocabulary without guessing:
-    an open incident is FAILING (an active failure record), a closed one is a
-    resolved record we render HEALTHY; a decision's open/closed is whether it
-    is pending, which maps to UNKNOWN (declared, unresolved) vs HEALTHY."""
-    tracker_state = (item.get("state") or "").upper()
-    open_ = tracker_state == "OPEN"
+def _state(item: dict[str, Any], is_incident: bool) -> str:
+    """A Decision or an Incident is not a component, so §5.1's second half
+    applies and the row carries the tracker's own value.
+
+    An issue is open or closed. It is not HEALTHY, and it is certainly not
+    FAILED — mapping it into observability-policy.md §8.3's component
+    vocabulary was what forced an open decision to render `UNKNOWN`, the escape
+    hatch §8.3 forbids by name. Open decisions belong on the "waiting on Brian"
+    half of the landing view (§4.3), not in the transparency-gap count, whose
+    objective is zero and which an open backlog would inflate on sight."""
+    tracker_state = (item.get("state") or "").strip().lower()
+    if not tracker_state:
+        return "unreported-by-tracker"
     if is_incident:
-        return State.FAILING if open_ else State.HEALTHY
-    return State.UNKNOWN if open_ else State.HEALTHY
+        return "open-incident" if tracker_state == "open" else "resolved"
+    return tracker_state

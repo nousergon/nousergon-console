@@ -39,14 +39,17 @@ def test_incident_label_becomes_incident_kind():
     )
     incident = next(e for e in result.entities if e.kind is Kind.INCIDENT)
     assert incident.id == "some-repo-I12"
-    assert incident.state is State.HEALTHY  # closed incident = resolved record
+    assert incident.state == "resolved"  # closed incident = resolved record
 
 
-def test_open_decision_is_unknown_not_verdict():
+def test_open_decision_carries_the_trackers_own_value():
     result = git_host.fetch(
         {"org": "example-org", "repos": ["some-repo"]}, lister=_lister)
     open_decision = next(e for e in result.entities if e.id == "some-repo-I327")
-    assert open_decision.state is State.UNKNOWN
+    # An issue is open or closed — not HEALTHY, and certainly not FAILED.
+    # Forcing it into the component vocabulary is what produced the UNKNOWN
+    # fall-through §8.3 forbids by name (§5.1 second half).
+    assert open_decision.state == "open"
 
 
 def test_lister_failure_is_failed_state_not_empty():

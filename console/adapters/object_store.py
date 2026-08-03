@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 
@@ -49,6 +50,7 @@ def fetch(
     if not bucket or not pattern:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -59,6 +61,7 @@ def fetch(
             # boto3 not installed — declare unable rather than silently zero (§5.5).
             return AdapterResult(
                 claim_class=CLAIM_CLASS,
+                fetched_at=now_iso(),
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=("lister",),
@@ -74,6 +77,7 @@ def fetch(
     except Exception:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -110,6 +114,8 @@ def fetch(
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
+        declared_cadence_seconds=cadence,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

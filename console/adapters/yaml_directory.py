@@ -23,6 +23,7 @@ from typing import Any
 import yaml
 
 from ..model.entity import Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import DECLARED_LIFECYCLE_STATES, Kind, State
 
@@ -45,6 +46,7 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
         # the finding.
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -80,6 +82,7 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
         )
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

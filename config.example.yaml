@@ -20,6 +20,20 @@ console:
   # as stale rather than as its last value. A multiplier, not an absolute.
   staleness_factor: 1.5
 
+  # How often the index is rebuilt from the adapters. The index has an as-of
+  # like everything else, and it is the one that bounds every row's: a surface
+  # built once at start and served all day renders every row frozen at boot
+  # while looking exactly like a live one — and it is invisible precisely
+  # because the rows stay internally consistent WITH EACH OTHER.
+  #
+  # The rebuild swaps atomically, so a request never sees a half-built index.
+  # A rebuild that FAILS keeps serving the previous one and says so, rather
+  # than emptying the surface or pretending to be current.
+  #
+  # This cadence is rendered on every page: an interval nobody can see is a
+  # claim about freshness that cannot be checked.
+  refresh_seconds: 60
+
 # The component denominator. The console renders what it knows about and reports
 # the difference between this set and what it can actually see — that difference
 # is the transparency-gap count, and it is published on the surface.

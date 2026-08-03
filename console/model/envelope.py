@@ -24,7 +24,7 @@ from .entity import Edge, Entity
 
 #: Bumped on any breaking change to the envelope shape. Consumers assert
 #: equality; a mismatch is a loud failure at ingest, not a mis-parsed entity.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class AdapterStatus(enum.Enum):
@@ -87,4 +87,11 @@ class AdapterResult:
     # Names of facets/fields this source cannot supply (e.g. "baseline",
     # "cost", "as_of"). Rendered as declared absence, never guessed (§2.3).
     unavailable: tuple[str, ...] = ()
+    # When this source was actually read (ISO-8601), and how often it is
+    # expected to change. Both feed §5.9: the index's own as-of bounds every
+    # row's, and a render pass older than the SHORTEST declared cadence among
+    # its sources is stale — whole-surface, because it is one fact about one
+    # index. An adapter that cannot say declares None rather than guessing.
+    fetched_at: str | None = None
+    declared_cadence_seconds: float | None = None
     schema_version: int = SCHEMA_VERSION

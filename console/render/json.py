@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from datetime import datetime, timezone
+
 from ..index.graph import Index
 from ..model.entity import Edge, Entity
 from ..model.kinds import State
@@ -42,17 +44,46 @@ SCHEMA_VERSION = 1
 def payload(index: Index, req: Resolved) -> dict[str, Any]:
     """The JSON body for a resolved request — the same query the HTML renders."""
     if req.view == "landing":
-        return _landing(index)
-    if req.view == "list":
-        return _list(index, req)
-    if req.view == "entity":
+        doc = _landing(index)
+    elif req.view == "list":
+        doc = _list(index, req)
+    elif req.view == "entity":
         ent = index.entity(req.entity_id or "")
         if ent is None:  # pragma: no cover - app.py 404s before reaching here
             raise KeyError(req.entity_id)
-        return _entity_page(index, ent)
-    if req.view == "search":
-        return _search(index, req.query or "")
-    raise ValueError(f"no JSON representation for view {req.view!r}")
+        doc = _entity_page(index, ent)
+    elif req.view == "search":
+        doc = _search(index, req.query or "")
+    else:
+        raise ValueError(f"no JSON representation for view {req.view!r}")
+    # §5.9 on every payload, exactly as on every page: a consumer that trusts a
+    # row without knowing how old the index is has the same problem a reader
+    # does, and it is worse for them because nothing prompts them to ask.
+    doc["index"] = index_freshness(index)
+    return doc
+
+
+def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]:
+    """The index's own as-of and every source's read (§5.9)."""
+    info = index.build_info
+    now = now or datetime.now(timezone.utc)
+    return {
+        "built_at": info.built_at or None,
+        "refresh_seconds": info.refresh_seconds,
+        "stale": info.is_stale(now),
+        "staleness_basis": info.staleness_basis(),
+        "age_seconds": info.age_seconds(now),
+        "stale_since": info.stale_since,
+        "last_error": info.last_error,
+        "sources": [
+            {
+                "name": a.name, "status": a.status, "fetched_at": a.fetched_at,
+                "cadence_seconds": a.cadence_seconds,
+                "unavailable": list(a.unavailable),
+            }
+            for a in info.adapters
+        ],
+    }
 
 
 # ---------------------------------------------------------------- views ----

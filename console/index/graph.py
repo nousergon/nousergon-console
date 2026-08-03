@@ -22,6 +22,7 @@ import dataclasses
 from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from .build import AdapterFetch, BuildInfo
 from .merge import Claim, NamespaceCollision, merge
 
 __all__ = ["Index", "NamespaceCollision"]
@@ -37,6 +38,10 @@ class Index:
 
     def __init__(self) -> None:
         self._claims: dict[str, list[Claim]] = {}
+        # §5.9: the index has an as-of, and it bounds every row's. `built_at`
+        # is replaced by the supervisor when it stamps a completed build; the
+        # empty default is what an un-stamped index honestly reports.
+        self.build_info = BuildInfo(built_at="")
         self._saw_ok_discovery = False
         self._saw_ok_declaration = False
         self._finalized = False
@@ -61,6 +66,13 @@ class Index:
         # adapter added after a query silently never appears, which is the
         # quietest possible way to lose a source.
         self._finalized = False
+        # Every source's read is recorded whether it worked or not — an
+        # adapter that failed is a fact about the surface's completeness, and
+        # dropping it here would make the failure invisible on the page.
+        self.build_info = dataclasses.replace(
+            self.build_info,
+            adapters=self.build_info.adapters + (AdapterFetch.of(result),),
+        )
         if result.status is AdapterStatus.OK:
             if result.claim_class is ClaimClass.DISCOVERY:
                 self._saw_ok_discovery = True

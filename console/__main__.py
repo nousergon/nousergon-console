@@ -17,7 +17,7 @@ import argparse
 import json
 from typing import Any
 
-from .config import build_index, load_config
+from .config import build_index, load_config, supervised_index
 from .index.graph import Index
 from .render.json import index_dump
 from .server.app import serve
@@ -56,8 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     host = args.host or console_cfg.get("bind", "127.0.0.1")
     port = args.port or int(console_cfg.get("port", 5180))
 
-    index = build_index(config)
-    server = serve(index, host=host, port=port)
+    # §5.9: the index rebuilds on a declared cadence and swaps atomically. A
+    # surface built once at start and served indefinitely renders every row's
+    # as-of frozen at boot while looking exactly like a live one.
+    supervisor = supervised_index(config)
+    supervisor.start()
+    index = supervisor.current
+    server = serve(supervisor, host=host, port=port)
     reach = index.reachability()
     print(f"nousergon-console serving on http://{host}:{port} — "
           f"{reach['total']} entities indexed, "
@@ -67,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        supervisor.stop()
         server.server_close()
     return 0
 

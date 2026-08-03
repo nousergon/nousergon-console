@@ -106,6 +106,8 @@ def _html(index: Index, req) -> str:
         return render_html.list_page(index, req.kind, req.facets)
     if req.view == "entity":
         return render_html.entity_page(index, index.entity(req.entity_id))
+    if req.view == "doctor":
+        return render_html.doctor_page(index, req.query or "")
     return render_html.search_page(search(index, req.query or ""), req.query or "")
 
 

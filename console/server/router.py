@@ -14,6 +14,10 @@ Routes:
                                 so every list state is itself a URL (§3.4).
 - ``/``                       — the exception-first landing view (§4.3).
 - ``/search?q=...``           — the global identifier resolver (§3.7).
+- ``/doctor/<id>``            — why an identifier is or is not on the
+                                surface (§3.9). Addressable, because a
+                                diagnosis nobody can link to has to be re-run
+                                by whoever is asked about it.
 
 The router *resolves*; it does not render. Rendering is the render layer's
 job, so resolution is independently testable and the round-trip property is
@@ -62,6 +66,13 @@ def resolve(path: str, query_string: str = "") -> Resolved:
 
     if segments[0] == "search":
         return Resolved(view="search", query=params.get("q", ""))
+
+    if segments[0] == "doctor":
+        # §3.9. Addressable like everything else — a diagnosis nobody can link
+        # to is a diagnosis that has to be re-run by whoever is asked about it.
+        # The identifier may be a path segment or `?q=`; both round-trip.
+        rest = path.split("/", 2)[2] if len(segments) > 1 else params.get("q", "")
+        return Resolved(view="doctor", query=rest)
 
     kind = Kind.from_route(segments[0])
     if kind is None:

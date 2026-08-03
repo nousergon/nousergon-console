@@ -165,6 +165,16 @@ class Index:
 
     # ---- queries ----------------------------------------------------------
 
+    def claims_for(self, entity_id: str) -> list[Claim]:
+        """Every claim made about this identifier, resolved or not (§3.9).
+
+        Exposed for `doctor`: diagnosing an absence needs what the sources
+        SAID, which the merged entity has already collapsed. An identifier with
+        claims and no entity is a different finding from one with neither, and
+        they have different fixes.
+        """
+        return list(self._claims.get(entity_id, []))
+
     def entity(self, entity_id: str) -> Entity | None:
         return self.finalize()._entities.get(entity_id)
 
@@ -182,6 +192,16 @@ class Index:
         or consumer needs to reproduce the relation graph.
         """
         return [e for out in self._out.values() for e in out]
+
+    def inbound(self, entity_id: str) -> list[Edge]:
+        """The DERIVED reverse edges at this entity — "what points at me".
+
+        Distinct from `related()`, which mixes both directions: relation-
+        reachability (§3.1, §9.3) is specifically about being pointed AT, since
+        an entity that only points outward is still findable only by someone
+        who already knows it exists.
+        """
+        return list(self._in.get(entity_id, []))
 
     def related(self, entity_id: str) -> list[Edge]:
         """Every edge touching this entity, both directions (§3.3).
@@ -209,7 +229,7 @@ class Index:
         """
         self.finalize()
         total = len(self._entities)
-        relation_reachable = sum(1 for eid in self._entities if self._in.get(eid))
+        relation_reachable = sum(1 for eid in self._entities if self.inbound(eid))
         # Structure and search are implied by presence in the generated index;
         # the binding constraint for "all three" is the inbound edge.
         reachable_all_three = relation_reachable

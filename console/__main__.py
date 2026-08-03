@@ -18,6 +18,7 @@ import json
 from typing import Any
 
 from .config import build_index, load_config, supervised_index
+from .diagnose import doctor, render_text
 from .index.graph import Index
 from .render.json import index_dump
 from .server.app import serve
@@ -45,12 +46,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     index_p.add_argument("--config", default=argparse.SUPPRESS,
                          help="path to config.yaml (gitignored; see config.example.yaml)")
+    doctor_p = sub.add_parser(
+        "doctor",
+        help="say why an identifier is or is not on the surface (§3.9)",
+    )
+    doctor_p.add_argument("identifier",
+                          help="a component_id, run id, artifact key, tracker ref…")
+    doctor_p.add_argument("--config", default=argparse.SUPPRESS,
+                          help="path to config.yaml (gitignored; see config.example.yaml)")
     args = ap.parse_args(argv)
 
     config = load_config(args.config)
     if args.command == "index":
         print(_dump(build_index(config)))
         return 0
+    if args.command == "doctor":
+        diagnosis = doctor(build_index(config), args.identifier)
+        print(render_text(diagnosis))
+        # A non-zero exit when the identifier is not fully reachable, so this
+        # is usable as a check in a deploy script rather than only by eye.
+        return 0 if diagnosis.ok else 1
 
     console_cfg = config.get("console", {})
     host = args.host or console_cfg.get("bind", "127.0.0.1")

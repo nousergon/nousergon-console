@@ -11,6 +11,13 @@ config.*.yaml
 !config.example.yaml
 *.local
 
+# Compiled bytecode. 13 `.pyc` files were tracked in this PUBLIC repo before
+# this entry existed, so every diff carried binary churn and every clone shipped
+# one machine's interpreter version (cpython-314) as though it were source.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 node_modules/
 dist/
 build/

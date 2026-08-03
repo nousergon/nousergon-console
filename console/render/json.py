@@ -54,6 +54,11 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = _entity_page(index, ent)
     elif req.view == "search":
         doc = _search(index, req.query or "")
+    elif req.view == "doctor":
+        from ..diagnose import as_dict, doctor
+
+        doc = {"schema_version": SCHEMA_VERSION, "view": "doctor",
+               **as_dict(doctor(index, req.query or ""))}
     else:
         raise ValueError(f"no JSON representation for view {req.view!r}")
     # §5.9 on every payload, exactly as on every page: a consumer that trusts a

@@ -101,6 +101,24 @@ It is not an API *beside* the UI: the resolver runs **once** and both representa
 - A 404 answers in the representation that was asked for. An agent that gets an HTML error page has to parse prose to learn what happened.
 - Every payload carries `schema_version`.
 
+## When something is *not* on the surface, the surface says why
+
+```
+$ console doctor my-nightly-job
+my-nightly-job: adapter claim — nothing reported on it; 2 sources were asked (registry, checks)
+
+  [ok  ] registry row: declared by registry
+  [FAIL] adapter claim: nothing reported on it; 2 source(s) were asked (registry, checks)
+         → check that the emission is landing where an enabled adapter reads, and that
+           the adapter's key_pattern matches the path it is written to. An adapter that
+           ran fine and found nothing looks exactly like one that was never enabled —
+           compare its status in the index freshness block.
+```
+
+Onboarding fails **silently** by construction: nothing raises when a module is absent, and the absence looks exactly like "there is nothing to show". `doctor` walks the chain that would have put an identifier on the surface — registry row → adapter claim → merged entity → reachable by name, by structure, by relation — and names the **first** broken link with a next step. Reporting every failure at once buries the one that caused the others.
+
+It is addressable too (`/doctor/<id>`, both representations), because a diagnosis nobody can link to has to be re-run by whoever gets asked about it. It exits non-zero, so it works as a check in a deploy script rather than only by eye.
+
 ## Adapters
 
 One adapter per source of truth. An adapter is a function from configuration to entities and edges, and it is the **only** thing that knows its source's shape.

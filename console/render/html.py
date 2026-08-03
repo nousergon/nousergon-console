@@ -279,6 +279,42 @@ def landing_page(index: Index) -> str:
 </body></html>"""
 
 
+def doctor_page(index: Index, identifier: str) -> str:
+    """Why an identifier is or is not on the surface (§3.9).
+
+    Renders the whole chain, with the FIRST broken link carrying the remedy.
+    Showing every failure at once buries the one that caused the others.
+    """
+    from ..diagnose import doctor
+
+    d = doctor(index, identifier)
+    rows = []
+    shown_remedy = False
+    for step in d.steps:
+        mark = "ok" if step.ok else "FAIL"
+        css = "state-HEALTHY" if step.ok else "state-FAILED"
+        remedy = ""
+        if not step.ok and step.remedy and not shown_remedy:
+            remedy = f'<br><small>&rarr; {esc(step.remedy)}</small>'
+            shown_remedy = True
+        rows.append(
+            f'<tr class="{css}"><td>{esc(step.name)}</td><td>{mark}</td>'
+            f"<td>{esc(step.detail)}{remedy}</td></tr>"
+        )
+    body = "".join(rows) or (
+        '<tr><td colspan="3" class="absent">nothing knows this identifier</td></tr>'
+    )
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>doctor · {esc(identifier)}</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; doctor</nav>
+<h1>doctor: {esc(identifier)}</h1>
+{index_freshness(index)}
+<p class="{"state-HEALTHY" if d.ok else "state-FAILED"}">{esc(d.summary())}</p>
+<table><thead><tr><th>link</th><th></th><th>detail</th></tr></thead>
+<tbody>{body}</tbody></table>
+</body></html>"""
+
+
 def search_page(hits: list, query: str) -> str:
     items = "".join(
         f'<li><a href="{esc(path_for_entity(h.entity.kind, h.entity.id))}">'

@@ -22,6 +22,7 @@ import html
 
 from ..index.graph import Index
 from ..model.entity import Entity
+from ..model.fields import Field, format_value, parse as parse_fields
 from ..model.kinds import EXCEPTION_VALUES, Kind, State
 from ..server.router import path_for_entity
 
@@ -86,6 +87,61 @@ def _table(entities: list[Entity]) -> str:
     )
 
 
+def fields_section(ent: Entity) -> str:
+    """A module's own data, rendered from its descriptors alone (§5.8).
+
+    Nothing below branches on WHO emitted the field. That is the whole claim:
+    the console renders data from a module it has never heard of, and the moment
+    this function grows a check for a component id, a repo or a domain it has
+    become the per-module rendering path §5.8 forbids.
+    """
+    declared = parse_fields(ent.detail.get("fields"))
+    if not declared:
+        return ""
+    undeclared = [f for f in declared if not f.declared]
+    rows = "".join(_field_row(f) for f in declared)
+    # §5.8: an undeclared field renders opaque and is COUNTED. A dropped field
+    # is a fact the emitter believes is on the surface and is not, and it fails
+    # on their side of a boundary they cannot see.
+    note = (
+        f'<p class="absent">{len(undeclared)} of {len(declared)} fields are not '
+        "fully declared — rendered opaque rather than dropped (§5.8)</p>"
+        if undeclared else ""
+    )
+    return (
+        "<h2>declared fields</h2>"
+        f"{note}"
+        "<table><thead><tr><th>field</th><th>value</th><th>unit</th>"
+        "<th>baseline</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _field_row(f: Field) -> str:
+    """One field. Colour appears only where a baseline was declared (§5.4)."""
+    unit = esc(f.unit) if f.unit else '<em class="absent">no unit</em>'
+    if f.comparable:
+        baseline = esc(f.baseline)
+        css = "field-comparable"
+    elif f.baseline_declared:
+        # An explicitly declared absence of baseline. §5.4: the number is
+        # telemetry, not a verdict — plain, uncoloured, unlabelled by quality.
+        baseline = '<em class="absent">none declared — rendered as telemetry</em>'
+        css = "field-telemetry"
+    else:
+        baseline = '<em class="absent">not stated</em>'
+        css = "field-telemetry"
+    defect = (
+        f'<br><small class="absent">{esc(f.defect)}</small>' if f.defect else ""
+    )
+    return (
+        f'<tr class="{css} render-{esc(f.render.value)}">'
+        f"<td>{esc(f.name)}{defect}</td>"
+        f"<td>{esc(format_value(f))}</td>"
+        f"<td>{unit}</td><td>{baseline}</td></tr>"
+    )
+
+
 def _claims_section(ent: Entity) -> str:
     """What several sources said about this entity, and who won (§2.5).
 
@@ -140,6 +196,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
 <h2>relations</h2><ul>{rel_items}</ul>
+{fields_section(ent)}
 {_claims_section(ent)}
 </body></html>"""
 

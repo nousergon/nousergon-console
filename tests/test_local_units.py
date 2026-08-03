@@ -107,28 +107,34 @@ def test_active_unit_is_healthy_and_run_as_of_is_iso():
     assert run.detail["unit"] == "comp-alpha.service"
 
 
-def test_failed_unit_is_failing_including_its_run():
+def test_failed_unit_is_failed_including_its_run():
     result = local_units.fetch(_cfg(), enumerator=_enumerate)
     by_id = _by_id(result)
-    assert by_id["comp-sweep.service"].state is State.FAILING
-    assert by_id[FAILED["InvocationID"]].state is State.FAILING
+    assert by_id["comp-sweep.service"].state is State.FAILED
+    assert by_id[FAILED["InvocationID"]].state is State.FAILED
 
 
-def test_resting_timer_is_unknown_with_healthy_last_run():
+def test_resting_timer_is_unreported_with_healthy_last_run():
     # Inactive-but-loaded: whether resting is a finding lives in the registry,
     # which this adapter must not read — the component is UNKNOWN, and the
     # last activation (which succeeded) is its own HEALTHY run.
     result = local_units.fetch(_cfg(), enumerator=_enumerate)
     by_id = _by_id(result)
-    assert by_id["comp-daily.timer"].state is State.UNKNOWN
+    # Whether an inactive unit SHOULD be running lives in the registry, which
+    # an adapter must not read (§2.3). This adapter cannot place it, and
+    # §8.3's answer for that is UNREPORTED — loud, and a finding.
+    assert by_id["comp-daily.timer"].state is State.UNREPORTED
     assert by_id[RESTING["InvocationID"]].state is State.HEALTHY
 
 
-def test_masked_unit_is_absent():
+def test_masked_unit_is_disabled_not_absent():
     # systemd itself supplies the operator intent for a masked unit: disabled.
     result = local_units.fetch(_cfg(), enumerator=_enumerate)
     by_id = _by_id(result)
-    assert by_id["comp-old.service"].state is State.ABSENT
+    # Masking is a deliberate off-switch the SOURCE supplies, so it is §8.3's
+    # DISABLED. Not ABSENT: the unit is present, and ABSENT means the
+    # substrate lacks something the registry expects.
+    assert by_id["comp-old.service"].state is State.DISABLED
 
 
 def test_unit_without_invocation_has_no_run(tmp_path):
@@ -140,30 +146,32 @@ def test_unit_without_invocation_has_no_run(tmp_path):
     assert all(e.kind is Kind.COMPONENT for e in result.entities)
 
 
-def test_finished_activation_with_bad_result_is_failing():
+def test_finished_activation_with_bad_result_is_failed():
     rec = {**RESTING, "Id": "comp-bad.service", "InvocationID": "33333333-4444-4555-8666-777777777777",
            "Result": "timeout"}
     result = local_units.fetch(_cfg(), enumerator=lambda p: [rec])
     by_id = _by_id(result)
-    assert by_id[rec["InvocationID"]].state is State.FAILING
+    assert by_id[rec["InvocationID"]].state is State.FAILED
 
 
-def test_finished_activation_without_result_is_unknown():
+def test_finished_activation_without_result_is_never_ran():
     rec = {**RESTING, "Id": "comp-nr.service", "InvocationID": "44444444-5555-4666-8777-888888888888",
            "Result": ""}
     result = local_units.fetch(_cfg(), enumerator=lambda p: [rec])
     by_id = _by_id(result)
-    assert by_id[rec["InvocationID"]].state is State.UNKNOWN
+    # systemd records no Result before a unit has ever activated: §8.3's
+    # NEVER_RAN, which is distinct from MISSED (untested vs untriggered).
+    assert by_id[rec["InvocationID"]].state is State.NEVER_RAN
 
 
-def test_unreadable_unit_is_unknown_declared():
+def test_unreadable_unit_is_unreported_not_a_fall_through():
     # The production enumerator falls back to {"Id": ...} when the record
     # cannot be read — a declared absence, never a dropped row (§2.3), and
     # the adapter says what it could not supply.
     rec = {"Id": "comp-x.service"}
     result = local_units.fetch(_cfg(), enumerator=lambda p: [rec])
     by_id = _by_id(result)
-    assert by_id["comp-x.service"].state is State.UNKNOWN
+    assert by_id["comp-x.service"].state is State.UNREPORTED
     assert result.unavailable == ("activation",)
 
 

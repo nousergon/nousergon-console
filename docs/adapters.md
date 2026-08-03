@@ -64,7 +64,10 @@ projection, so it is a different adapter.
 
 `check_id` is used **verbatim** as the component id — never slug-minted. A
 dying check's last write is almost always `ok`; `ran_at` + `cadence_minutes`
-are what mark it `STALE` when publishing stops.
+are what mark it `MISSED` when publishing stops — the schedule fired or should
+have and no run started, which is a failure upstream of the component, in its
+trigger. Not `STALLED` (nothing reported a start) and not `FAILED` (it did not
+stop, it never began).
 
 Envelope shape (schema_version 1):
 
@@ -129,5 +132,8 @@ Identifiers are the tracker refs the host assigns — `<repo>-I<N>` /
 
 A unit present here but absent from the registry renders `UNREGISTERED` at
 index time; a registry row with no unit renders `ABSENT`. Both are findings,
-and they are different findings. `inactive` is `UNKNOWN` — whether resting is
-a finding needs the registry, which an adapter must not read.
+and they are different findings. `inactive` is `UNREPORTED` — whether resting
+is a finding needs the registry, which an adapter must not read, so this
+adapter cannot place it and says so loudly rather than guessing. `masked` is
+the one inactive case carrying operator intent the source itself supplies, and
+it renders `DISABLED`.

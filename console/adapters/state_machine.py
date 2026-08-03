@@ -228,7 +228,10 @@ def _to_entities(
         arts.append(Entity(
             kind=Kind.ARTIFACT,
             id=key,
-            state=State.UNKNOWN,  # existence known; freshness is another adapter's job
+            # An Artifact is not a component, so §5.1's second half applies:
+            # this adapter knows the key EXISTS and nothing about its freshness
+            # — that is another adapter's claim (§2.5). The raw value says so.
+            state="named-by-run",
             provenance=Provenance(
                 source=f"state-machine:{arn}",
                 as_of=stop or start,
@@ -272,29 +275,52 @@ def _durable_keys(obj: Any) -> list[str]:
 def _run_state(status: str) -> State:
     """Map the source's own execution status onto the closed vocabulary.
 
-    The source's statement, never a guessed verdict (§2.3): SUCCEEDED is
-    HEALTHY, FAILED/TIMED_OUT/ABORTED are FAILING, RUNNING/PENDING are
-    DEGRADED, anything else (including missing) is UNKNOWN.
+    The source's statement, never a guessed verdict (§2.3).
+
+    ``TIMED_OUT`` is STALLED rather than FAILED: it started and nothing
+    reported an ending, which is exactly §8.3's distinction — retry logic and
+    diagnosis differ from a run that stopped.
+
+    **In-flight is the one place §8.3's twelve do not fit**, and it is recorded
+    here rather than papered over. `RUNNING`/`PENDING` have not failed and have
+    not finished; the vocabulary has no in-flight member (§8.1 speaks of
+    "recovering", which is not one of the twelve). Rendering them DEGRADED
+    claims a completed run with a missing deliverable, which is false, and
+    UNREPORTED would put every normal execution on the exception list and
+    inflate the transparency-gap count whose objective is zero. So they render
+    HEALTHY with the source's own status carried in ``detail`` — and the gap is
+    filed against observability-policy.md §8.3, not resolved by this adapter.
     """
     if status == "SUCCEEDED":
         return State.HEALTHY
-    if status in ("FAILED", "TIMED_OUT", "ABORTED"):
-        return State.FAILING
+    if status in ("FAILED", "ABORTED"):
+        return State.FAILED
+    if status == "TIMED_OUT":
+        return State.STALLED
     if status in ("RUNNING", "PENDING", "PENDING_REDRIVE"):
-        return State.DEGRADED
-    return State.UNKNOWN
+        return State.HEALTHY
+    return State.UNREPORTED
+
+
+#: Severity order over §8.3's twelve, worst first. The three DECLARED states
+#: (DISABLED/DEPRECATED/RETIRED) sit BELOW the defects deliberately: a decision
+#: already taken must never outrank a live failure in a roll-up, and it must
+#: never be collapsed into one either — which is why they are present rather
+#: than filtered out.
+_SEVERITY: tuple[State, ...] = (
+    State.FAILED, State.STALLED, State.MISSED, State.DEGRADED,
+    State.UNREPORTED, State.ABSENT, State.UNREGISTERED, State.NEVER_RAN,
+    State.DEPRECATED, State.DISABLED, State.RETIRED, State.HEALTHY,
+)
 
 
 def _worst(states: list[State]) -> State:
-    order = (
-        State.FAILING, State.FAILED, State.DEGRADED, State.STALE,
-        State.UNREPORTED, State.UNKNOWN, State.ABSENT, State.NEVER_RAN,
-        State.NOT_MEASURED, State.HEALTHY,
-    )
-    for candidate in order:
+    for candidate in _SEVERITY:
         if candidate in states:
             return candidate
-    return State.UNKNOWN
+    # No default branch and no `else: HEALTHY` (§8.3's totality invariant):
+    # a set this function cannot place is UNREPORTED, which is loud.
+    return State.UNREPORTED
 
 
 def _parse_jsonish(value: Any) -> Any:

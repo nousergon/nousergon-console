@@ -39,8 +39,10 @@ def test_keys_become_artifacts_keyed_by_key():
 def test_fresh_vs_stale_rendered_from_cadence():
     result = object_store.fetch(_cfg(), lister=_lister, now=NOW)
     by_id = {e.id: e for e in result.entities}
-    assert by_id["ops/checks/comp-alpha/latest.json"].state is State.HEALTHY
-    assert by_id["ops/checks/comp-beta/latest.json"].state is State.STALE
+    # An Artifact does not resolve to a component state, so §5.1's second
+    # half applies and the row carries the value itself.
+    assert by_id["ops/checks/comp-alpha/latest.json"].state == "fresh"
+    assert by_id["ops/checks/comp-beta/latest.json"].state == "stale"
 
 
 def test_component_edge_derived_from_named_group():
@@ -49,11 +51,14 @@ def test_component_edge_derived_from_named_group():
     assert ("comp-alpha", "produces", "ops/checks/comp-alpha/latest.json") in rels
 
 
-def test_no_stamp_is_unknown_not_healthy():
+def test_the_three_not_computable_cases_stay_three_facts():
     def lister(b, p):
         return [("ops/checks/comp-x/latest.json", None)]
     result = object_store.fetch(_cfg(), lister=lister, now=NOW)
-    assert result.entities[0].state is State.UNKNOWN
+    # No stamp, no declared cadence and an unparseable stamp are three
+    # different findings with three different fixes (§5.5). Collapsing them
+    # into one token loses the fix.
+    assert result.entities[0].state == "no-freshness-stamp"
 
 
 def test_lister_failure_is_failed_not_empty():

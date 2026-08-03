@@ -37,7 +37,7 @@ def test_dump_is_versioned_json_of_the_index(capsys, tmp_path):
     assert ids == {"comp-one"}
     ent = doc["entities"][0]
     assert ent["kind"] == "component"
-    assert ent["state"] == "UNKNOWN"  # a registry declaration, not telemetry
+    assert ent["state"] == "UNREPORTED"  # declared, with nothing observing it yet
     assert set(ent["provenance"]) == {"source", "as_of", "evidence"}
 
 

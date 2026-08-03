@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 from ..model.entity import Entity, Provenance
 from ..model.envelope import AdapterResult, AdapterStatus
-from ..model.kinds import Kind, State
+from ..model.kinds import Kind
 
 name = "checks"
 produces = ("component", "run", "artifact")
@@ -115,20 +115,28 @@ def _state(
     cadence_seconds: float | None,
     staleness_factor: float,
     now: datetime,
-) -> State:
-    """Staleness is rendered, never inferred by the reader (§5.2). A key with
-    no stamp is UNKNOWN (declared absence); a key within cadence×factor is
-    HEALTHY; older is STALE — its own state, not its last value re-dated."""
+) -> str:
+    """Staleness is rendered, never inferred by the reader (§5.2).
+
+    This adapter emits **Artifacts**, which do not resolve to component states,
+    so §5.1's second half applies and the row carries the value itself. That is
+    what keeps the twelve honest: forcing "this object has no cadence declared"
+    into a component vocabulary is precisely the pressure that produced the
+    `UNKNOWN` fall-through observability-policy.md §8.3 forbids by name.
+
+    The three not-computable cases stay THREE facts, per §5.5 — no stamp, no
+    declared cadence and an unparseable stamp are different findings with
+    different fixes, and collapsing them loses the fix."""
     if last_modified is None:
-        return State.UNKNOWN
+        return "no-freshness-stamp"
     if cadence_seconds is None:
-        return State.UNKNOWN  # no declared cadence → staleness not computable
+        return "no-cadence-declared"
     try:
         ts = datetime.fromisoformat(last_modified.replace("Z", "+00:00"))
     except ValueError:
-        return State.UNKNOWN
+        return "unreadable"
     age = (now - ts).total_seconds()
-    return State.HEALTHY if age <= cadence_seconds * staleness_factor else State.STALE
+    return "fresh" if age <= cadence_seconds * staleness_factor else "stale"
 
 
 def _default_lister() -> StoreLister | None:

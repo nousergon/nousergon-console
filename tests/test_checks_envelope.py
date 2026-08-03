@@ -108,7 +108,7 @@ def test_status_maps_onto_closed_vocabulary():
     by_id = _by_id(result)
     assert by_id["comp-alpha"].state is State.HEALTHY
     assert by_id["comp-beta"].state is State.DEGRADED
-    assert by_id["comp-gamma"].state is State.FAILING
+    assert by_id["comp-gamma"].state is State.FAILED
 
 
 def test_stale_beats_last_ok_status():
@@ -117,7 +117,10 @@ def test_stale_beats_last_ok_status():
     result = checks_envelope.fetch(
         _cfg(), lister=_lister, reader=_reader, now=NOW,
     )
-    assert _by_id(result)["comp-stale"].state is State.STALE
+    # Past its cadence the component is MISSED — the schedule fired or should
+    # have and no run started, a failure UPSTREAM of the component. Not
+    # STALLED (nothing reported a start), not FAILED (it never began).
+    assert _by_id(result)["comp-stale"].state is State.MISSED
 
 
 def test_four_field_row_contract_on_component():

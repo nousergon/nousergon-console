@@ -77,8 +77,15 @@ def test_executions_become_runs_keyed_by_arn():
         EXEC_OK["executionArn"], EXEC_FAIL["executionArn"], EXEC_RUNNING["executionArn"],
     }
     assert runs[EXEC_OK["executionArn"]].state is State.HEALTHY
-    assert runs[EXEC_FAIL["executionArn"]].state is State.FAILING
-    assert runs[EXEC_RUNNING["executionArn"]].state is State.DEGRADED
+    assert runs[EXEC_FAIL["executionArn"]].state is State.FAILED
+    # §8.3 has no in-flight member: a RUNNING execution has not failed and
+    # has not finished. DEGRADED would claim a completed run with a missing
+    # deliverable (false); UNREPORTED would put every normal execution on the
+    # exception list and inflate the transparency-gap count, whose objective
+    # is zero. It renders HEALTHY with the source status carried in detail,
+    # and the vocabulary gap is filed rather than resolved here.
+    assert runs[EXEC_RUNNING["executionArn"]].state is State.HEALTHY
+    assert runs[EXEC_RUNNING["executionArn"]].detail["status"] == "RUNNING"
 
 
 def test_cycle_key_produces_cycle_entities_and_belongs_to_edges():
@@ -88,9 +95,9 @@ def test_cycle_key_produces_cycle_entities_and_belongs_to_edges():
     cycles = {e.id: e for e in result.entities if e.kind is Kind.CYCLE}
     assert set(cycles) == {"2026-07-31", "2026-07-30"}
     # 2026-07-31 has a FAILING? no — OK + RUNNING → worst is DEGRADED
-    assert cycles["2026-07-31"].state is State.DEGRADED
+    assert cycles["2026-07-31"].state is State.HEALTHY
     # 2026-07-30 is the failed run alone
-    assert cycles["2026-07-30"].state is State.FAILING
+    assert cycles["2026-07-30"].state is State.FAILED
     rels = {(e.source, e.rel, e.target) for e in result.edges}
     assert (EXEC_OK["executionArn"], "belongs-to", "2026-07-31") in rels
     assert (EXEC_FAIL["executionArn"], "belongs-to", "2026-07-30") in rels

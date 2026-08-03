@@ -19,6 +19,7 @@ Rendering rules honoured here:
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 
 from ..index.graph import Index
 from ..model.entity import Entity
@@ -193,6 +194,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 <title>{esc(ent.id)} · {esc(ent.kind.value)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; <a href="/{esc(ent.kind.route)}">{esc(ent.kind.value)}</a> &rsaquo; {esc(ent.id)}</nav>
 <h1>{esc(ent.id)}</h1>
+{index_freshness(index)}
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
 <h2>relations</h2><ul>{rel_items}</ul>
@@ -213,9 +215,47 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str]) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
-<h1>{esc(title)}</h1>{shown}
+<h1>{esc(title)}</h1>
+{index_freshness(index)}{shown}
 {_table(entities)}
 </body></html>"""
+
+
+def index_freshness(index: Index, now: datetime | None = None) -> str:
+    """The index's own as-of, rendered (§5.9).
+
+    It is one fact about one index, so it renders at surface level rather than
+    row by row — and it renders on EVERY page, because a reader who arrived on
+    an entity page deep-linked from an alert is exactly the reader who must not
+    assume what they are seeing is current.
+    """
+    info = index.build_info
+    now = now or datetime.now(timezone.utc)
+    if not info.built_at:
+        return ('<p class="absent">index build time unknown — this surface '
+                "cannot say how current it is (§5.9)</p>")
+    sources = ", ".join(
+        f"{a.name} {a.status}" for a in info.adapters
+    ) or "no sources"
+    cadence = (
+        f"rebuilds every {info.refresh_seconds:g}s"
+        if info.refresh_seconds else "no rebuild cadence declared"
+    )
+    if info.is_stale(now):
+        # The whole surface, not row by row. Every row below is at most as
+        # current as this, and rows that look internally consistent with each
+        # other are exactly how a frozen surface passes for a live one.
+        return (
+            f'<p class="state-MISSED">SURFACE STALE — index built '
+            f"{esc(info.built_at)}, {esc(info.staleness_basis())}"
+            + (f", {esc(info.last_error)}" if info.last_error else "")
+            + f". {esc(cadence)}. sources: {esc(sources)}</p>"
+        )
+    return (
+        f'<p class="index-fresh">index built {esc(info.built_at)} · '
+        f"{esc(cadence)} · {esc(info.staleness_basis())} · "
+        f"sources: {esc(sources)}</p>"
+    )
 
 
 def landing_page(index: Index) -> str:
@@ -233,6 +273,7 @@ def landing_page(index: Index) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
+{index_freshness(index)}
 <p>{len(exceptions)} not healthy · {len(unreported)} unreported · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {_table(exceptions)}
 </body></html>"""

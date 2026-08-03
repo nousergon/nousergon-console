@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 
@@ -70,6 +71,7 @@ def fetch(
     if not bucket:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -86,6 +88,7 @@ def fetch(
         if missing:
             return AdapterResult(
                 claim_class=CLAIM_CLASS,
+                fetched_at=now_iso(),
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=tuple(missing),
@@ -101,6 +104,7 @@ def fetch(
     except Exception:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -160,8 +164,19 @@ def fetch(
             entities.append(cycle_edge[0])
             edges.append(cycle_edge[1])
 
+    # The tightest promise any envelope under this prefix made. §5.9 takes the
+    # shortest across all sources: a surface is only as current as its most
+    # frequently-changing input, and one fast source must not hide behind a
+    # slow one's tolerance.
+    cadences = [
+        float(e.detail["cadence_minutes"]) * 60.0
+        for e in entities
+        if e.kind is Kind.COMPONENT and e.detail.get("cadence_minutes")
+    ]
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
+        declared_cadence_seconds=min(cadences) if cadences else None,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

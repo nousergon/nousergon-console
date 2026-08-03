@@ -140,15 +140,28 @@ class ConsoleServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], index: Index):
+    def __init__(self, address: tuple[str, int], source):
         super().__init__(address, ConsoleHandler)
-        self.index = index
+        # Either an Index or a Supervisor. A Supervisor hands back whichever
+        # index is current at the moment the request is served, so a rebuild is
+        # invisible to an in-flight request and a half-built graph is never
+        # rendered (§5.9).
+        self._source = source
+
+    @property
+    def index(self) -> Index:
+        source = self._source
+        return source.current if hasattr(source, "current") else source
 
 
-def serve(index: Index, host: str = "127.0.0.1", port: int = 5180) -> ConsoleServer:
+def serve(source, host: str = "127.0.0.1", port: int = 5180) -> ConsoleServer:
     """Build the server. Loopback is the default and is what makes the absence
     of authentication correct rather than negligent (config.example.yaml); a
     routable bind belongs behind an edge proxy, per §1.2 — and that proxy's
     identity covers the JSON representation too, since §3.8 forbids a second
-    authentication story for it."""
-    return ConsoleServer((host, port), index)
+    authentication story for it.
+
+    ``source`` is an Index or a Supervisor; with a Supervisor the served index
+    is re-read per request, which is what makes the §5.9 swap atomic from a
+    handler's point of view."""
+    return ConsoleServer((host, port), source)

@@ -21,6 +21,7 @@ import subprocess
 from typing import Any, Callable, Iterable
 
 from ..model.entity import Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 
@@ -58,6 +59,7 @@ def fetch(
     if not org:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -78,6 +80,7 @@ def fetch(
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.FAILED if failed and not entities else AdapterStatus.OK,
         entities=tuple(entities),

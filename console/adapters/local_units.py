@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 
@@ -108,6 +109,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
         # which units are in scope, so we say so (§2.3).
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("unit_prefixes",),
@@ -120,6 +122,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
         # no entities to mark UNREPORTED, never an exception (§2.3).
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -144,6 +147,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

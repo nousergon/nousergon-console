@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
+from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 
@@ -50,6 +51,7 @@ def fetch(
     if not region:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("region",),
@@ -57,6 +59,7 @@ def fetch(
     if not machines:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("state_machines",),
@@ -67,6 +70,7 @@ def fetch(
             # boto3 not installed — declare unable rather than silently zero (§5.5).
             return AdapterResult(
                 claim_class=CLAIM_CLASS,
+                fetched_at=now_iso(),
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=("reader",),
@@ -130,6 +134,7 @@ def fetch(
     if failed and machines_read == 0:
         return AdapterResult(
             claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -150,6 +155,7 @@ def fetch(
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

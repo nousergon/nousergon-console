@@ -126,6 +126,7 @@ Every rendered fact carries four fields — **state · source · as-of · eviden
 - Component state comes from one closed, total vocabulary of twelve, and it has **no fall-through**. There is no `UNKNOWN`, no `PENDING`, no `N/A`: where the classifier cannot place a component the answer is `UNREPORTED`, which is loud and is a finding. What a component is deliberately *not* doing — `DISABLED`, `DEPRECATED`, `RETIRED` — is **declared**, never inferred, because a decision and a defect are indistinguishable from telemetry alone.
 - Not everything is a component. An artifact is fresh or stale; an issue is open or closed. Those rows carry the source's own value rather than being forced into a vocabulary that has no word for them.
 - Every addressable state has a URL built from entity identifiers. Paste it anywhere; it reproduces the view on a cold load.
+- **The index has an as-of too, and it bounds every row's.** Every page and every payload carries the index build time, the rebuild cadence, and each source's read. A surface built once at start and served all day renders every row frozen at boot *while looking exactly like a live one* — and that is invisible precisely because the rows stay internally consistent with each other. Past the shortest cadence its sources declared, the **whole surface** says so; a rebuild that fails keeps serving the previous index and marks it, rather than emptying the surface or pretending to be current.
 
 ## Roadmap
 

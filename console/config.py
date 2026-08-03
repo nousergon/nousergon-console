@@ -21,8 +21,8 @@ from .adapters import (
     state_machine,
     yaml_directory,
 )
+from .index.build import Supervisor
 from .index.graph import Index
-from .model.envelope import AdapterStatus
 
 #: Adapter registry — name → module with a `fetch` callable. Adding a source
 #: is adding an adapter here (§2.3); no other wiring changes.
@@ -65,3 +65,24 @@ def build_index(config: dict[str, Any]) -> Index:
         cfg = {**entry.get("config", {}), "_name": entry.get("name", kind)}
         index.add_result(module.fetch(cfg))
     return index
+
+
+#: How often the index is rebuilt when the config does not say. Deliberately a
+#: minute rather than an hour: §5.9's failure is a surface that looks live and
+#: is not, and the cost of being wrong in the cheap direction is a few extra
+#: reads of sources the console already reads.
+DEFAULT_REFRESH_SECONDS = 60.0
+
+
+def supervised_index(config: dict[str, Any]) -> Supervisor:
+    """An index that rebuilds on a cadence and swaps atomically (§5.9).
+
+    The whole of "the console renders, it never owns" (§5.6) made operational:
+    nothing is persisted, so keeping the surface current is re-deriving it, and
+    the only state that survives a rebuild is the reference to it.
+    """
+    refresh = float(
+        (config.get("console") or {}).get("refresh_seconds")
+        or DEFAULT_REFRESH_SECONDS
+    )
+    return Supervisor(lambda: build_index(config), refresh_seconds=refresh)

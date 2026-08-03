@@ -42,6 +42,34 @@ Every entity is reachable **by name** (search), **by structure** (navigation), a
 
 The relation direction that matters most is the reverse one. *What did this produce* is usually written down somewhere. *Who breaks if this is stale* exists nowhere unless the index derives it — and it is the only question an incident actually asks.
 
+## Getting a process or module onto it
+
+**A module emits, adds a registry row, and appears — with zero edits to this repository and zero edits to the console's configuration.** That is the default path, and it is the whole path:
+
+```python
+from console.emit import report, write_json
+
+write_json(
+    report(
+        component_id="my-nightly-job",
+        status="ok",                      # about this RUN: ok · attention · error
+        cadence_minutes=1440,             # without this, staleness is not computable
+        summary="processed 903 tickers, 0 rejected",
+        deep_link="https://ci.example/run/1234",
+        consumes=["s3://bucket/upstream.parquet"],
+    ),
+    "/var/lib/reports/my-nightly-job/latest.json",
+)
+```
+
+**Every field is optional with a declared default.** A required field added later is a fleet-wide breaking change dressed as a schema improvement, and it lands on every emitter at once — most of which nobody is going to redeploy. The schema is published at `console/schemas/component_report.schema.json` and is part of the product contract.
+
+A module's own numbers come along without any rendering code that knows about it: `fields` carries a descriptor per value — type, unit, baseline, and one render hint from a closed set — and the console renders what it has never seen.
+
+The cost of onboarding the next thing is a **published number** (target: zero edits). A surface whose coverage is bounded by how much adapter code somebody felt like writing will always render a subset while looking complete.
+
+**Writing an adapter is the exception**, not the path — reserved for sources you do not control: a vendor API, a cloud control plane, someone else's registry. A source you write to is a source you can make emit.
+
 ## Adapters
 
 One adapter per source of truth. An adapter is a function from configuration to entities and edges, and it is the **only** thing that knows its source's shape.

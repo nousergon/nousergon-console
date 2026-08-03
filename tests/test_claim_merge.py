@@ -110,6 +110,8 @@ def test_an_observation_may_not_invent_a_declared_lifecycle():
     """The other direction, and the more dangerous one: a defect rendered as a
     decision stops paging anybody. Only a declaration may say DISABLED."""
     idx = _index(
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.UNREPORTED, "registry", cid="comp-other")),
         _result("systemd", ClaimClass.DISCOVERY, _comp(State.DISABLED, "systemd")),
     )
     merged = idx.entity("comp-alpha")
@@ -133,12 +135,29 @@ def test_a_masked_unit_with_no_registry_row_is_not_silently_disabled():
 # ------------------------------------- the two states merge made possible ---
 
 def test_unregistered_is_computable_now():
-    """Found on a substrate with no registry row (§8.3). Requires two claims
-    about one identifier to coexist, which is why it was uncomputable before."""
+    """Found running with no registry row (§8.3). Requires a declaration claim
+    and a non-declaration claim to coexist, which is why it was uncomputable
+    before the merge — the second one to arrive raised."""
     idx = _index(
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.UNREPORTED, "registry", cid="comp-other")),
         _result("systemd", ClaimClass.DISCOVERY, _comp(State.HEALTHY, "systemd")),
     )
     assert idx.entity("comp-alpha").state is State.UNREGISTERED
+
+
+def test_unregistered_needs_a_SUCCESSFUL_declaration_pass():
+    """With no registry configured at all there is no denominator (§2.4), so
+    "unregistered" is not a claim anyone has standing to make. Asserting it
+    anyway would paint an entire registry-less surface red on a configuration
+    choice — a verdict about the operator rather than about the fleet.
+
+    Same shape as the ABSENT guard below: a state whose meaning IS absence may
+    only be asserted by a check that actually looked."""
+    idx = _index(
+        _result("systemd", ClaimClass.DISCOVERY, _comp(State.HEALTHY, "systemd")),
+    )
+    assert idx.entity("comp-alpha").state is State.HEALTHY
 
 
 def test_absent_needs_a_SUCCESSFUL_discovery_pass():

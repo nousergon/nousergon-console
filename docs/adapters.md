@@ -39,8 +39,20 @@ Every adapter:
 - declares what it cannot supply in `unavailable`
 - is hermetic in tests: the network/host call is one injectable function
 
-Adding a source is adding an adapter module and one line in
+Adding a **source** is adding an adapter module and one line in
 `console/config.py::ADAPTERS`. No other wiring changes.
+
+**Adding a process or module is not that**, and reaching for an adapter is
+usually the wrong move. A module is not a source — it writes into one. The
+default path is the emission contract (`console/emit.py`,
+`console-policy.md` §2.6): emit the published envelope where an enabled adapter
+already reads, add the registry row, done — **no adapter, no config key, no
+edit to this repository**. Onboarding cost is a published number with a target
+of zero (§9.8), and every adapter written for something we ourselves write to
+spends against it.
+
+**Write an adapter when the source is one you do not control** — a vendor API,
+a cloud control plane, someone else's registry — and say so in the PR (§12).
 
 ---
 

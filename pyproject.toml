@@ -23,5 +23,11 @@ nousergon-console = "console.__main__:main"
 [tool.setuptools.packages.find]
 include = ["console*"]
 
+[tool.setuptools.package-data]
+# The emission schema is part of the PUBLIC product contract (console-policy.md
+# §2.6), not a build artifact — an installed console must be able to hand it to
+# an emitter that wants to validate against it.
+console = ["schemas/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

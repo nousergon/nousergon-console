@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nousergon.github.io/nousergon-console/schemas/component_report.schema.json",
+  "title": "Component report",
+  "description": "The default way a process or module gets onto the console (console-policy.md §2.6). A module emits this to a location an already-enabled adapter reads, adds its registry row, and appears — with zero edits to the console repository and zero edits to the console's configuration. EVERY FIELD IS OPTIONAL WITH A DECLARED DEFAULT: a required field added later is a fleet-wide breaking change dressed as a schema improvement, and it lands on every emitter at once.",
+  "type": "object",
+  "required": [],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "default": 1,
+      "description": "Bumped only on a change a consumer must react to. Adding an optional field is not one. The previous version stays ingestible for a stated period — an emitter is not obliged to redeploy because the console changed its mind."
+    },
+    "component_id": {
+      "type": "string",
+      "description": "The one name every signal, log key, alert and console row uses (§3.6). Default: the location this document was written to — a report at `…/my-job/latest.json` already says who it is about."
+    },
+    "check_id": {
+      "type": "string",
+      "description": "Accepted alias for component_id. Present because the fleet's existing check-result envelope uses this spelling and those emitters are in production; a new emitter should use component_id."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "attention", "error"],
+      "description": "About THIS RUN, not about the component. Deliberately small: an emitter knows whether its own work succeeded, and it does not know whether it is disabled, deprecated or retired. Those are declared in the registry (observability-policy.md 8.3) and inferring them from telemetry is what 8.3 forbids. Default: absent, which renders UNREPORTED — loud, and a finding."
+    },
+    "ran_at": {
+      "type": "string",
+      "description": "ISO-8601 instant this run happened. Default: the object's last-modified, which is a weaker fact (when it was WRITTEN, not when it was TRUE) and is declared as such on the row."
+    },
+    "cadence_minutes": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "How often this is expected to publish. WITHOUT IT STALENESS IS NOT COMPUTABLE, and the console says so rather than assuming fresh (5.2). This is the single most valuable optional field."
+    },
+    "label": {
+      "type": "string",
+      "description": "Human-readable name. Default: the component_id, which is always a legitimate label (3.6 — one name everywhere)."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One line an operator can act on. 8.3: each state is decision-shaped — the row says what is broken and what happens next, not a raw status token."
+    },
+    "deep_link": {
+      "type": "string",
+      "description": "The 5.1 evidence link: the run, the log, the dashboard. Default: the report's own location, which is a real link and a weak one."
+    },
+    "findings": {
+      "type": "array",
+      "items": {},
+      "description": "Structured detail behind an `attention` or `error` status. Default: empty."
+    },
+    "facets": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "The 2.2 slicing dimensions this emitter knows about itself — owner, substrate, repo, environment. NOT lifecycle: disabled/deprecated/retired are declared in the registry and never inferred (8.3), and an emitter claiming one is superseded at merge (2.5).",
+      "propertyNames": {"not": {"enum": ["lifecycle"]}}
+    },
+    "fields": {
+      "type": "object",
+      "description": "Self-describing extra data (5.8) — how a module's own numbers reach the surface with no rendering code that knows about it. Each entry declares its own type, unit, baseline and render hint.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "value": {"description": "The measurement itself."},
+          "type": {"type": "string", "description": "The value's type."},
+          "unit": {
+            "type": "string",
+            "description": "REQUIRED for a numeric field. The fleet's canonical instance of getting this wrong: a column emitted as a normalized ratio and consumed as raw share volume silently failed 901 of 903 tickers for months (observability-policy.md 3.4)."
+          },
+          "baseline": {
+            "description": "What this is compared against, or null declared explicitly. `null` means the console renders it as telemetry — plain, uncoloured — because green means BETTER THAN THE BASELINE and where there is no baseline there is no colour (5.4)."
+          },
+          "render": {
+            "type": "string",
+            "enum": ["value", "duration", "bytes", "ratio", "count", "timeseries", "link", "text"],
+            "default": "value",
+            "description": "Closed vocabulary (5.8). Adding a hint is a PR against console-policy.md 5.8 — an open set becomes a plugin API, and a plugin API is a per-module rendering path with a nicer name."
+          }
+        }
+      }
+    },
+    "produces": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Artifact keys this component wrote, becoming 6 lineage edges."
+    },
+    "consumes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Artifact keys this component reads. THIS IS THE DIRECTION THAT MATTERS: 'who breaks if this is stale' exists nowhere unless somebody declares it, and it is the only question an incident actually asks. The forward edge is usually written down somewhere; this one is not."
+    },
+    "run_id": {
+      "type": "string",
+      "description": "This execution. Default: component_id + ran_at, so successive publishes are distinct."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "The business period this run belongs to — a trading day, a weekly cadence, a deploy. It is the JOIN: 'what else broke when this broke' and 'what did this cycle cost' are traversals from a Cycle, not correlations a human performs by timestamp (8)."
+    }
+  }
+}

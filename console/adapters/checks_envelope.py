@@ -149,6 +149,16 @@ def fetch(
             entities.append(run)
             edges.append(run_edge)  # type: ignore[arg-type]
         edges.append(produces_edge)
+        # Declared lineage (§6). `consumes` is the load-bearing direction: the
+        # forward edge is a property of the producer and is usually written
+        # down somewhere, while "who breaks if this is stale" exists nowhere
+        # unless the emitter declares it — and it is the only question an
+        # incident actually asks.
+        edges.extend(_lineage_edges(body, component.id))
+        cycle_edge = _cycle_edge(body, run)
+        if cycle_edge is not None:
+            entities.append(cycle_edge[0])
+            edges.append(cycle_edge[1])
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
@@ -173,7 +183,18 @@ def _from_envelope(
     """Project one envelope onto Component + optional Run + Artifact + edges."""
     # check_id is authoritative when present; the path segment is the fallback.
     # Both must agree with the one-namespace rule — we never mint a third id.
-    check_id = str(body.get("check_id") or groups.get("component_id") or "")
+    # `component_id` is the emission contract's spelling (console/emit.py);
+    # `check_id` is the fleet's incumbent one and stays accepted, because a
+    # schema change that orphans production emitters is not an improvement.
+    # The path segment is the last fallback — a report written to
+    # `…/my-job/latest.json` already says who it is about, which is why the
+    # field is optional at all (§2.6: every field optional with a default).
+    check_id = str(
+        body.get("component_id")
+        or body.get("check_id")
+        or groups.get("component_id")
+        or ""
+    )
     if not check_id:
         return None
 
@@ -194,14 +215,19 @@ def _from_envelope(
             as_of=str(ran_at) if ran_at else None,
             evidence=evidence,
         ),
+        facets=_emitted_facets(body),
         detail={
-            "label": body.get("label"),
+            "label": body.get("label") or check_id,
             "summary": body.get("summary"),
             "status": status or None,
             "cadence_minutes": cadence_minutes,
             "findings_count": len(body.get("findings") or []),
             "schema_version": body.get("schema_version"),
             "key": key,
+            # Self-describing extra data (§5.8), carried through verbatim. This
+            # adapter does not interpret it and must not: the whole point is
+            # that no rendering path is keyed on who emitted it.
+            "fields": body.get("fields") or {},
         },
     )
 
@@ -239,6 +265,59 @@ def _from_envelope(
         run_edge = Edge(source=run_id, rel="belongs-to", target=check_id)
 
     return component, run, art, run_edge, produces_edge
+
+
+def _lineage_edges(body: dict[str, Any], component_id: str) -> list[Edge]:
+    """`produces` / `consumes` from the emission, as §3.3 typed edges."""
+    edges: list[Edge] = []
+    for key in body.get("produces") or []:
+        if key:
+            edges.append(Edge(source=component_id, rel="produces", target=str(key)))
+    for key in body.get("consumes") or []:
+        if key:
+            edges.append(Edge(source=str(key), rel="consumed-by", target=component_id))
+    return edges
+
+
+def _cycle_edge(
+    body: dict[str, Any], run: Entity | None
+) -> tuple[Entity, Edge] | None:
+    """The declared cycle, and the run's membership in it (§8).
+
+    Cycle is the join — "what else broke when this broke" and "what did this
+    cycle cost" are traversals from a Cycle entity, not correlations somebody
+    performs by eye across timestamps.
+    """
+    cycle_id = body.get("cycle_id")
+    if not cycle_id or run is None:
+        return None
+    cycle = Entity(
+        kind=Kind.CYCLE,
+        id=str(cycle_id),
+        state="declared-by-emitter",
+        provenance=run.provenance,
+    )
+    return cycle, Edge(source=run.id, rel="belongs-to", target=str(cycle_id))
+
+
+def _emitted_facets(body: dict[str, Any]) -> dict[str, str]:
+    """The §2.2 facets an emitter may declare about itself.
+
+    `lifecycle` is excluded on purpose and this is the enforcement point, not
+    just the schema's: `DISABLED`, `DEPRECATED` and `RETIRED` are declared in
+    the registry and never inferred (`observability-policy.md` §8.3). An
+    emitter announcing its own retirement is telemetry claiming an authority it
+    does not have — the merge would supersede it anyway (§2.5), but dropping it
+    here keeps the facet set honest for anything that reads facets directly.
+    """
+    raw = body.get("facets") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in raw.items()
+        if k != "lifecycle" and v is not None
+    }
 
 
 def _component_state(

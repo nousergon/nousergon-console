@@ -38,6 +38,7 @@ class Index:
     def __init__(self) -> None:
         self._claims: dict[str, list[Claim]] = {}
         self._saw_ok_discovery = False
+        self._saw_ok_declaration = False
         self._finalized = False
         self._entities: dict[str, Entity] = {}
         self._by_kind: dict[Kind, list[Entity]] = {k: [] for k in Kind}
@@ -60,8 +61,11 @@ class Index:
         # adapter added after a query silently never appears, which is the
         # quietest possible way to lose a source.
         self._finalized = False
-        if result.status is AdapterStatus.OK and result.claim_class is ClaimClass.DISCOVERY:
-            self._saw_ok_discovery = True
+        if result.status is AdapterStatus.OK:
+            if result.claim_class is ClaimClass.DISCOVERY:
+                self._saw_ok_discovery = True
+            elif result.claim_class is ClaimClass.DECLARATION:
+                self._saw_ok_declaration = True
         for ent in result.entities:
             ent = ent if result.status is AdapterStatus.OK else _as_unreported(ent)
             self._claims.setdefault(ent.id, []).append(
@@ -100,19 +104,30 @@ class Index:
         Neither is computable by any adapter alone, which is the whole reason
         the merge had to exist before they could be rendered:
 
-        - `UNREGISTERED` — found on a substrate, with no declaration claim.
+        - `UNREGISTERED` — something reported on it (a substrate enumeration
+                           OR an emitted report — both are evidence it is
+                           running) and no registry declared it. Requires a
+                           *successful* declaration pass: with no registry
+                           configured at all there is no denominator, so
+                           "unregistered" is not a claim anyone can make, and
+                           making it would paint an entire registry-less
+                           surface red on a configuration choice.
         - `ABSENT`       — declared, and a discovery adapter that ran fine did
                            not find it. Requires a *successful* discovery pass:
                            without one, absence is unobserved rather than
                            established, and reporting it would be the
                            absence-of-evidence read §8.3 forbids.
+
+        Both guards are the same shape, and it is the shape §8.3 asks for: a
+        state whose meaning IS absence may only be asserted by a check that
+        actually looked.
         """
         if ent.kind not in COMPONENT_STATE_KINDS:
             return ent
         classes = {c.claim_class for c in claims}
         declared = ClaimClass.DECLARATION in classes
         discovered = ClaimClass.DISCOVERY in classes
-        if not declared and discovered:
+        if not declared and self._saw_ok_declaration:
             return dataclasses.replace(ent, state=State.UNREGISTERED)
         if declared and not discovered and self._saw_ok_discovery:
             if ent.state is State.UNREPORTED:

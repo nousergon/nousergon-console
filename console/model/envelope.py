@@ -24,7 +24,7 @@ from .entity import Edge, Entity
 
 #: Bumped on any breaking change to the envelope shape. Consumers assert
 #: equality; a mismatch is a loud failure at ingest, not a mis-parsed entity.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class AdapterStatus(enum.Enum):
@@ -34,19 +34,54 @@ class AdapterStatus(enum.Enum):
     FAILED = "failed"  # source unreachable — entities render UNREPORTED
 
 
+class ClaimClass(enum.Enum):
+    """What KIND of statement this adapter's source is making (§2.5).
+
+    Several sources describing one entity is the normal case, not a collision:
+    a registry *declares* a component, telemetry *observes* it, a substrate
+    enumeration *discovers* it. The index merges their claims by identifier,
+    and this is the precedence it merges under — lower rank wins a contested
+    field.
+
+    The ordering is not a quality judgement. It is about **what each kind of
+    source is in a position to know.** A registry is the only thing that can
+    say a component is deliberately off; telemetry is the only thing that can
+    say it ran; an enumeration can only say it is there.
+    """
+
+    DECLARATION = 1  # a registry: existence, lifecycle, owner, authority tier
+    OBSERVATION = 2  # telemetry: state, as-of, run history, counts
+    DISCOVERY = 3    # a substrate enumeration: existence, and little else
+
+    @property
+    def rank(self) -> int:
+        return self.value
+
+
 @dataclass(frozen=True)
 class AdapterResult:
     """What one adapter returns from one pass over its source.
 
     ``name`` is the adapter's configured name (config.example.yaml `name:`).
+    ``claim_class`` is what kind of statement this source makes (§2.5) and
+    decides precedence when another adapter describes the same identifier.
     ``entities``/``edges`` are the projection; ``unavailable`` is the honest
     declaration of what the source cannot supply; ``status`` is FAILED when
     the source could not be reached, in which case ``entities`` carries the
-    source's known entities rendered UNREPORTED (never an empty surface).
+    source's known entities rendered UNREPORTED (never an empty surface) —
+    and that downgrade applies to THIS adapter's claim only, never to a merged
+    entity three other sources can still see (§2.5).
     """
 
     name: str
     status: AdapterStatus
+    # What kind of statement this source makes (§2.5). Declared by the adapter,
+    # never inferred by the index — an adapter knows whether it is reading a
+    # declaration or watching a substrate, and the index cannot tell from the
+    # entities alone. Defaults to OBSERVATION because that is the honest answer
+    # for a source that has not said: it is the middle rank, so it neither
+    # usurps a registry's lifecycle nor loses to a bare enumeration.
+    claim_class: ClaimClass = ClaimClass.OBSERVATION
     entities: tuple[Entity, ...] = ()
     edges: tuple[Edge, ...] = ()
     # Names of facets/fields this source cannot supply (e.g. "baseline",

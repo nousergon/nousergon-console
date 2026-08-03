@@ -21,8 +21,12 @@ import subprocess
 from typing import Any, Callable, Iterable
 
 from ..model.entity import Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
+
+#: A tracker is an OBSERVATION (§2.5): it reports the current state of issues
+#: and pull requests, which is a fact about them at a moment in time.
+CLAIM_CLASS = ClaimClass.OBSERVATION
 
 name = "repos"
 produces = ("decision", "incident")
@@ -53,6 +57,7 @@ def fetch(
     incident_label = config.get("incident_label", "incident")
     if not org:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -72,6 +77,7 @@ def fetch(
             entities.append(_to_entity(org, repo, item, incident_label))
 
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.FAILED if failed and not entities else AdapterStatus.OK,
         entities=tuple(entities),

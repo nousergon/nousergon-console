@@ -23,8 +23,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
+
+#: Object listings are an OBSERVATION (§2.5) — what is there and how fresh.
+CLAIM_CLASS = ClaimClass.OBSERVATION
 
 name = "checks"
 produces = ("component", "run", "artifact")
@@ -45,6 +48,7 @@ def fetch(
     pattern = config.get("key_pattern")
     if not bucket or not pattern:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -54,6 +58,7 @@ def fetch(
         if lister is None:
             # boto3 not installed — declare unable rather than silently zero (§5.5).
             return AdapterResult(
+                claim_class=CLAIM_CLASS,
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=("lister",),
@@ -68,6 +73,7 @@ def fetch(
         objects = lister(bucket, prefix)
     except Exception:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -103,6 +109,7 @@ def fetch(
             edges.append(Edge(source=cid, rel="produces", target=key))
 
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

@@ -50,8 +50,15 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+
+#: Enumerating a substrate is DISCOVERY (§2.5): it establishes that a unit is
+#: THERE. It also reads the unit's own ActiveState, which is why its claims
+#: still carry a state — but they rank below telemetry, and a `masked` unit's
+#: DISABLED is superseded by the merge unless a registry declares it, because
+#: §8.3 reserves that state to a declaration.
+CLAIM_CLASS = ClaimClass.DISCOVERY
 
 name = "schedules"
 produces = ("component", "run")
@@ -100,6 +107,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
         # error, not an empty surface — with no selector we cannot know
         # which units are in scope, so we say so (§2.3).
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("unit_prefixes",),
@@ -111,6 +119,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
         # The scheduler itself is unreachable — a FAILED adapter state with
         # no entities to mark UNREPORTED, never an exception (§2.3).
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -134,6 +143,7 @@ def fetch(config: dict[str, Any], enumerator: Enumerator | None = None) -> Adapt
             partial = True
 
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

@@ -37,8 +37,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.entity import Edge, Entity, Provenance
-from ..model.envelope import AdapterResult, AdapterStatus
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+
+#: A check-result envelope is an OBSERVATION (§2.5): it says what actually ran
+#: and when. It may never produce DISABLED/DEPRECATED/RETIRED — telemetry
+#: structurally cannot tell a decision from a defect (§8.3).
+CLAIM_CLASS = ClaimClass.OBSERVATION
 
 name = "checks"
 produces = ("component", "run", "artifact")
@@ -64,6 +69,7 @@ def fetch(
     pattern = config.get("key_pattern") or _DEFAULT_KEY_PATTERN
     if not bucket:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("all",),
@@ -79,6 +85,7 @@ def fetch(
             missing.append("reader")
         if missing:
             return AdapterResult(
+                claim_class=CLAIM_CLASS,
                 name=config.get("_name", name),
                 status=AdapterStatus.FAILED,
                 unavailable=tuple(missing),
@@ -93,6 +100,7 @@ def fetch(
         objects = lister(bucket, prefix)
     except Exception:
         return AdapterResult(
+            claim_class=CLAIM_CLASS,
             name=config.get("_name", name),
             status=AdapterStatus.FAILED,
             unavailable=("source",),
@@ -143,6 +151,7 @@ def fetch(
         edges.append(produces_edge)
 
     return AdapterResult(
+        claim_class=CLAIM_CLASS,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),

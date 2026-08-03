@@ -17,19 +17,28 @@ Two obligations are enforced here, not left to renderers:
 """
 from __future__ import annotations
 
+import dataclasses
+
 from ..model.entity import RELATIONS, Edge, Entity
-from ..model.envelope import AdapterResult, AdapterStatus
-from ..model.kinds import Kind, State
+from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
+from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from .merge import Claim, NamespaceCollision, merge
 
-
-class NamespaceCollision(Exception):
-    """Two entities share an id (§3.6). The build fails rather than shadow."""
+__all__ = ["Index", "NamespaceCollision"]
 
 
 class Index:
-    """The derived entity graph. Build once per pass from AdapterResults."""
+    """The derived entity graph. Build once per pass from AdapterResults.
+
+    Claims are collected as they arrive and resolved in `finalize()` (§2.5), so
+    the result never depends on adapter ordering — a surface that renders
+    differently because two adapters raced is a surface nobody can reason about.
+    """
 
     def __init__(self) -> None:
+        self._claims: dict[str, list[Claim]] = {}
+        self._saw_ok_discovery = False
+        self._finalized = False
         self._entities: dict[str, Entity] = {}
         self._by_kind: dict[Kind, list[Entity]] = {k: [] for k in Kind}
         # Forward and reverse adjacency, keyed by entity id. Reverse edges are
@@ -40,28 +49,84 @@ class Index:
     # ---- ingest -----------------------------------------------------------
 
     def add_result(self, result: AdapterResult) -> None:
-        """Fold one adapter's projection into the graph.
+        """Record one adapter's claims (§2.5). Resolution happens in finalize().
 
         A FAILED adapter still contributes its entities, rendered UNREPORTED —
-        absence renders as itself (§5.5), never as a vanished row.
+        absence renders as itself (§5.5), never as a vanished row. That downgrade
+        applies to **this adapter's claim only**: a merged entity three other
+        sources can still see is not blanked because one source was unreachable.
         """
+        # Any new claim invalidates a previous resolution — otherwise an
+        # adapter added after a query silently never appears, which is the
+        # quietest possible way to lose a source.
+        self._finalized = False
+        if result.status is AdapterStatus.OK and result.claim_class is ClaimClass.DISCOVERY:
+            self._saw_ok_discovery = True
         for ent in result.entities:
-            ent = (
-                ent
-                if result.status is AdapterStatus.OK
-                else _as_unreported(ent)
+            ent = ent if result.status is AdapterStatus.OK else _as_unreported(ent)
+            self._claims.setdefault(ent.id, []).append(
+                Claim(
+                    entity=ent,
+                    claim_class=result.claim_class,
+                    adapter=result.name,
+                    reachable=result.status is AdapterStatus.OK,
+                )
             )
-            self._add_entity(ent)
         for edge in result.edges:
             self._add_edge(edge)
 
-    def _add_entity(self, ent: Entity) -> None:
-        if ent.id in self._entities:
-            raise NamespaceCollision(
-                f"entity id {ent.id!r} ingested twice (§3.6 one namespace)"
-            )
-        self._entities[ent.id] = ent
-        self._by_kind[ent.kind].append(ent)
+    def finalize(self) -> "Index":
+        """Resolve every identifier's claims into one entity (§2.5).
+
+        Idempotent, and called lazily by every query, so a caller that forgets
+        it gets a correct index rather than an empty one — the failure mode of
+        a two-phase build is a surface that renders nothing and says nothing.
+        """
+        if self._finalized:
+            return self
+        self._entities = {}
+        self._by_kind = {k: [] for k in Kind}
+        for entity_id, claims in self._claims.items():
+            ent = merge(claims)
+            ent = self._reconcile(ent, claims)
+            self._entities[entity_id] = ent
+            self._by_kind[ent.kind].append(ent)
+        self._finalized = True
+        return self
+
+    def _reconcile(self, ent: Entity, claims: list[Claim]) -> Entity:
+        """The two states that exist only as a comparison BETWEEN claims (§8.3).
+
+        Neither is computable by any adapter alone, which is the whole reason
+        the merge had to exist before they could be rendered:
+
+        - `UNREGISTERED` — found on a substrate, with no declaration claim.
+        - `ABSENT`       — declared, and a discovery adapter that ran fine did
+                           not find it. Requires a *successful* discovery pass:
+                           without one, absence is unobserved rather than
+                           established, and reporting it would be the
+                           absence-of-evidence read §8.3 forbids.
+        """
+        if ent.kind not in COMPONENT_STATE_KINDS:
+            return ent
+        classes = {c.claim_class for c in claims}
+        declared = ClaimClass.DECLARATION in classes
+        discovered = ClaimClass.DISCOVERY in classes
+        if not declared and discovered:
+            return dataclasses.replace(ent, state=State.UNREGISTERED)
+        if declared and not discovered and self._saw_ok_discovery:
+            if ent.state is State.UNREPORTED:
+                return dataclasses.replace(ent, state=State.ABSENT)
+        return ent
+
+    def conflicts(self) -> list[Entity]:
+        """§9.9 — entities carrying an unresolved equal-rank disagreement.
+
+        Published rather than suppressed: a conflict is two sources disagreeing
+        about the fleet, which is a fact about the fleet and not a rendering
+        problem.
+        """
+        return [e for e in self.finalize()._entities.values() if e.conflicts]
 
     def _add_edge(self, edge: Edge) -> None:
         if edge.rel not in RELATIONS:
@@ -74,13 +139,13 @@ class Index:
     # ---- queries ----------------------------------------------------------
 
     def entity(self, entity_id: str) -> Entity | None:
-        return self._entities.get(entity_id)
+        return self.finalize()._entities.get(entity_id)
 
     def of_kind(self, kind: Kind) -> list[Entity]:
-        return list(self._by_kind[kind])
+        return list(self.finalize()._by_kind[kind])
 
     def all(self) -> list[Entity]:
-        return list(self._entities.values())
+        return list(self.finalize()._entities.values())
 
     def edges(self) -> list[Edge]:
         """Every forward edge declared across the ingested set (§3.3).
@@ -115,6 +180,7 @@ class Index:
         The number is published even when below 1.0 (§9) and names its
         denominator (§5.3).
         """
+        self.finalize()
         total = len(self._entities)
         relation_reachable = sum(1 for eid in self._entities if self._in.get(eid))
         # Structure and search are implied by presence in the generated index;
@@ -129,7 +195,12 @@ class Index:
 
 
 def _as_unreported(ent: Entity) -> Entity:
-    """Render an entity from a FAILED adapter as UNREPORTED (§2.3, §5.5)."""
-    import dataclasses
+    """Render a claim from a FAILED adapter as UNREPORTED (§2.3, §5.5).
 
-    return dataclasses.replace(ent, state=State.UNREPORTED)
+    Applied to the CLAIM, before merge — so an unreachable source contributes
+    an honest "I could not see this" rather than blanking an entity that three
+    other sources reported on fine.
+    """
+    if ent.kind in COMPONENT_STATE_KINDS:
+        return dataclasses.replace(ent, state=State.UNREPORTED)
+    return dataclasses.replace(ent, state="unreported-by-source")

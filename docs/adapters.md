@@ -5,8 +5,33 @@ entities and edges; it is the only thing that knows its source's shape. Cross-
 source relations are formed by the index over entity identifiers, never inside
 an adapter.
 
+Every adapter **declares its claim class** (`console-policy.md` §2.5) — what
+kind of statement its source is in a position to make. Several sources
+describing one entity is the normal case, not a collision: the index merges
+their claims by identifier, and the claim class is the precedence it merges
+under.
+
+| Class | The source is | Supplies | Adapters |
+|---|---|---|---|
+| `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store` |
+| `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
+
+Two rules fall out of this and neither is negotiable:
+
+- **A lifecycle disposition may only come from a declaration.** `DISABLED`,
+  `DEPRECATED` and `RETIRED` are declared, never inferred
+  (`observability-policy.md` §8.3) — telemetry structurally cannot tell a
+  decision from a defect. A non-declaration claim proposing one is superseded
+  and stays visible on the entity page rather than being discarded.
+- **A declaration does not supply state.** It says what exists, not how it is
+  doing, so its `UNREPORTED` loses to any live observation — otherwise every
+  observed component would render as a transparency gap and the surface would
+  report itself blind.
+
 Every adapter:
 
+- declares `CLAIM_CLASS` at module level
 - takes **only** its own `config` subtree
 - returns an `AdapterResult` (entities, edges, status, unavailable)
 - treats source failure as `status=FAILED` with entities `UNREPORTED` — never

@@ -19,8 +19,7 @@ from typing import Any
 
 from .config import build_index, load_config
 from .index.graph import Index
-from .model.entity import Entity
-from .model.envelope import SCHEMA_VERSION
+from .render.json import index_dump
 from .server.app import serve
 
 
@@ -73,32 +72,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dump(index: Index) -> str:
-    """The §5.3 machine-readable projection: every entity and forward edge,
-    versioned by the entity/edge schema (model/envelope.py)."""
-    doc = {
-        "schema_version": SCHEMA_VERSION,
-        "entities": [_entity_json(e) for e in index.all()],
-        "edges": [
-            {"source": e.source, "rel": e.rel, "target": e.target}
-            for e in index.edges()
-        ],
-    }
-    return json.dumps(doc, indent=2, sort_keys=True)
+    """The machine-readable projection — the SAME serializer the HTTP JSON
+    representation uses (`render/json.py`).
 
-
-def _entity_json(e: Entity) -> dict[str, Any]:
-    return {
-        "kind": e.kind.value,
-        "id": e.id,
-        "state": e.state.value,
-        "provenance": {
-            "source": e.provenance.source,
-            "as_of": e.provenance.as_of,
-            "evidence": e.provenance.evidence,
-        },
-        "facets": dict(e.facets),
-        "detail": dict(e.detail),
-    }
+    Deliberately shared: a CLI dump with its own entity shape is a second wire
+    format, and the two would answer the same question differently the first
+    time either changed.
+    """
+    return json.dumps(index_dump(index), indent=2, sort_keys=True)
 
 
 if __name__ == "__main__":

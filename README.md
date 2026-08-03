@@ -84,6 +84,23 @@ The cost of onboarding the next thing is a **published number** (target: zero ed
 
 **Writing an adapter is the exception**, not the path — reserved for sources you do not control: a vendor API, a cloud control plane, someone else's registry. A source you write to is a source you can make emit.
 
+## Every view is also JSON, at the same URL
+
+```
+curl -H 'Accept: application/json' https://console.example/component/my-job
+curl https://console.example/component/my-job.json          # same thing
+curl https://console.example/.json                          # the landing view
+```
+
+**Agents are a first-class reader of this surface**, not an afterthought. One they cannot read forces every agent to re-derive system state from raw sources — and the agent's picture and the operator's picture then diverge exactly when something is wrong, because that is when the derivations differ.
+
+It is not an API *beside* the UI: the resolver runs **once** and both representations render from its result. There is one router and one query, so the two cannot drift in coverage — a route that exists serves both, a route that does not 404s in both, and adding a route cannot add it to one and forget the other.
+
+- `Accept: application/json` is primary. `*/*` deliberately does **not** count — a browser sends it, and defaulting that to JSON would make the human surface unreachable.
+- The `.json` suffix is a fallback, and only applies to a path that does not already resolve — because an artifact's identifier **is** its object key, so `/artifact/ops/checks/x/latest.json` names a real entity.
+- A 404 answers in the representation that was asked for. An agent that gets an HTML error page has to parse prose to learn what happened.
+- Every payload carries `schema_version`.
+
 ## Adapters
 
 One adapter per source of truth. An adapter is a function from configuration to entities and edges, and it is the **only** thing that knows its source's shape.

@@ -32,7 +32,14 @@ def test_dump_is_versioned_json_of_the_index(capsys, tmp_path):
     assert main(["--config", str(cfg), "index"]) == 0
     doc = json.loads(capsys.readouterr().out)
 
-    assert doc["schema_version"] == 2
+    # The WIRE version (render/json.py), not the adapter-envelope version
+    # (model/envelope.py). They are different contracts changing for different
+    # reasons: one is what an adapter hands the index, the other is what the
+    # index hands a consumer. The dump shares its serializer with the HTTP
+    # JSON representation on purpose — a CLI dump with its own entity shape is
+    # a second wire format, and the two would diverge the first time either
+    # changed.
+    assert doc["schema_version"] == 1
     ids = {e["id"] for e in doc["entities"]}
     assert ids == {"comp-one"}
     ent = doc["entities"][0]

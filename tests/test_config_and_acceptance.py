@@ -31,6 +31,18 @@ def test_build_index_from_registry_config(tmp_path):
     assert {e.id for e in index.of_kind(Kind.COMPONENT)} == {"comp-one", "comp-two"}
 
 
+def test_multiple_declared_registries_are_discovered_without_console_wiring(tmp_path):
+    first, second = tmp_path / "first.d", tmp_path / "second.d"
+    first.mkdir(); second.mkdir()
+    _write_registry(str(first), {"comp-one": {}})
+    _write_registry(str(second), {"comp-two": {}})
+    index = build_index({"registries": [
+        {"adapter": "yaml-directory", "path": str(first), "id_field": "component_id"},
+        {"adapter": "yaml-directory", "path": str(second), "id_field": "component_id"},
+    ]})
+    assert {e.id for e in index.of_kind(Kind.COMPONENT)} == {"comp-one", "comp-two"}
+
+
 def test_adding_a_component_requires_no_console_edit(tmp_path):
     """§3.5 acceptance: a component added to the registry appears in the index
     with no change to console code — nav, search and relations follow because

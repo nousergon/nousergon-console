@@ -52,11 +52,15 @@ def build_index(config: dict[str, Any]) -> Index:
     index = Index()
     descriptors: list = []
     # The registry adapter is configured under its own `registry:` block.
-    reg = config.get("registry")
-    if reg and reg.get("adapter") in ADAPTERS:
+    registry_entries = ([config["registry"]] if config.get("registry") else [])
+    registry_entries.extend(config.get("registries") or [])
+    for ordinal, reg in enumerate(registry_entries, start=1):
+        if reg.get("adapter") not in ADAPTERS:
+            continue
         module = ADAPTERS[reg["adapter"]]
         result = module.fetch({
-            **reg, "_name": "registry", "known_drivers": KNOWN_DRIVERS,
+            **reg, "_name": reg.get("name", f"registry-{ordinal}"),
+            "known_drivers": KNOWN_DRIVERS,
         })
         index.add_result(result)
         descriptors.extend(result.descriptors)

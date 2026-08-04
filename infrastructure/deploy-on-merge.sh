@@ -18,7 +18,7 @@ UNIT_DST="/etc/systemd/system/nousergon-console.service"
 # Private config — Parameter Store path, never a repo path. The parameter holds
 # the full config.yaml body. Create/update with:
 #   AWS_PROFILE=ne-admin aws ssm put-parameter --name "$CONFIG_SSM" --type SecureString --overwrite --value file://config.yaml
-CONFIG_SSM="${CONSOLE_CONFIG_SSM:-/nousergon/console/config.yaml}"
+CONFIG_SSM="${CONSOLE_CONFIG_SSM:-/alpha-engine/nousergon-console/config.yaml}"
 CONFIG_DST="$REPO_DIR/config.yaml"
 HEALTH_URL="http://127.0.0.1:5180/"
 VENV_PY="$REPO_DIR/.venv/bin/python"

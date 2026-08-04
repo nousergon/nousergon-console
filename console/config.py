@@ -96,6 +96,9 @@ def _driver_context(config: dict[str, Any]) -> dict[str, Any]:
     console_cfg = config.get("console") or {}
     return {
         "staleness_factor": float(console_cfg.get("staleness_factor", 1.5)),
+        # Values live only in the gitignored runtime config; descriptors carry
+        # the stable key, never a DSN or password (§2.7).
+        "sql_credentials": dict(config.get("sql_credentials") or {}),
         **(config.get("_driver_context") or {}),
     }
 

@@ -110,6 +110,8 @@ def parse(row: Mapping[str, Any], component_id: str,
                     "A binding with no driver names a source shape nobody can "
                     "read, so nothing would be read and nothing would say so."
                 )
+            if driver == "sql-source":
+                _validate_sql_source(spec, component_id)
             if known_drivers is not None and driver not in known_drivers:
                 raise DescriptorError(
                     f"{component_id}: `{key}` binds to driver {driver!r}, "
@@ -140,3 +142,19 @@ def _string_list(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,)
     return tuple(str(v) for v in value if v)
+
+
+def _validate_sql_source(spec: Mapping[str, Any], component_id: str) -> None:
+    """Reject executable or credential-bearing SQL descriptors at build time."""
+    forbidden = {"connection_string", "dsn", "password", "url", "uri"}
+    if forbidden.intersection(spec):
+        raise DescriptorError(
+            f"{component_id}: sql-source has an inline credential; descriptors "
+            "name a private `credential` reference, never a connection value."
+        )
+    query = spec.get("query")
+    normalized = str(query or "").strip()
+    if (not normalized.lower().startswith("select ") or ";" in normalized.rstrip(";")):
+        raise DescriptorError(
+            f"{component_id}: sql-source query must be one parameterless SELECT statement."
+        )

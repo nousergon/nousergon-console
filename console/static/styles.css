@@ -5,4 +5,5 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 .state-FAILED, .state-STALLED, .state-MISSED { border-left: .35rem solid #b00020; }
 .state-DEGRADED, .state-UNREPORTED, .state-ABSENT, .state-UNREGISTERED, .state-NEVER_RAN { border-left: .35rem solid #8a4b00; }
 .state-DISABLED, .state-DEPRECATED, .state-RETIRED { border-left: .35rem solid #4c5563; }
+.state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid #8a4b00; }
 .absent { border-left: .35rem dashed #4c5563; padding-left: .5rem; }

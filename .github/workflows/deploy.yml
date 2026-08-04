@@ -51,15 +51,12 @@ jobs:
           # Two-phase body:
           #   1. Pull the workflow-pinned SHA as ec2-user (refreshes the deploy script).
           #   2. Run the freshly-pulled deploy script as root (systemctl needs it).
+          CMD_BODY="set -euo pipefail; if [ ! -d /home/ec2-user/nousergon-console/.git ]; then sudo -u ec2-user git clone https://github.com/nousergon/nousergon-console.git /home/ec2-user/nousergon-console; fi; cd /home/ec2-user/nousergon-console; sudo -u ec2-user git fetch --prune origin; sudo -u ec2-user git checkout -f ${GITHUB_SHA}; bash infrastructure/deploy-on-merge.sh ${GITHUB_SHA}"
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$DASHBOARD_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "nousergon-console deploy ${GITHUB_SHA}" \
-            --parameters "commands=[
-              \"set -euo pipefail\",
-              \"sudo -u ec2-user bash -lc 'set -euo pipefail; REPO=/home/ec2-user/nousergon-console; if [ ! -d \\\$REPO/.git ]; then git clone https://github.com/nousergon/nousergon-console.git \\\$REPO; fi; cd \\\$REPO; git fetch --prune origin; git checkout -f ${GITHUB_SHA}'\",
-              \"bash /home/ec2-user/nousergon-console/infrastructure/deploy-on-merge.sh ${GITHUB_SHA}\"
-            ]" \
+            --parameters "commands=[\"${CMD_BODY}\"]" \
             --query 'Command.CommandId' --output text)
           echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
           echo "SSM command id: $COMMAND_ID"

@@ -41,6 +41,13 @@ from ..server.router import Resolved
 SCHEMA_VERSION = 1
 
 
+def aggregate(count: int, denominator: int | None) -> dict[str, int]:
+    """The only JSON roll-up shape: a count without its population is invalid."""
+    if denominator is None:
+        raise ValueError("aggregate denominator is required (§5.3)")
+    return {"count": count, "of": denominator}
+
+
 def payload(index: Index, req: Resolved) -> dict[str, Any]:
     """The JSON body for a resolved request — the same query the HTML renders."""
     if req.view == "landing":
@@ -113,9 +120,9 @@ def _landing(index: Index) -> dict[str, Any]:
             # Every count states its denominator inline (§5.3) — a roll-up
             # that cannot state one is not rendered, and that holds on the
             # wire exactly as it holds on the page.
-            "not_healthy": {"count": len(exceptions), "of": len(entities)},
-            "transparency_gap": {"count": len(unreported), "of": len(entities)},
-            "claim_conflicts": {"count": len(conflicts), "of": len(entities)},
+            "not_healthy": aggregate(len(exceptions), len(entities)),
+            "transparency_gap": aggregate(len(unreported), len(entities)),
+            "claim_conflicts": aggregate(len(conflicts), len(entities)),
             "index_reachability": index.reachability(),
         },
     }

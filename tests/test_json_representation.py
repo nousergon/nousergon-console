@@ -187,6 +187,13 @@ def test_the_landing_payload_is_exception_first_with_denominators(index):
     assert doc["numbers"]["transparency_gap"]["of"] == 3
 
 
+def test_aggregate_refuses_a_missing_denominator():
+    from console.render.json import aggregate
+    import pytest
+    with pytest.raises(ValueError, match="denominator"):
+        aggregate(1, None)
+
+
 def test_a_list_payload_states_showing_and_of(index):
     doc = _payload(index, "/component", "owner=brian")
     assert (doc["showing"], doc["of"]) == (1, 2)

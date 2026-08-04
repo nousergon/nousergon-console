@@ -27,7 +27,7 @@ include = ["console*"]
 # The emission schema is part of the PUBLIC product contract (console-policy.md
 # §2.6), not a build artifact — an installed console must be able to hand it to
 # an emitter that wants to validate against it.
-console = ["schemas/*.json"]
+console = ["schemas/*.json", "static/*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

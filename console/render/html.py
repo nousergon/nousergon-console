@@ -219,6 +219,19 @@ def entity_page(index: Index, ent: Entity) -> str:
 </body></html>"""
 
 
+def history_page(index: Index, ent: Entity, window_hours: int) -> str:
+    from ..history import query as history_query
+    result = history_query(ent, window_hours)
+    if not result["available"]:
+        body = f'<p class="absent">history unavailable — {esc(result["reason"])}</p>'
+    else:
+        bound = (f' requested {result["requested_hours"]}h, bounded to {result["effective_hours"]}h by source retention'
+                 if result["bounded"] else f' {result["effective_hours"]}h retained window')
+        rows = "".join(f'<li>{esc(point)}</li>' for point in result["points"]) or '<li class="absent">no observations in this retained window</li>'
+        body = f'<p>history window:{esc(bound)}</p><ul>{rows}</ul>'
+    return f'<!doctype html><html><head><meta charset="utf-8"><title>history · {esc(ent.id)}</title></head><body><h1>history: {esc(ent.id)}</h1>{index_freshness(index)}{body}</body></html>'
+
+
 def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1) -> str:
     """A filtered list — the facets are in the URL, so this reproduces cold (§3.4)."""
     entities = index.of_kind(kind)

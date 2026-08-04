@@ -76,3 +76,10 @@ def test_entity_id_may_contain_slashes():
     assert r.view == "entity"
     assert r.kind is Kind.ARTIFACT
     assert r.entity_id == "ops/checks/comp-alpha/latest.json"
+
+
+def test_history_route_is_addressable_with_its_requested_window():
+    r = resolve("/history/component/comp-alpha", "window_hours=48")
+    assert (r.view, r.kind, r.entity_id, r.window_hours) == (
+        "history", Kind.COMPONENT, "comp-alpha", 48,
+    )

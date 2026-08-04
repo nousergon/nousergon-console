@@ -45,6 +45,7 @@ class Resolved:
     entity_id: str | None = None
     facets: dict[str, str] = field(default_factory=dict)
     query: str | None = None
+    page: int = 1
 
 
 class UnknownRoute(Exception):
@@ -81,7 +82,11 @@ def resolve(path: str, query_string: str = "") -> Resolved:
     if len(segments) == 1:
         # A list view: /<kind>?facet=value&...
         facets = {k: v for k, v in params.items() if k in FACETS}
-        return Resolved(view="list", kind=kind, facets=facets)
+        try:
+            page = max(1, int(params.get("page", "1")))
+        except ValueError:
+            page = 1
+        return Resolved(view="list", kind=kind, facets=facets, page=page)
 
     # An entity page: /<kind>/<id>. The id is everything after the kind
     # segment, NOT a single segment — identifiers legitimately contain slashes

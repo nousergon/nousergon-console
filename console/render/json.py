@@ -123,19 +123,22 @@ def _landing(index: Index) -> dict[str, Any]:
 
 def _list(index: Index, req: Resolved) -> dict[str, Any]:
     total = index.of_kind(req.kind)
-    shown = [
+    filtered = [
         e for e in total
         if all(e.facets.get(k) == v for k, v in req.facets.items())
     ]
+    start = (req.page - 1) * 50
+    shown = filtered[start:start + 50]
     return {
         "schema_version": SCHEMA_VERSION,
         "view": "list",
         "kind": req.kind.value,
         "facets": dict(req.facets),
+        "page": req.page,
         # §3.4: a list showing a subset says so. A consumer that reads only
         # `entities` and never `showing`/`of` would make the same mistake a
         # reader makes with a top-10 that does not say it is a top-10.
-        "showing": len(shown),
+        "showing": len(shown), "filtered": len(filtered),
         "of": len(total),
         "entities": [entity(e) for e in shown],
     }

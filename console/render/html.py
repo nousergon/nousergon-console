@@ -203,21 +203,22 @@ def entity_page(index: Index, ent: Entity) -> str:
 </body></html>"""
 
 
-def list_page(index: Index, kind: Kind, facets: dict[str, str]) -> str:
+def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1) -> str:
     """A filtered list — the facets are in the URL, so this reproduces cold (§3.4)."""
     entities = index.of_kind(kind)
     for fkey, fval in facets.items():
         entities = [e for e in entities if e.facets.get(fkey) == fval]
     total = len(index.of_kind(kind))
-    # §3.4: a filtered list states showing N of M, never a silent subset.
-    shown = f"<p>showing {len(entities)} of {total}</p>" if facets else ""
+    start = (page - 1) * 50
+    visible = entities[start:start + 50]
+    shown = f"<p>showing {len(visible)} of {total} · {len(entities)} filtered · page {page}</p>"
     title = f"{kind.value}s"
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
 <h1>{esc(title)}</h1>
 {index_freshness(index)}{shown}
-{_table(entities)}
+{_table(visible)}
 </body></html>"""
 
 

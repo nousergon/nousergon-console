@@ -37,9 +37,10 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
             unstructured += 1
     value = next((row[field] for row in reversed(parsed) if isinstance(row, dict) and field in row), None)
     if value is None:
+        condition = "window-empty" if not records else "field-absent"
         return DriverResult(binding=binding, entities=(Entity(kind=Kind.COMPONENT, id=binding.component_id,
             state=State.DEGRADED, provenance=Provenance(source=f"log-source:{location}", evidence=str(location)),
-            detail={"log_source": {"condition": "field-absent", "field": str(field),
+            detail={"log_source": {"condition": condition, "field": str(field),
                                     "structured_records": len(parsed), "unstructured_records": unstructured}}),),
             cadence_seconds=window * 60)
     return DriverResult(binding=binding, entities=(Entity(kind=Kind.COMPONENT, id=binding.component_id,

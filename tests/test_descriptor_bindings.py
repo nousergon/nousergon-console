@@ -296,6 +296,13 @@ def test_log_source_reports_unstructured_records_and_a_missing_field(tmp_path):
     assert finding["unstructured_records"] == 1
 
 
+def test_log_source_distinguishes_an_empty_window(tmp_path):
+    config = _config(tmp_path, ctx={"log_records": lambda _location, _window: []}, **{
+        "writer": {"metrics": {"driver": "log-source", "location": "s3://any/logs/", "field": "rows_written"}},
+    })
+    assert build_index(config).entity("writer").detail["log_source"]["condition"] == "window-empty"
+
+
 def test_a_failed_binding_is_named_by_doctor(tmp_path):
     """The entire reason bindings are named individually. "The component is not
     on the surface" is not actionable; "its artifacts binding failed: no such

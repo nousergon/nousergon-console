@@ -47,6 +47,7 @@ class Resolved:
     facets: dict[str, str] = field(default_factory=dict)
     query: str | None = None
     page: int = 1
+    window_hours: int | None = None
 
 
 class UnknownRoute(Exception):
@@ -78,6 +79,17 @@ def resolve(path: str, query_string: str = "") -> Resolved:
 
     if segments[0] == "registry" and len(segments) == 2:
         return Resolved(view="registry", registry_name=segments[1])
+
+    if segments[0] == "history" and len(segments) >= 3:
+        kind = Kind.from_route(segments[1])
+        if kind is None:
+            raise UnknownRoute(f"no entity kind named by segment {segments[1]!r}")
+        try:
+            window = max(1, int(params.get("window_hours", "24")))
+        except ValueError:
+            window = 24
+        return Resolved(view="history", kind=kind,
+                        entity_id=path.split("/", 3)[3], window_hours=window)
 
     kind = Kind.from_route(segments[0])
     if kind is None:

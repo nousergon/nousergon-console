@@ -53,7 +53,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._fail(404, as_json, f"No view at {path}.")
             return
 
-        if req.view == "entity" and index.entity(req.entity_id or "") is None:
+        if req.view in {"entity", "history"} and index.entity(req.entity_id or "") is None:
             self._fail(404, as_json, f"No entity {req.entity_id}.")
             return
         if req.view == "registry" and req.registry_name not in index.registry_names():
@@ -118,6 +118,8 @@ def _html(index: Index, req) -> str:
         return render_html.list_page(index, req.kind, req.facets, req.page)
     if req.view == "entity":
         return render_html.entity_page(index, index.entity(req.entity_id))
+    if req.view == "history":
+        return render_html.history_page(index, index.entity(req.entity_id), req.window_hours or 24)
     if req.view == "doctor":
         return render_html.doctor_page(index, req.query or "")
     if req.view == "registry":

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import threading
 import urllib.request
+import json
+from dataclasses import replace
 
 import pytest
 
@@ -20,6 +22,10 @@ from tests.fixtures import fixture_graph
 @pytest.fixture()
 def live_server():
     entities, edges = fixture_graph()
+    entities = [replace(entity, detail={**entity.detail,
+                                         "history_retention_hours": 24,
+                                         "history": [{"as_of": "2026-08-04T11:00:00Z", "value": 4}]})
+                if entity.id == "comp-producer" else entity for entity in entities]
     idx = Index()
     idx.add_result(AdapterResult(name="f", status=AdapterStatus.OK,
                                  entities=tuple(entities), edges=tuple(edges)))
@@ -76,6 +82,18 @@ def test_html_pages_link_the_served_stylesheet(live_server):
 def test_search_resolves_identifier(live_server):
     body = _get(f"{live_server}/search?q=comp-producer")
     assert "comp-producer" in body
+
+
+def test_history_route_serves_the_same_retention_result_as_json(live_server):
+    url = f"{live_server}/history/component/comp-producer?window_hours=48"
+    assert "bounded to 24h by source retention" in _get(url)
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request) as response:
+        payload = json.loads(response.read())
+    assert payload["view"] == "history"
+    assert payload["history"]["available"] is True
+    assert payload["history"]["bounded"] is True
+    assert payload["history"]["effective_hours"] == 24
 
 
 def test_unknown_entity_is_404_not_blank(live_server):

@@ -60,6 +60,13 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         if ent is None:  # pragma: no cover - app.py 404s before reaching here
             raise KeyError(req.entity_id)
         doc = _entity_page(index, ent)
+    elif req.view == "history":
+        ent = index.entity(req.entity_id or "")
+        if ent is None:
+            raise KeyError(req.entity_id)
+        from ..history import query as history_query
+        doc = {"schema_version": SCHEMA_VERSION, "view": "history",
+               "entity": entity(ent), "history": history_query(ent, req.window_hours or 24)}
     elif req.view == "search":
         doc = _search(index, req.query or "")
     elif req.view == "doctor":

@@ -258,6 +258,44 @@ def test_one_components_broken_binding_does_not_blank_the_others(tmp_path):
     assert index.entity("s3://broken/k") is None  # its own binding, not others'
 
 
+def test_log_source_reads_a_declared_json_metric_by_field_name(tmp_path):
+    """A descriptor points at its own structured log; no console topology is added."""
+    config = _config(
+        tmp_path,
+        ctx={"log_records": lambda _location, _window: [
+            '{"rows_written": {"value": 903, "unit": "rows", '
+            '"baseline": 900, "render": "count"}}',
+        ]},
+        **{"writer": {
+            "metrics": {"driver": "log-source", "location": "s3://any/logs/",
+                        "field": "rows_written", "window_minutes": 60},
+        }},
+    )
+
+    component = build_index(config).entity("writer")
+    assert component is not None
+    assert component.detail["fields"]["rows_written"] == {
+        "value": 903, "unit": "rows", "baseline": 900, "render": "count",
+    }
+
+
+def test_log_source_reports_unstructured_records_and_a_missing_field(tmp_path):
+    """Unstructured, empty, and missing-field observations remain distinct findings."""
+    config = _config(
+        tmp_path,
+        ctx={"log_records": lambda _location, _window: ["not json", '{"other": 1}']},
+        **{"writer": {"metrics": {"driver": "log-source", "location": "s3://any/logs/",
+                                     "field": "rows_written", "window_minutes": 60}}},
+    )
+
+    component = build_index(config).entity("writer")
+    assert component is not None and component.state is State.DEGRADED
+    finding = component.detail["log_source"]
+    assert finding["condition"] == "field-absent"
+    assert finding["structured_records"] == 1
+    assert finding["unstructured_records"] == 1
+
+
 def test_a_failed_binding_is_named_by_doctor(tmp_path):
     """The entire reason bindings are named individually. "The component is not
     on the surface" is not actionable; "its artifacts binding failed: no such

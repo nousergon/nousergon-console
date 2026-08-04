@@ -43,6 +43,7 @@ class Resolved:
     view: str
     kind: Kind | None = None
     entity_id: str | None = None
+    registry_name: str | None = None
     facets: dict[str, str] = field(default_factory=dict)
     query: str | None = None
     page: int = 1
@@ -74,6 +75,9 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         # The identifier may be a path segment or `?q=`; both round-trip.
         rest = path.split("/", 2)[2] if len(segments) > 1 else params.get("q", "")
         return Resolved(view="doctor", query=rest)
+
+    if segments[0] == "registry" and len(segments) == 2:
+        return Resolved(view="registry", registry_name=segments[1])
 
     kind = Kind.from_route(segments[0])
     if kind is None:

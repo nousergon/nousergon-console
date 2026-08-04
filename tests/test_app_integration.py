@@ -63,6 +63,16 @@ def test_landing_is_exception_first(live_server):
     assert "index reachability" in body
 
 
+def test_stylesheet_is_served_with_state_selectors(live_server):
+    body = _get(live_server + "/styles.css")
+    assert ".state-HEALTHY" in body
+    assert ".state-FAILED" in body
+
+
+def test_html_pages_link_the_served_stylesheet(live_server):
+    assert 'href="/styles.css"' in _get(live_server + "/")
+
+
 def test_search_resolves_identifier(live_server):
     body = _get(f"{live_server}/search?q=comp-producer")
     assert "comp-producer" in body

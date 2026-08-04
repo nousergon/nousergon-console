@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json as jsonlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..index.graph import Index
@@ -34,6 +35,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         parts = urlsplit(self.path)
+        if parts.path == "/styles.css":
+            self._send(200, (Path(__file__).parent.parent / "static/styles.css").read_text(),
+                       "text/css; charset=utf-8")
+            return
         index = self.server.index
         path, as_json = negotiate(
             parts.path,
@@ -84,6 +89,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                    "text/html; charset=utf-8")
 
     def _send(self, status: int, body: str, content_type: str) -> None:
+        if content_type.startswith("text/html"):
+            body = body.replace(
+                "<head>", '<head><link rel="stylesheet" href="/styles.css">', 1
+            )
         payload = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)

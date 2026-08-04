@@ -179,6 +179,21 @@ def _claims_section(ent: Entity) -> str:
     )
 
 
+def _source_findings_section(ent: Entity) -> str:
+    """Render a driver's named unavailable result rather than hiding it in detail."""
+    findings = [
+        (name, value) for name, value in ent.detail.items()
+        if name.endswith("_source") and isinstance(value, dict)
+    ]
+    if not findings:
+        return ""
+    items = "".join(
+        f"<li>{esc(name)}: {esc(value.get('condition', 'unavailable'))}</li>"
+        for name, value in findings
+    )
+    return f"<h2>source findings</h2><ul>{items}</ul>"
+
+
 def _value_of(value: object) -> str:
     return value.value if isinstance(value, State) else str(value)
 
@@ -199,6 +214,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 {_table([ent])}
 <h2>relations</h2><ul>{rel_items}</ul>
 {fields_section(ent)}
+{_source_findings_section(ent)}
 {_claims_section(ent)}
 </body></html>"""
 

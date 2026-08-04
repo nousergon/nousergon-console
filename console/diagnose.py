@@ -122,6 +122,27 @@ def doctor(index: Index, identifier: str) -> Diagnosis:
         ),
     ))
 
+    # 2b. Did each declared BINDING resolve?
+    #
+    # Named individually, which is the entire reason a descriptor carries
+    # bindings rather than one blob: "the component is not on the surface" is
+    # not actionable, and "its `metrics` binding to `log-source` failed: no
+    # such log group" is.
+    for source in index.build_info.adapters:
+        for failure in source.unavailable:
+            if failure.startswith(f"{identifier}: "):
+                steps.append(Step(
+                    name=f"binding {source.name.removeprefix('driver:')}",
+                    ok=False,
+                    detail=failure.removeprefix(f"{identifier}: "),
+                    remedy=(
+                        "this component's descriptor declared the binding and "
+                        "the driver could not read it. The descriptor is where "
+                        "the fix goes — the console holds nothing about this "
+                        "source that could be wrong (§2.6)."
+                    ),
+                ))
+
     # 3. Did it survive the merge?
     entity = index.entity(identifier)
     steps.append(Step(

@@ -22,9 +22,10 @@ from typing import Any
 
 import yaml
 
-from ..model.entity import Entity, Provenance
+from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
+from ..model.descriptor import Descriptor, parse as parse_descriptor
 from ..model.kinds import DECLARED_LIFECYCLE_STATES, Kind, State
 
 #: A registry directory is a DECLARATION (§2.5): it says what EXISTS and what
@@ -53,6 +54,13 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
         )
 
     entities: list[Entity] = []
+    # Descriptors are handed back on the result so the resolver can walk their
+    # bindings (§2.6). They are NOT read here: §2.3 says an adapter reads one
+    # source and nothing else knows that source at all, and an adapter that
+    # followed its own rows' bindings would become a reader of every source in
+    # the fleet.
+    descriptors: list[Descriptor] = []
+    known = config.get("known_drivers")
     for fname in sorted(os.listdir(path)):
         if not fname.endswith((".yaml", ".yml")):
             continue
@@ -77,16 +85,45 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
                     evidence=f"file://{fpath}",
                 ),
                 facets=_facets(row),
-                detail={"registry_file": fname},
+                detail={
+                    "registry_file": fname,
+                    "produces": list(row.get("produces") or []),
+                    "consumes": list(row.get("consumes") or []),
+                },
             )
         )
+        if row.get(id_field):
+            descriptors.append(
+                parse_descriptor(row, str(cid), source_file=fpath,
+                                 known_drivers=known)
+            )
     return AdapterResult(
         claim_class=CLAIM_CLASS,
         fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),
+        edges=tuple(_lineage_edges(descriptors)),
+        descriptors=tuple(descriptors),
     )
+
+
+def _lineage_edges(descriptors: list[Descriptor]) -> list[Edge]:
+    """`produces` / `consumes` a descriptor declared (§6).
+
+    Lineage is not a binding — nothing is read to satisfy it. It is the
+    component stating its own edges, and `consumes` is the direction that
+    exists nowhere unless somebody states it: the forward edge is a property of
+    the producer and is usually written down, while "who breaks if this is
+    stale" is not.
+    """
+    edges: list[Edge] = []
+    for d in descriptors:
+        for key in d.produces:
+            edges.append(Edge(source=d.component_id, rel="produces", target=key))
+        for key in d.consumes:
+            edges.append(Edge(source=key, rel="consumed-by", target=d.component_id))
+    return edges
 
 
 def _facets(row: dict[str, Any]) -> dict[str, str]:

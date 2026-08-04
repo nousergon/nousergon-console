@@ -1,4 +1,13 @@
-# Adapters
+# Adapters and drivers
+
+> **Start here: you probably want a descriptor, not an adapter.** Onboarding a
+> process or module is writing one file that binds it to where its facts
+> already live (`console-policy.md` §2.6, `console/schemas/component_descriptor.schema.json`).
+> No adapter, no console config entry, no edit to this repository. A **driver**
+> reads a source *shape* and your descriptor says which one and where; an
+> **adapter** enumerates a whole source the console's own config names. Reach
+> for an adapter only when you need to discover things nobody has declared.
+
 
 One adapter per source of truth. An adapter is a function from configuration to
 entities and edges; it is the only thing that knows its source's shape. Cross-

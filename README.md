@@ -44,6 +44,41 @@ The relation direction that matters most is the reverse one. *What did this prod
 
 ## Getting a process or module onto it
 
+**Write one file.** A descriptor, committed beside the thing it describes, naming the component and binding it to where its facts **already are**:
+
+```yaml
+component_id: my-nightly-job
+owner: brian
+lifecycle: in-service
+
+artifacts:
+  - driver: object-store
+    key: "s3://your-bucket/reports/latest.parquet"
+    cadence_minutes: 1440
+
+metrics:
+  - driver: log-source                    # where the module already logs
+    field: rows_written
+    unit: rows
+    baseline: 900
+    render: count
+
+consumes: ["s3://upstream/in.parquet"]
+```
+
+That is the whole integration. **No adapter, no entry in the console's config, no edit to this repository** — even when the data lives somewhere nothing else in your system uses.
+
+The binding is in the descriptor rather than in the console's configuration for one reason, and it is the difference between free-by-design and free-by-coincidence: **console config is per-source.** Put the binding there and a component whose data lands somewhere new costs a console edit; put it here and it costs nothing, because the thing that knows where the data is, is the thing that put it there.
+
+- **A driver reads a source *shape*** — object store, state machine, log location, query, emitted envelope. Which bucket, group or table is yours is in your descriptor. A driver that could name an instance is an adapter written for one component wearing a driver's name, and a lint says so.
+- **A descriptor naming a driver that does not exist fails the build**, loudly. A typo and a genuinely-gone component must not look the same.
+- **An artifact binding tells you about the artifact, not the component.** A fresh output is not proof the job ran — inferring one from the other is how "it produced yesterday's file again" reads as healthy. Bind `runs` or `metrics` for the component's own state; `doctor` will tell you if you have not.
+- **A metric is read from a structured record, addressed by field name** — never a pattern matched against prose. A regex over log text couples you to a format nobody promised to keep, and it fails by matching nothing, silently, rendering that as absence.
+
+Where a fact has **nowhere natural to live**, the module emits the versioned envelope and the descriptor points at that. It is one binding kind, not the path — most facts are already written down somewhere, and asking a module to write them twice is asking it to maintain two truths.
+
+## The emission envelope, for facts with nowhere else to live
+
 **A module emits, adds a registry row, and appears — with zero edits to this repository and zero edits to the console's configuration.** That is the default path, and it is the whole path:
 
 ```python

@@ -103,7 +103,7 @@ def _html(index: Index, req) -> str:
     if req.view == "landing":
         return render_html.landing_page(index)
     if req.view == "list":
-        return render_html.list_page(index, req.kind, req.facets)
+        return render_html.list_page(index, req.kind, req.facets, req.page)
     if req.view == "entity":
         return render_html.entity_page(index, index.entity(req.entity_id))
     if req.view == "doctor":

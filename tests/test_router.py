@@ -36,6 +36,11 @@ def test_list_route_ignores_non_facet_params():
     assert r.facets == {"substrate": "lambda"}
 
 
+def test_list_route_keeps_page_in_the_url():
+    r = resolve("/component", "owner=brian&page=3")
+    assert r.page == 3
+
+
 def test_list_path_round_trips_with_sorted_facets():
     path = path_for_list(Kind.COMPONENT, {"owner": "brian", "substrate": "lambda"})
     r = resolve(path.split("?")[0], path.split("?")[1])

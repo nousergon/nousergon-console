@@ -51,6 +51,24 @@ class Index:
         # derived at ingest from the forward declarations (§3.3).
         self._out: dict[str, list[Edge]] = {}
         self._in: dict[str, list[Edge]] = {}
+        self._declared_registries: set[str] = set()
+        self._rendered_registries: set[str] = set()
+
+    def declare_registry(self, name: str) -> None:
+        """Record a configured registry even when its adapter cannot build it."""
+        self._declared_registries.add(name)
+
+    def render_registry(self, name: str) -> None:
+        self._rendered_registries.add(name)
+
+    def registry_coverage(self) -> dict[str, object]:
+        """The denominator-backed generated-page coverage required by §7."""
+        missing = sorted(self._declared_registries - self._rendered_registries)
+        return {"count": len(self._rendered_registries),
+                "of": len(self._declared_registries), "missing": missing}
+
+    def registry_names(self) -> list[str]:
+        return sorted(self._rendered_registries)
 
     # ---- ingest -----------------------------------------------------------
 

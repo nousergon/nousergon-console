@@ -43,6 +43,20 @@ def test_multiple_declared_registries_are_discovered_without_console_wiring(tmp_
     assert {e.id for e in index.of_kind(Kind.COMPONENT)} == {"comp-one", "comp-two"}
 
 
+def test_registry_coverage_names_a_declared_registry_without_a_generated_page(tmp_path):
+    reg = tmp_path / "first.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-one": {}})
+    index = build_index({"registries": [
+        {"name": "first", "adapter": "yaml-directory", "path": str(reg),
+         "id_field": "component_id"},
+        {"name": "missing", "adapter": "not-an-adapter"},
+    ]})
+    assert index.registry_coverage() == {
+        "count": 1, "of": 2, "missing": ["missing"],
+    }
+
+
 def test_adding_a_component_requires_no_console_edit(tmp_path):
     """§3.5 acceptance: a component added to the registry appears in the index
     with no change to console code — nav, search and relations follow because

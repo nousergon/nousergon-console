@@ -55,14 +55,17 @@ def build_index(config: dict[str, Any]) -> Index:
     registry_entries = ([config["registry"]] if config.get("registry") else [])
     registry_entries.extend(config.get("registries") or [])
     for ordinal, reg in enumerate(registry_entries, start=1):
+        name = reg.get("name", f"registry-{ordinal}")
+        index.declare_registry(name)
         if reg.get("adapter") not in ADAPTERS:
             continue
         module = ADAPTERS[reg["adapter"]]
         result = module.fetch({
-            **reg, "_name": reg.get("name", f"registry-{ordinal}"),
+            **reg, "_name": name,
             "known_drivers": KNOWN_DRIVERS,
         })
         index.add_result(result)
+        index.render_registry(name)
         descriptors.extend(result.descriptors)
 
     for entry in config.get("adapters", []) or []:

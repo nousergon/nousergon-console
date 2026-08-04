@@ -303,6 +303,17 @@ def test_log_source_distinguishes_an_empty_window(tmp_path):
     assert build_index(config).entity("writer").detail["log_source"]["condition"] == "window-empty"
 
 
+def test_log_source_failure_is_distinct_from_an_empty_window(tmp_path):
+    def unavailable(_location, _window):
+        raise RuntimeError("access denied")
+    config = _config(tmp_path, ctx={"log_records": unavailable}, **{
+        "writer": {"metrics": {"driver": "log-source", "location": "s3://any/logs/", "field": "rows_written"}},
+    })
+    from console.diagnose import doctor
+    steps = doctor(build_index(config), "writer").steps
+    assert any("access denied" in step.detail for step in steps)
+
+
 def test_a_failed_binding_is_named_by_doctor(tmp_path):
     """The entire reason bindings are named individually. "The component is not
     on the surface" is not actionable; "its artifacts binding failed: no such

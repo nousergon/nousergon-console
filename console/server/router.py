@@ -85,7 +85,7 @@ def resolve(path: str, query_string: str = "") -> Resolved:
 
     if len(segments) == 1:
         # A list view: /<kind>?facet=value&...
-        facets = {k: v for k, v in params.items() if k in FACETS}
+        facets = {k: v for k, v in params.items() if k in FACETS or v in {"below-baseline", "above-baseline", "at-baseline"}}
         try:
             page = max(1, int(params.get("page", "1")))
         except ValueError:

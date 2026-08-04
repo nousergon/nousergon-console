@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from ..index.graph import Index
 from ..model.entity import Edge, Entity
 from ..model.kinds import State
+from ..model.fields import parse as parse_fields
 from ..search.resolve import search
 from ..server.router import Resolved
 
@@ -136,10 +137,7 @@ def _landing(index: Index) -> dict[str, Any]:
 
 def _list(index: Index, req: Resolved) -> dict[str, Any]:
     total = index.of_kind(req.kind)
-    filtered = [
-        e for e in total
-        if all(e.facets.get(k) == v for k, v in req.facets.items())
-    ]
+    filtered = filter_entities(total, req.facets)
     start = (req.page - 1) * 50
     shown = filtered[start:start + 50]
     return {
@@ -155,6 +153,22 @@ def _list(index: Index, req: Resolved) -> dict[str, Any]:
         "of": len(total),
         "entities": [entity(e) for e in shown],
     }
+
+
+def filter_entities(entities: list[Entity], facets: dict[str, str]) -> list[Entity]:
+    return [e for e in entities if all(_matches(e, key, value) for key, value in facets.items())]
+
+
+def _matches(entity: Entity, key: str, value: str) -> bool:
+    if key in entity.facets:
+        return entity.facets[key] == value
+    for field in parse_fields(entity.detail.get("fields")):
+        if field.name != key or not field.comparable or not isinstance(field.value, (int, float)):
+            continue
+        return {"below-baseline": field.value < field.baseline,
+                "above-baseline": field.value > field.baseline,
+                "at-baseline": field.value == field.baseline}.get(value, False)
+    return False
 
 
 def _entity_page(index: Index, ent: Entity) -> dict[str, Any]:

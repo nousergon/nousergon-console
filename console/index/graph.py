@@ -215,30 +215,10 @@ class Index:
     # ---- §9.3 reachability ------------------------------------------------
 
     def reachability(self) -> dict[str, object]:
-        """§9.3 — entities reachable on all three §3.1 paths ÷ total.
+        """§9.3 — execute all three §3.1 paths and publish each denominator."""
+        from .reachability import measure
 
-        A pure graph property:
-        - structure-reachable: the entity exists in the index (nav is generated
-          from the index, so presence implies a generated nav path to it);
-        - relation-reachable: at least one inbound edge;
-        - search-reachable: computed by the search layer over the same ids —
-          an id present here resolves by construction, so presence implies it.
-
-        The number is published even when below 1.0 (§9) and names its
-        denominator (§5.3).
-        """
-        self.finalize()
-        total = len(self._entities)
-        relation_reachable = sum(1 for eid in self._entities if self.inbound(eid))
-        # Structure and search are implied by presence in the generated index;
-        # the binding constraint for "all three" is the inbound edge.
-        reachable_all_three = relation_reachable
-        return {
-            "total": total,
-            "relation_reachable": relation_reachable,
-            "reachable_all_three": reachable_all_three,
-            "ratio": round(reachable_all_three / total, 4) if total else None,
-        }
+        return measure(self)
 
 
 def _as_unreported(ent: Entity) -> Entity:

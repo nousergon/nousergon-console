@@ -107,9 +107,28 @@ def test_reachability_ratio_names_denominator():
     idx = _index_with(entities, edges)
     r = idx.reachability()
     assert r["total"] == 3
+    assert r["search_reachable"] == 3
+    assert r["structure_reachable"] == 3
     # Only the artifact has an inbound edge in this fixture.
+    assert r["relation_reachable"] == 1
     assert r["reachable_all_three"] == 1
     assert r["ratio"] == round(1 / 3, 4)
+
+
+def test_reachability_measures_each_path_independently(monkeypatch):
+    """§9.3 executes every path; a broken resolver lowers only its count."""
+    entities, edges = fixture_graph()
+    idx = _index_with(entities, edges)
+
+    from console.index import reachability
+
+    baseline = idx.reachability()
+    monkeypatch.setattr(reachability, "search", lambda index, query: [])
+    broken_search = idx.reachability()
+
+    assert broken_search["search_reachable"] == 0
+    assert broken_search["structure_reachable"] == baseline["structure_reachable"]
+    assert broken_search["relation_reachable"] == baseline["relation_reachable"]
 
 
 def test_reachability_empty_index_is_null_not_zero():

@@ -51,7 +51,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if req.view == "entity" and index.entity(req.entity_id or "") is None:
             self._fail(404, as_json, f"No entity {req.entity_id}.")
             return
-        if req.view == "registry" and not any(a.name == req.registry_name for a in index.build_info.adapters):
+        if req.view == "registry" and req.registry_name not in index.registry_names():
             self._fail(404, as_json, f"No registry {req.registry_name}.")
             return
 

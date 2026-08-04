@@ -119,6 +119,7 @@ def _landing(index: Index) -> dict[str, Any]:
     conflicts = index.conflicts()
     return {
         "schema_version": SCHEMA_VERSION,
+        "registry_pages": index.registry_coverage(),
         "view": "landing",
         "exceptions": [entity(e) for e in exceptions],
         "numbers": {

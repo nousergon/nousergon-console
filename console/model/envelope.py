@@ -94,4 +94,9 @@ class AdapterResult:
     # index. An adapter that cannot say declares None rather than guessing.
     fetched_at: str | None = None
     declared_cadence_seconds: float | None = None
+    # Component descriptors this source declared (§2.6). Only a registry
+    # adapter populates it. Carried on the result rather than read by the
+    # adapter itself, because walking a descriptor's bindings means reaching
+    # other sources — which §2.3 forbids an adapter from doing.
+    descriptors: tuple = ()
     schema_version: int = SCHEMA_VERSION

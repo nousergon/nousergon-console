@@ -21,6 +21,7 @@ from .adapters import (
     state_machine,
     yaml_directory,
 )
+from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .index.build import Supervisor
 from .index.graph import Index
 
@@ -49,11 +50,16 @@ def build_index(config: dict[str, Any]) -> Index:
     source, never empties (§2.3).
     """
     index = Index()
+    descriptors: list = []
     # The registry adapter is configured under its own `registry:` block.
     reg = config.get("registry")
     if reg and reg.get("adapter") in ADAPTERS:
         module = ADAPTERS[reg["adapter"]]
-        index.add_result(module.fetch({**reg, "_name": "registry"}))
+        result = module.fetch({
+            **reg, "_name": "registry", "known_drivers": KNOWN_DRIVERS,
+        })
+        index.add_result(result)
+        descriptors.extend(result.descriptors)
 
     for entry in config.get("adapters", []) or []:
         if not entry.get("enabled"):
@@ -64,7 +70,27 @@ def build_index(config: dict[str, Any]) -> Index:
             continue
         cfg = {**entry.get("config", {}), "_name": entry.get("name", kind)}
         index.add_result(module.fetch(cfg))
+
+    # §2.6: every component's own descriptor said where its facts live. Walking
+    # those bindings is what makes onboarding cost ONE FILE — a component whose
+    # data lands somewhere no adapter points is read because it said where, not
+    # because somebody added a prefix to this file.
+    for result in resolve_bindings(descriptors, _driver_context(config)):
+        index.add_result(result)
     return index
+
+
+def _driver_context(config: dict[str, Any]) -> dict[str, Any]:
+    """Console-level facilities a driver may need — never topology (§2.7).
+
+    A clock and a staleness factor. Which bucket, group or table a component
+    uses is in that component's descriptor, and nothing here may carry it.
+    """
+    console_cfg = config.get("console") or {}
+    return {
+        "staleness_factor": float(console_cfg.get("staleness_factor", 1.5)),
+        **(config.get("_driver_context") or {}),
+    }
 
 
 #: How often the index is rebuilt when the config does not say. Deliberately a

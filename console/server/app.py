@@ -51,6 +51,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if req.view == "entity" and index.entity(req.entity_id or "") is None:
             self._fail(404, as_json, f"No entity {req.entity_id}.")
             return
+        if req.view == "registry" and not any(a.name == req.registry_name for a in index.build_info.adapters):
+            self._fail(404, as_json, f"No registry {req.registry_name}.")
+            return
 
         if as_json:
             self._send(
@@ -108,6 +111,8 @@ def _html(index: Index, req) -> str:
         return render_html.entity_page(index, index.entity(req.entity_id))
     if req.view == "doctor":
         return render_html.doctor_page(index, req.query or "")
+    if req.view == "registry":
+        return render_html.registry_page(index, req.registry_name or "")
     return render_html.search_page(search(index, req.query or ""), req.query or "")
 
 

@@ -66,6 +66,11 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
 
         doc = {"schema_version": SCHEMA_VERSION, "view": "doctor",
                **as_dict(doctor(index, req.query or ""))}
+    elif req.view == "registry":
+        source = next(a for a in index.build_info.adapters if a.name == req.registry_name)
+        doc = {"schema_version": SCHEMA_VERSION, "view": "registry", "name": source.name,
+               "status": source.status, "fetched_at": source.fetched_at,
+               "unavailable": list(source.unavailable)}
     else:
         raise ValueError(f"no JSON representation for view {req.view!r}")
     # §5.9 on every payload, exactly as on every page: a consumer that trusts a

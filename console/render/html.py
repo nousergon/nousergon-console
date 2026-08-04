@@ -275,8 +275,17 @@ def landing_page(index: Index) -> str:
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
 {index_freshness(index)}
+<h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(a.name)}">{esc(a.name)}</a></li>' for a in index.build_info.adapters if a.name.startswith("registry")) or '<li class="absent">none declared</li>'}</ul>
 <p>{len(exceptions)} not healthy · {len(unreported)} unreported · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {_table(exceptions)}
+</body></html>"""
+
+
+def registry_page(index: Index, name: str) -> str:
+    source = next(a for a in index.build_info.adapters if a.name == name)
+    return f"""<!doctype html><html><head><meta charset=\"utf-8\"><title>{esc(name)} registry</title></head><body>
+<nav><a href=\"/\">fleet</a> &rsaquo; registry</nav><h1>registry: {esc(name)}</h1>
+{index_freshness(index)}<p>source status: {esc(source.status)} · fetched: {esc(source.fetched_at or 'no freshness stamp')}</p>
 </body></html>"""
 
 

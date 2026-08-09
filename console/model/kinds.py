@@ -53,6 +53,7 @@ FACETS: tuple[str, ...] = (
     "environment",
     "authority_tier",
     "lifecycle",
+    "pipeline",
 )
 
 

@@ -18,6 +18,7 @@ from .adapters import (
     git_host,
     local_units,
     object_store,
+    pipeline_reliability,
     state_machine,
     yaml_directory,
 )
@@ -33,6 +34,7 @@ ADAPTERS = {
     "object-store": object_store,
     "local-units": local_units,
     "state-machine": state_machine,
+    "pipeline-reliability": pipeline_reliability,
     "checks-envelope": checks_envelope,
 }
 

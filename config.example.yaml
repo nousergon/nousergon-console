@@ -100,6 +100,37 @@ adapters:
       # execution's input payload.
       cycle_key: execution_date
 
+  - name: pipeline-reliability
+    kind: pipeline-reliability        # trading-day rollup over the same SF source
+    enabled: false
+    produces: [cycle, signal]
+    config:
+      region: your-region
+      # Same state machines as `pipelines` above, plus what each one is called
+      # and whether its history entered any of the named "degraded" states.
+      # `degraded_state_names` is optional and per-pipeline (§2.3) — a state
+      # name from THIS pipeline's own Step Functions definition, never a
+      # literal this adapter assumes. Costs one extra GetExecutionHistory
+      # call per execution and is only paid when declared.
+      state_machines:
+        - arn: arn:aws:states:xx-example-1:000000000000:stateMachine:example-preopen
+          pipeline_key: preopen
+          measure_buffer: true
+          degraded_state_names: []
+      # Every SF execution's input carries this field (fleet convention:
+      # "pipeline_role", Option-D taxonomy) — which values count as the
+      # scheduled/cadence run vs an operator-initiated overlay that may
+      # complete a cycle after a scheduled failure. Both are per-deployment,
+      # never hardcoded (§2.3).
+      role_field: pipeline_role
+      cadence_roles: [daily]
+      recovery_roles: [watch-rerun, recovery]
+      window_trading_days: 20
+      # 06:30 America/Los_Angeles is the fleet's market-open reference for the
+      # preopen buffer trend; a different deployment names its own.
+      open_time: "06:30"
+      open_timezone: America/Los_Angeles
+
   - name: schedules
     kind: local-units                # systemd / launchd / cron
     enabled: false
@@ -120,6 +151,7 @@ facets:
   - environment
   - authority_tier
   - lifecycle
+  - pipeline
 
 # Optional. Where the console's own execution telemetry goes — it is a component
 # like any other, and a surface that cannot be seen to have stopped is the

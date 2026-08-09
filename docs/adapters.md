@@ -155,6 +155,43 @@ Production deployments inject a boto3-backed reader; the library ships none,
 so an enabled adapter without a reader returns `FAILED` / `unavailable=reader`
 rather than silently zero rows.
 
+## `pipeline-reliability`
+
+| | |
+|---|---|
+| **Reads** | The same state-machine ARNs as `state-machine`, plus an injected trading calendar |
+| **Emits** | `cycle` (one per trading day, six-value reliability classification), `signal` (first-attempt success rate, market-open buffer trend) |
+| **Cannot supply** | `DEGRADED` for a pipeline that declares no `degraded_state_names`; buffer trend for a pipeline with no `open_time`/`open_timezone` |
+| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
+
+Same source shape as `state-machine`, a different projection: one Cycle per
+trading day (id `pipeline-reliability:<pipeline_key>:<date>`), classified
+`SUCCEEDED` / `FAILED-recovered` / `FAILED-unrecovered` / `DEGRADED` /
+`HOLIDAY` / `NEVER-FIRED` — a domain vocabulary for a trading day, not a
+member of §8.3's twelve component states (Cycle is outside
+`COMPONENT_STATE_KINDS`, so it carries this value verbatim per §5.1's second
+half). `HOLIDAY` comes from the injected `TradingDayChecker`, never from
+execution history: a Step Function's own terminal status is identical whether
+it ran end-to-end or was skipped for a market holiday, so the split needs the
+calendar. `NEVER-FIRED` is a trading day with zero cadence-role executions —
+the schedule should have fired and did not.
+
+`DEGRADED` needs a richer read of the SAME source (`GetExecutionHistory`,
+opt-in per pipeline via `degraded_state_names` — costs one extra API call per
+execution, never fetched by default) and is honestly absent when a pipeline
+declares no degraded state names.
+
+First-attempt success rate and the buffer trend render via the self-describing
+`fields` mechanism (`model/fields.py` §5.8) — no bespoke rendering code.
+
+Ships no default trading-calendar implementation in the base install: the
+`calendar` extra (`pandas-market-calendars`) is a generic, unaffiliated OSS
+NYSE calendar, never a fleet-specific one, so a standalone deployment of this
+console never inherits an alpha-engine dependency by installing it. Without
+the extra or an injected `trading_day_checker`, the adapter returns `FAILED`
+/ `unavailable=("trading_calendar",)` rather than treating every day as a
+trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
+
 ## `git-host`
 
 | | |

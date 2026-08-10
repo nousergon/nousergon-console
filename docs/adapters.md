@@ -22,8 +22,8 @@ under.
 
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
-| `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `changelog-events`, `changelog-retro-feed` |
+| `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -247,6 +247,62 @@ component. A `ready_for_retro` entry with a matching group is merged in as
 `detail.resolution`; the adapter performs no filtering of its own — the
 upstream emitter already excludes non-incident events before writing the
 document.
+
+## `declared-registry`
+
+| | |
+|---|---|
+| **Reads** | One YAML document (a list of entries, or an id-keyed mapping) |
+| **Emits** | Any one kind, configured — never Component/Run state, only a declared `lifecycle` |
+| **Cannot supply** | state for a Component/Run target (a declaration never supplies state) |
+| **Config** | `path`, `kind`, `id_field`, `state_field`, `default_state`, `entries_field` |
+
+Generalises `yaml-directory` ("a directory of files, one Component per file")
+to "one file, many entries, any kind" — for a registry that does not have that
+shape, e.g. a declared inventory of load-bearing Artifacts or a declared
+inventory of Decision-kind rollout gates.
+
+**This is what makes "missing" computable for an Artifact.** `object-store`
+can only say what a bucket prefix actually contains; it has no notion of what
+*should* be there. A `declared-registry` DECLARATION claim, merged (§2.5) by
+identifier against an `object-store` OBSERVATION claim pointed at the same
+keys, is what turns "declared, never showed up in a listing" into a rendered
+fact. Configure `default_state` to the same token `object-store`'s own driver
+uses for a confirmed-missing artifact (`"absent"`) so the single surviving
+claim — when nothing observes it — reads correctly on the exception list.
+
+A target kind of Decision needs no merge at all: an observation registry's own
+gate value (gated-off / gated-on / always-on) *is* the fact nothing else
+observes, so the lone claim renders unmerged.
+
+## `sql-source` (adapter)
+
+| | |
+|---|---|
+| **Reads** | One SQL query (sqlite by default; inject `connect` for another engine) |
+| **Emits** | Any one kind, configured, one entity per returned row |
+| **Cannot supply** | anything outside the query's own columns |
+| **Config** | `database`, `query`, `kind`, `id_fields`, `id_separator`, `state_field`, `default_state`, `component_id_field`, `field_descriptors` |
+
+The `drivers/sql_source.py` **driver** is one component's own descriptor
+naming one parameterless `SELECT` whose single row becomes that component's
+metrics. This adapter is the same source shape, opposite direction (same
+precedent as `object-store` existing as both an adapter and a driver): the
+console's own config names a query that returns **many** rows, each becoming
+one entity keyed by a composite identifier (`id_fields`, joined by
+`id_separator`) — for a question that does not belong to any one component's
+descriptor, e.g. a per-(phase, ticker) data-integrity Signal.
+
+Every non-identifier column becomes a §5.8 declared field automatically —
+`field_descriptors` lets a deployment supply `unit`/`baseline`/`render` for a
+column that needs one; without it the field still renders, undecorated,
+never dropped.
+
+`component_id_field` is optional: when a row names the component it is
+about (e.g. a `process_id` column on an SLA hit-rate row), the adapter derives
+a `measures` edge from the row's Signal to that Component. The index derives
+the reverse (`measured-by`), so the Signal appears as a related entity — a
+facet — on the Component's own entity page with no new rendering path.
 
 ## `local-units`
 

@@ -110,6 +110,13 @@ COMPONENT_STATE_KINDS: frozenset[Kind] = frozenset({Kind.COMPONENT, Kind.RUN})
 #: Raw values (from the "otherwise the value itself" half) that belong on the
 #: exception-first landing view alongside the non-HEALTHY component states.
 #: Lower-cased at comparison, so an adapter's casing is not load-bearing.
+#:
+#: `"absent"` is `drivers/object_store.py`'s own token for "declared and not
+#: there" (a component's own artifact binding, confirmed missing) and
+#: `adapters/declared_registry.py`'s unmerged-claim default for a registered
+#: artifact nothing has observed — a load-bearing artifact that never showed
+#: up is exactly what §4.3's exception list exists to surface, and it was
+#: reaching the landing page's underlying set without ever appearing on it.
 EXCEPTION_VALUES: frozenset[str] = frozenset({
-    "stale", "no-freshness-stamp", "no-cadence-declared", "unreadable",
+    "stale", "no-freshness-stamp", "no-cadence-declared", "unreadable", "absent",
 })

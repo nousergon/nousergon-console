@@ -312,6 +312,173 @@ adapters:
         turnover_one_way: {path: diagnostics.turnover_one_way, unit: ratio}
         expected_alpha: {path: diagnostics.expected_alpha}
 
+  # Evaluation & Backtesting slice (nousergon-console#57). Overlap
+  # investigation: the former `Report_Card.py` (module-rollup framing) and
+  # `Crucible_Evaluation.py` (per-tile metric-browser framing) both read this
+  # ONE artifact and carry the same MetricRecord fields — merged into one
+  # Signal-kind pane rather than two, per console-policy.md §4.4 ("same-
+  # question, different-place is a fork"): the generic Signal list (facetable
+  # by `tile`) plus each Signal's own entity page already serve both framings.
+  - name: crucible-report-card
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: evaluator/
+      kind: signal                     # one Signal per (tile, component)
+      question: >-
+        What is the current institutional grade (RED/WATCH/GREEN) for each
+        module/component, and why?
+      key_pattern: "evaluator/(?P<date>\\d{4}-\\d{2}-\\d{2})/report_card\\.json$"
+      # Grouped fan-out: neither a plain array nor parallel arrays reach
+      # this — `tiles` is a dict keyed by tile name, each value carrying its
+      # own `components` array. `*` iterates the dict; `group_field` injects
+      # the tile name onto every component record it reaches.
+      records_path: tiles.*.components
+      group_field: tile
+      id_template: "{tile}:{name}"
+      state_field: status              # RED / WATCH / GREEN / N/A, verbatim
+      fields:
+        value: {path: value}
+        ci_low: {path: ci_low}
+        ci_high: {path: ci_high}
+        n_samples: {path: n_samples, render: count}
+        target: {path: target}
+        red_line: {path: red_line}
+        trend: {path: trend_decoration, render: text}
+        criticality: {path: criticality, render: text}
+        reason: {path: status_reason, render: text}
+
+  - name: crucible-execution
+    kind: s3-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: artifact                   # one Artifact per (date, filename)
+      question: >-
+        For a selected backtest run, how good were entry/exit timing, and
+        did the risk guard add value?
+      # Alternation over the three JSON files this pane covers — one adapter
+      # instance, `filename` a named group available to id_template.
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/(?P<filename>trigger_scorecard|exit_timing|shadow_book)\\.json$"
+      id_template: "{date}:{filename}"
+      cadence: 7d
+
+  - name: crucible-execution-blotter
+    kind: s3-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: artifact                   # one Artifact per date's order blotter
+      question: >-
+        For a selected backtest run, what orders did the engine place?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/all_orders\\.csv$"
+      format: csv
+      id_template: "{date}:all_orders.csv"
+      cadence: 7d
+      state_default: reported
+
+  - name: crucible-validation
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: signal                     # one Signal per (backtest_date, check)
+      question: >-
+        For a selected backtest run, do integrity checks pass, and which
+        sub-scores predict the 21-day outcome?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/(?P<filename>pit_parity|sample_size|walk_forward_stability|optimizer_churn|attribution)\\.json$"
+      id_template: "{date}:{filename}"
+      state_field: status
+      cadence: 7d
+
+  - name: crucible-validation-signal-quality
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: signal                     # one Signal per (backtest_date, ticker)
+      question: >-
+        For a selected backtest run, which per-signal sub-scores predict the
+        21-day outcome?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/signal_quality\\.csv$"
+      format: csv
+      id_template: "{date}:{ticker}"
+      cadence: 7d
+      state_default: reported
+
+  - name: crucible-feedback
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: config/apply_audit/
+      kind: decision                   # one Decision per (loop, as-of week)
+      question: >-
+        For each auto-apply optimizer loop, was this week's parameter change
+        promoted, blocked, or gated — why?
+      key_pattern: "config/apply_audit/latest\\.json$"
+      # `loops` is a DICT keyed by loop id, not an array — same grouped
+      # mechanism as `crucible-report-card`, one level shallower (no nested
+      # array beneath the `*`, so the terminal dict-of-records branch applies).
+      records_path: loops.*
+      group_field: loop
+      id_template: "{loop}:{as_of}"    # `as_of` is body-level, reachable via
+      state_field: outcome             # the same body_root merge every shape uses
+      fields:
+        blocked_by: {path: blocked_by, render: text}
+        consecutive_blocked_weeks: {path: consecutive_blocked_weeks, render: count}
+
+  - name: crucible-feedback-configs
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: config/autoapply/
+      kind: decision                   # presence/absence IS the decision outcome
+      question: >-
+        Which live auto-apply config artifacts has the optimizer promoted?
+      key_pattern: "config/autoapply/(?P<config_name>executor_params|scoring_weights|entry_thresholds|exit_rules)\\.json$"
+      id_template: "config:{config_name}"
+      state_default: promoted          # this adapter only sees keys that EXIST;
+      # a config that has never promoted never writes this key at all — its
+      # "NEVER WRITTEN" state is the ABSENCE of an entity here, not a value on
+      # one, exactly like `object-store`'s "declared and not there" convention.
+
+  - name: eval-quality
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: decision_artifacts/_eval/
+      kind: signal                     # one Signal per (agent, criterion, judge)
+      question: >-
+        Are LLM-agent outputs holding rubric-scored quality over time, per
+        agent/criterion, and did a prompt bump move scores?
+      key_pattern: "decision_artifacts/_eval/.*\\.json$"
+      # judge_model/judged_agent_id sit BESIDE dimension_scores on the
+      # enclosing body, not inside each score — reachable via body_root, same
+      # as `as_of` above; no separate mechanism needed for that half.
+      records_path: dimension_scores
+      id_template: "{judged_agent_id}:{dimension}:{judge_model}"
+      fields:
+        score: {path: score}
+        reasoning: {path: reasoning, render: text}
+        rubric_id: {path: rubric_id, render: text}
+        rubric_version: {path: rubric_version, render: text}
+
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing
 # dimension everywhere; omitting one does not hide the field.

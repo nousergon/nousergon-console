@@ -195,6 +195,144 @@ def test_list_of_dicts_nested_record_field_and_body_level_context_both_reachable
 
 
 # ---------------------------------------------------------------------------
+# Grouped fan-out (`records_path` with a `*` segment) — nousergon-console#57:
+# a report card's per-tile MetricRecords (nested dict-then-array) and an
+# apply-audit's per-loop outcomes (a dict OF records) are neither a plain
+# array at one dotted path nor equal-length parallel arrays.
+# ---------------------------------------------------------------------------
+
+REPORT_CARD = {
+    "run_date": "2026-08-08",
+    "tiles": {
+        "portfolio_outcome": {"components": [
+            {"name": "beat_spy", "value": 0.4, "status": "GREEN"},
+            {"name": "sharpe", "value": 1.1, "status": "WATCH"},
+        ]},
+        "evaluator_quality": {"components": [
+            {"name": "rubric_drift", "value": 0.02, "status": "RED"},
+        ]},
+    },
+}
+
+APPLY_AUDIT = {
+    "as_of": "2026-08-08",
+    "schema_version": 1,
+    "loops": {
+        "executor_params": {"outcome": "promoted", "consecutive_blocked_weeks": 0},
+        "scoring_weights": {"outcome": "blocked", "consecutive_blocked_weeks": 4},
+    },
+}
+
+
+def _grouped_nested_cfg(**extra):
+    return {
+        "bucket": BUCKET,
+        "prefix": "evaluator/",
+        "kind": "signal",
+        "question": "What is the current institutional grade for each module/component, and why?",
+        "key_pattern": r"evaluator/(?P<date>\d{4}-\d{2}-\d{2})/report_card\.json$",
+        "records_path": "tiles.*.components",
+        "group_field": "tile",
+        "id_template": "{tile}:{name}",
+        "state_field": "status",
+        "fields": {"value": {"path": "value", "render": "value"}},
+        **extra,
+    }
+
+
+def _grouped_dict_cfg(**extra):
+    return {
+        "bucket": BUCKET,
+        "prefix": "config/apply_audit/",
+        "kind": "decision",
+        "question": "Was this week's parameter change promoted, blocked, or gated — why?",
+        "key_pattern": r"config/apply_audit/latest\.json$",
+        "records_path": "loops.*",
+        "group_field": "loop",
+        "id_template": "{loop}:{as_of}",
+        "state_field": "outcome",
+        "fields": {"consecutive_blocked_weeks": {"path": "consecutive_blocked_weeks", "render": "count"}},
+        **extra,
+    }
+
+
+def _one_key_lister(key, stamp):
+    def lister(bucket, prefix):
+        return [(key, stamp)]
+    return lister
+
+
+def _one_key_reader(body):
+    def reader(bucket, key):
+        return dict(body)
+    return reader
+
+
+def test_grouped_nested_dict_then_array_injects_the_group_key():
+    cfg = _grouped_nested_cfg()
+    result = s3_records.fetch(
+        cfg,
+        lister=_one_key_lister("evaluator/2026-08-08/report_card.json", "2026-08-08T21:00:00+00:00"),
+        reader=_one_key_reader(REPORT_CARD), now=NOW,
+    )
+    assert result.status is AdapterStatus.OK
+    ids = {e.id for e in result.entities}
+    assert ids == {
+        "portfolio_outcome:beat_spy", "portfolio_outcome:sharpe",
+        "evaluator_quality:rubric_drift",
+    }
+    assert all(e.kind is Kind.SIGNAL for e in result.entities)
+
+
+def test_grouped_nested_state_field_and_declared_value_field():
+    cfg = _grouped_nested_cfg()
+    result = s3_records.fetch(
+        cfg,
+        lister=_one_key_lister("evaluator/2026-08-08/report_card.json", "2026-08-08T21:00:00+00:00"),
+        reader=_one_key_reader(REPORT_CARD), now=NOW,
+    )
+    by_id = _by_id(result)
+    assert by_id["evaluator_quality:rubric_drift"].state == "RED"
+    assert by_id["portfolio_outcome:sharpe"].detail["fields"]["value"]["value"] == 1.1
+
+
+def test_grouped_dict_of_records_injects_the_group_key():
+    cfg = _grouped_dict_cfg()
+    result = s3_records.fetch(
+        cfg,
+        lister=_one_key_lister("config/apply_audit/latest.json", "2026-08-08T21:00:00+00:00"),
+        reader=_one_key_reader(APPLY_AUDIT), now=NOW,
+    )
+    assert result.status is AdapterStatus.OK
+    ids = {e.id for e in result.entities}
+    assert ids == {"executor_params:2026-08-08", "scoring_weights:2026-08-08"}
+    assert all(e.kind is Kind.DECISION for e in result.entities)
+
+
+def test_grouped_dict_of_records_state_and_body_level_as_of_both_reachable():
+    """`as_of` sits on the ENCLOSING body, not inside each loop record —
+    reachable via the same body_root merge every other shape already uses;
+    no separate mechanism needed for it."""
+    cfg = _grouped_dict_cfg()
+    result = s3_records.fetch(
+        cfg,
+        lister=_one_key_lister("config/apply_audit/latest.json", "2026-08-08T21:00:00+00:00"),
+        reader=_one_key_reader(APPLY_AUDIT), now=NOW,
+    )
+    by_id = _by_id(result)
+    assert by_id["scoring_weights:2026-08-08"].state == "blocked"
+    assert by_id["scoring_weights:2026-08-08"].detail["fields"]["consecutive_blocked_weeks"]["value"] == 4
+
+
+def test_grouped_mode_does_not_disturb_plain_records_path():
+    """A `records_path` with no `*` still takes the old, direct-array path —
+    the grouped walk is opt-in via the literal `*` segment only."""
+    result = s3_records.fetch(_list_cfg(), lister=_list_lister, reader=_list_reader, now=NOW)
+    assert result.status is AdapterStatus.OK
+    assert len(result.entities) == 2
+
+
+# ---------------------------------------------------------------------------
 # Parallel-array fan-out (optimizer_shadow's tickers/target_weights/… shape)
 # ---------------------------------------------------------------------------
 

@@ -319,5 +319,38 @@ entity on the same artifact, since a lever time-series and a per-ticker decision
 questions per §4.4, even sourced from one key). See `nousergon-console#54`'s closing PR for the adapter
 config and row-contract verification.
 
+## 9. S4 Evaluation & Backtesting slice resolved (#57)
+
+Migrated **5 of 8** views as `s3-records` panes (config instances in `config.example.yaml`, all
+`enabled: false`): `crucible-report-card` (merged, see below), `crucible-execution` (+
+`crucible-execution-blotter` for the CSV order blotter), `crucible-validation` (+
+`crucible-validation-signal-quality` for the CSV per-signal table), `crucible-feedback` (+
+`crucible-feedback-configs`), `eval-quality`. Extended `s3-records`'s `records_path` with a `*`-wildcard
+grouped-fan-out mode (`group_field`) to reach a report card's per-tile nested dict-then-array and an
+apply-audit's dict-of-loops shape — neither a plain array nor parallel arrays could reach either.
+
+**Report_Card / Crucible_Evaluation overlap (flagged in #57) resolved: merge.** Both read
+`evaluator/{date}/report_card.json` and carry the same MetricRecord fields (`value`/`ci_low`/`ci_high`/
+`n_samples`/`target`/`red_line`/`trend_decoration`/`criticality`/`status`/`status_reason`) — the former's
+module-rollup framing and the latter's per-tile metric-browser framing are the SAME question rendered two
+ways, which §4.4 treats as a fork ("same-question, different-place"). The console's generic Signal list
+(facetable by the injected `tile` field) plus each Signal's own entity page serve both framings with one
+adapter instance and zero bespoke rendering.
+
+**Deferred, each with a follow-up issue:**
+
+- `Crucible_Trust.py` — both halves (live CI verdicts, historical findings ledger) depend on
+  `results/battery_registry.py`, a Python list literal in `crucible-dashboard`'s own source, not a
+  registry shape any driver/adapter here can read without either importing that repo as a dependency or
+  hand-transcribing its content (forbidden by §2.4/§7). `nousergon-console#72`.
+- `3_Analysis.py` — a three-former-page merge (Signal Accuracy / Backtester / Pipeline Eval) spanning a
+  live SQLite database (`loaders.db_loader`), five-plus S3 artifact families and two chart-derivation
+  modules computing statistics rather than passing through raw fields — genuinely unresolved which entity
+  kind each tab becomes, not a scoped implementation gap. `nousergon-console#74` (complexity:high).
+
+§13 population-completeness: these are adapter-projected Signal/Artifact/Decision entities, not
+Components, so §9.1 (registry-bound) is unaffected by this slice; §9.5's orphan count and §7's per-registry
+index-page count both drop by the domains covered here once an instance is enabled against real infra.
+
 ---
 Prepared by: Claude Sonnet 5 via [Claude Code](https://claude.com/claude-code)

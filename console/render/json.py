@@ -151,17 +151,6 @@ def _landing(index: Index) -> dict[str, Any]:
 #: the index/render layer this issue covers. §11's carve-out requires the
 #: number be named and the cycle it is expected by stated, not silently
 #: omitted — this is that statement.
-_SURFACE_LIVENESS_NOT_IMPL = {
-    "state": "N/A-NOT-IMPL",
-    "expected_cycle": "console deploy work (nous-ergon-ops-I364)",
-    "reason": (
-        "surface liveness needs a watcher component that is NOT the console "
-        "itself (§9.7) — that watcher is deploy/ops work, not an index "
-        "computation, and is tracked separately"
-    ),
-}
-
-
 def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
            gap: dict[str, Any]) -> dict[str, Any]:
     """console-policy.md §9 — all nine numbers, one dict, one place they are
@@ -175,7 +164,7 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
         "answer_latency": index.answer_latency(),                      # §9.4
         "orphan_count": index.orphan_counts(),                         # §9.5
         "staleness_honesty": aggregate(*_count_of(index.staleness_honesty())),  # §9.6
-        "surface_liveness": _SURFACE_LIVENESS_NOT_IMPL,                 # §9.7
+        "surface_liveness": index.surface_liveness(),                   # §9.7
         "onboarding_cost": index.onboarding_cost(),                    # §9.8
         "claim_conflicts": aggregate(len(conflicts), len(entities)),   # §9.9
         # Not one of the nine, but the same denominator-inline discipline —

@@ -118,6 +118,9 @@ def build_index(config: dict[str, Any]) -> Index:
     # already uses (config.py carries no filesystem literal of its own, §2.3);
     # `console.repo_root` overrides it for a deployment that runs elsewhere.
     console_cfg = config.get("console") or {}
+    # §9.7: which component watches this surface from outside it. A fleet fact,
+    # so it arrives as configuration and never as a literal here (§2.3).
+    index.set_liveness_watcher(console_cfg.get("liveness_watcher"))
     repo_root = console_cfg.get("repo_root") or os.getcwd()
     registry_paths = [str(r["path"]) for r in registry_entries if r.get("path")]
     registry_id_field = next(

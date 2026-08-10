@@ -15,7 +15,7 @@ NUMBER_KEYS = (
     "answer_latency",            # §9.4
     "orphan_count",               # §9.5
     "staleness_honesty",         # §9.6
-    "surface_liveness",          # §9.7 — legitimately N/A-NOT-IMPL this cycle
+    "surface_liveness",          # §9.7 — computed from a declared external watcher
     "onboarding_cost",           # §9.8
     "claim_conflicts",           # §9.9
 )
@@ -69,14 +69,82 @@ def test_9_1_and_9_2_never_render_the_na_not_impl_token():
     assert numbers["transparency_gap"].get("state") != "N/A-NOT-IMPL"
 
 
-def test_surface_liveness_renders_the_na_not_impl_token_with_a_named_cycle():
-    """§9.7 is explicitly out of this issue's scope (it belongs to the deploy
-    issue) — the carve-out requires the number be named and the cycle it is
-    expected by stated, not silently omitted."""
-    index = _built_example_index()
-    numbers = render_json.payload(index, resolve("/"))["numbers"]
-    assert numbers["surface_liveness"]["state"] == "N/A-NOT-IMPL"
-    assert numbers["surface_liveness"]["expected_cycle"]
+class TestSurfaceLiveness:
+    """§9.7 — is this surface up, according to something that is not it?
+
+    Computed from a declared external watcher as of the console-exposure probe
+    going live (`alpha-engine-config-I6491`). It was a hardcoded
+    `N/A-NOT-IMPL` constant before that, correctly, because there was no
+    watcher; leaving the constant once one existed would have been the console
+    reporting a gap it no longer had.
+
+    The console still never computes this from its own uptime — it renders an
+    external watcher's verdict, which reached the index through an adapter like
+    any other component. If the console is dark, nothing here renders at all,
+    which is why the watcher's own alerting path and not this number is what
+    reaches a human.
+    """
+
+    def test_no_watcher_declared_is_not_impl_and_says_what_would_fix_it(self):
+        index = _built_example_index()
+        n = render_json.payload(index, resolve("/"))["numbers"]["surface_liveness"]
+        assert n["state"] == "N/A-NOT-IMPL"
+        assert n["watcher"] is None
+        assert "liveness_watcher" in n["reason"]
+
+    def test_a_declared_but_missing_watcher_is_UNREPORTED_not_not_impl(self):
+        """The distinction the number exists for. `N/A-NOT-IMPL` means nobody
+        has claimed the job; a declared watcher absent from the index means it
+        is not running, or nothing reads what it writes — a finding, and a
+        worse state than never having declared one."""
+        index = _built_example_index()
+        index.set_liveness_watcher("a-watcher-nothing-produced")
+        n = render_json.payload(index, resolve("/"))["numbers"]["surface_liveness"]
+        assert n["state"] == "UNREPORTED"
+        assert n["watcher"] == "a-watcher-nothing-produced"
+        assert "not running" in n["reason"]
+
+    def test_a_present_watcher_renders_its_state_as_of_and_evidence(self):
+        """The row contract (§5.1) applies to this number like any other row:
+        state, source, as-of, evidence link."""
+        index = _built_example_index()
+        watcher = next(iter(index.all()))
+        index.set_liveness_watcher(watcher.id)
+        n = render_json.payload(index, resolve("/"))["numbers"]["surface_liveness"]
+        assert n["state"] == watcher.state.value
+        assert n["watcher"] == watcher.id
+        assert n["source"]
+        assert n["evidence"].endswith(watcher.id)
+        # `as_of` is PRESENT and may be None — a source with no freshness stamp
+        # declares that absence rather than having a default invented for it
+        # (`Provenance.as_of`). Absent-from-the-payload and None mean different
+        # things, so the key is asserted rather than its truthiness.
+        assert "as_of" in n
+
+    def test_the_watcher_id_comes_from_configuration_not_from_console_source(self):
+        """§2.3: which component watches this surface is a fleet fact. A
+        default here would be a topology literal in a published repo."""
+        import inspect
+
+        from console.index import graph
+
+        source = inspect.getsource(graph.Index.surface_liveness)
+        for literal in ("nousergon-console", "alpha-engine", "console-exposure"):
+            assert literal not in source
+
+    def test_build_index_reads_the_declared_watcher_from_config(self):
+        import os
+
+        from console.config import build_index
+
+        root = os.path.dirname(os.path.dirname(__file__))
+        index = build_index({
+            "registry": {"adapter": "yaml-directory",
+                         "path": os.path.join(root, "example", "registry.d"),
+                         "id_field": "component_id"},
+            "console": {"liveness_watcher": "declared-in-config"},
+        })
+        assert index.surface_liveness()["watcher"] == "declared-in-config"
 
 
 def test_the_same_numbers_reach_the_html_landing_page():

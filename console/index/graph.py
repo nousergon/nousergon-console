@@ -54,6 +54,7 @@ class Index:
         self._saw_ok_declaration = False
         self._finalized = False
         self._entities: dict[str, Entity] = {}
+        self._liveness_watcher: str | None = None
         self._by_kind: dict[Kind, list[Entity]] = {k: [] for k in Kind}
         # Forward and reverse adjacency, keyed by entity id. Reverse edges are
         # derived at ingest from the forward declarations (§3.3).
@@ -98,6 +99,68 @@ class Index:
     def answer_latency(self) -> dict[str, object]:
         """§9.4 — the last question-set run against this build."""
         return self._answer_latency
+
+    def set_liveness_watcher(self, component_id: str | None) -> None:
+        """Declare which component watches this surface from outside it (§9.7).
+
+        The id comes from configuration, never from a literal here: which
+        component plays this role is a fleet fact, and §2.3 keeps fleet facts
+        out of this repo.
+        """
+        self._liveness_watcher = component_id
+
+    def surface_liveness(self) -> dict[str, object]:
+        """§9.7 — is this surface up, according to something that is not it?
+
+        The rule this discharges is that **a surface cannot notice its own
+        absence**, so the console must never compute this from its own uptime.
+        It does not: it RENDERS the verdict of an external watcher that reached
+        the index like any other component, through an adapter, from a durable
+        artifact the watcher wrote. If the console is dark, nothing here renders
+        at all — which is exactly why the watcher's own alerting path, not this
+        number, is what reaches a human. This number answers the different and
+        also-necessary question: *is anything watching, and what did it last
+        say?*
+
+        Three outcomes, deliberately distinct (§5.5):
+
+        - no watcher declared    → `N/A-NOT-IMPL`, naming what would fix it
+        - declared but absent    → `UNREPORTED`, which is a finding: a declared
+                                   watcher missing from the index means the
+                                   watcher is not running, or its adapter is
+                                   not configured, and both are worse than
+                                   having declared nothing
+        - present                → its state, as-of and evidence link
+        """
+        watcher = getattr(self, "_liveness_watcher", None)
+        if not watcher:
+            return {
+                "state": "N/A-NOT-IMPL",
+                "watcher": None,
+                "reason": (
+                    "no liveness watcher declared — set `console.liveness_watcher` "
+                    "to the component id of a watcher that runs OFF this surface "
+                    "(§9.7); a surface cannot notice its own absence"
+                ),
+            }
+        entity = self.entity(watcher)
+        if entity is None:
+            return {
+                "state": State.UNREPORTED.value,
+                "watcher": watcher,
+                "reason": (
+                    f"{watcher!r} is declared as this surface's liveness watcher "
+                    "but no adapter produced it — the watcher is not running, or "
+                    "nothing is configured to read what it writes"
+                ),
+            }
+        return {
+            "state": entity.state.value,
+            "watcher": watcher,
+            "as_of": entity.provenance.as_of if entity.provenance else None,
+            "source": entity.provenance.source if entity.provenance else None,
+            "evidence": f"/component/{watcher}",
+        }
 
     def set_onboarding_cost(self, value: dict[str, object]) -> None:
         self._onboarding_cost = value

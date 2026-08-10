@@ -21,8 +21,10 @@ from .adapters import (
     git_host,
     local_units,
     object_store,
+    object_store_records,
     pipeline_reliability,
     s3_records,
+    sql_query,
     state_machine,
     yaml_directory,
 )
@@ -46,6 +48,8 @@ ADAPTERS = {
     "changelog-events": changelog_events,
     "changelog-retro-feed": changelog_retro_feed,
     "s3-records": s3_records,
+    "sql-query": sql_query,
+    "object-store-records": object_store_records,
 }
 
 

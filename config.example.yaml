@@ -138,6 +138,166 @@ adapters:
       open_time: "06:30"
       open_timezone: America/Los_Angeles
 
+  # A SQLite-shaped database a research/scoring pipeline already writes to.
+  # Each named query's rows become the entities — a Decision per (ticker,
+  # eval_date), a Run per (team, eval_date) — never a fact about one
+  # already-known component (that shape is the `sql-source` DRIVER, bound
+  # from a component descriptor, not this adapter). See docs/adapters.md.
+  - name: research-db
+    kind: sql-query
+    enabled: false
+    produces: [signal, decision, run]
+    config:
+      db_path: /path/to/research.db
+      queries:
+        # Signal: one row per (ticker, score_date) from the pipeline's own
+        # persisted scoring history — the direct source of truth for "how has
+        # this ticker's score evolved."
+        - name: score-history
+          entity_kind: signal
+          query: "SELECT symbol AS ticker, score_date, score FROM score_performance"
+          id_template: "{ticker}:{score_date}"
+          as_of_field: score_date
+        # A second claim about the SAME (ticker, score_date) identifier, from
+        # a different table — merges by identifier (§2.5), no join needed.
+        - name: investment-thesis
+          entity_kind: signal
+          query: "SELECT symbol AS ticker, date AS score_date, thesis_summary, conviction, price_target FROM investment_thesis"
+          id_template: "{ticker}:{score_date}"
+          as_of_field: score_date
+        # Decision: one row per (ticker, eval_date) that reached a CIO
+        # ruling, enriched with the scanner-stage funnel context via a SQL
+        # join rather than a second competing claim (two claims proposing
+        # different raw `state` values for one id would render a spurious
+        # §2.5 conflict — a join keeps it one row, one state).
+        - name: cio-decisions
+          entity_kind: decision
+          query: >-
+            SELECT c.ticker, c.eval_date, c.team_id, c.cio_decision, c.cio_rank,
+                   c.cio_conviction, c.final_score, c.rationale, s.sector,
+                   s.quant_filter_pass, s.filter_fail_reason
+            FROM cio_evaluations c
+            LEFT JOIN scanner_evaluations s
+              ON s.ticker = c.ticker AND s.eval_date = c.eval_date
+          id_template: "{ticker}:{eval_date}"
+          state_field: cio_decision
+          as_of_field: eval_date
+          facets: {team_id: team_id}
+        # Run: one row per (team_id, eval_date) — a team's weekly review
+        # cycle. Existence in `team_candidates` declares the cycle happened
+        # (`default_state`), since the table carries no separate status
+        # column; the candidate list rides along as a self-describing field
+        # via SQLite's own JSON aggregation, so no second query is needed for
+        # drill-to-rows (§3.4).
+        - name: sector-team-runs
+          entity_kind: run
+          query: >-
+            SELECT eval_date, team_id, COUNT(*) AS n_candidates,
+                   SUM(CASE WHEN team_recommended THEN 1 ELSE 0 END) AS n_recommended,
+                   json_group_array(json_object(
+                     'ticker', ticker, 'quant_rank', quant_rank,
+                     'quant_score', quant_score, 'qual_score', qual_score,
+                     'team_recommended', team_recommended
+                   )) AS candidates_json
+            FROM team_candidates
+            GROUP BY eval_date, team_id
+          id_template: "{team_id}:{eval_date}"
+          default_state: HEALTHY
+          as_of_field: eval_date
+          facets: {team_id: team_id}
+          json_columns: [candidates_json]
+        # Run: one row per eval_date — the weekly scanner cycle, with the
+        # full per-ticker gate result carried as a declared field rather than
+        # a separate per-ticker entity (Universe Board, below, already owns
+        # the per-ticker Artifact view of the same gate).
+        - name: scanner-cycles
+          entity_kind: run
+          query: >-
+            SELECT eval_date, COUNT(*) AS n_total,
+                   SUM(CASE WHEN quant_filter_pass THEN 1 ELSE 0 END) AS n_quant_pass,
+                   SUM(CASE WHEN liquidity_pass THEN 1 ELSE 0 END) AS n_liquidity_pass,
+                   SUM(CASE WHEN volatility_pass THEN 1 ELSE 0 END) AS n_volatility_pass,
+                   SUM(CASE WHEN balance_sheet_pass THEN 1 ELSE 0 END) AS n_balance_sheet_pass,
+                   json_group_array(json_object(
+                     'ticker', ticker, 'sector', sector, 'tech_score', tech_score,
+                     'quant_filter_pass', quant_filter_pass,
+                     'filter_fail_reason', filter_fail_reason
+                   )) AS tickers_json
+            FROM scanner_evaluations
+            GROUP BY eval_date
+          id_template: "{eval_date}"
+          default_state: HEALTHY
+          as_of_field: eval_date
+          json_columns: [tickers_json]
+        # Signal: one row per (eval_date, focus_team_id) — the weekly focus-
+        # list summary. Empty before this pipeline's schema migration date is
+        # an honest absence (zero rows), rendered by the generic list pane as
+        # "no entities" rather than a bespoke placeholder — no special-cased
+        # code needed for a column that simply has not started being written
+        # yet.
+        - name: focus-list-weekly
+          entity_kind: signal
+          query: >-
+            SELECT eval_date, COALESCE(focus_team_id, override_team_id) AS focus_team_id,
+                   COUNT(*) AS n_focus_list,
+                   SUM(CASE WHEN agent_override THEN 1 ELSE 0 END) AS n_overrides
+            FROM scanner_evaluations
+            WHERE focus_team_id IS NOT NULL OR agent_override = 1
+            GROUP BY eval_date, COALESCE(focus_team_id, override_team_id)
+          id_template: "{eval_date}:{focus_team_id}"
+          as_of_field: eval_date
+          facets: {focus_team_id: focus_team_id}
+
+  # A single snapshot object whose body is a scored universe — one entity per
+  # record inside it, not one entity for the object as a whole (that shape is
+  # `object-store`, above). See docs/adapters.md.
+  - name: universe-board
+    kind: object-store-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-bucket
+      keys: ["scanner/universe/latest.json"]
+      entity_kind: artifact
+      records_path: stocks
+      id_template: "{ticker}"
+      body_as_of_field: as_of
+      state_field: gate.quant_filter_pass   # dotted path into the record
+      facets: {sector: sector}
+
+  - name: attractiveness-trends
+    kind: object-store-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-bucket
+      keys: ["scanner/universe/trajectory/latest.json"]
+      entity_kind: signal
+      records_path: stocks
+      # `as_of` is a top-level body field, not a per-record one — injected
+      # into each record's format context (never overriding a genuine
+      # per-record field of the same name).
+      id_template: "{ticker}:{as_of}"
+      body_as_of_field: as_of
+      facets: {sector: sector}
+
+  # A dated family of Artifacts under one prefix — the EXISTING `object-store`
+  # adapter, reused rather than extended: the identifier IS the key, exactly
+  # what this adapter already projects, so a weekly universe-membership
+  # snapshot needs a config entry and no new code. Retention-bounded history
+  # (`console/history.py`, #48) then answers "what changed week to week" as a
+  # query over this Artifact's retained versions — not a bespoke churn
+  # adapter.
+  - name: universe-membership
+    kind: object-store
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-bucket
+      prefix: universe_membership/
+      key_pattern: "universe_membership/(?P<run_date>[^/]+)/membership\\.json"
+      cadence: 1w
+
   - name: schedules
     kind: local-units                # systemd / launchd / cron
     enabled: false

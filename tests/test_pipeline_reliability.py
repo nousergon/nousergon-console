@@ -261,11 +261,20 @@ def test_buffer_not_emitted_when_open_time_missing_and_measure_buffer_set():
 # --------------------------------------------------------------- honesty --
 
 
-def test_no_reader_and_no_boto3_fails_loud_not_empty():
+def test_no_reader_and_no_boto3_fails_loud_not_empty(monkeypatch):
+    # With no injectable reader the adapter falls back to the boto3 default
+    # (`pr._sm_default_reader`, re-exported from `state_machine._default_reader`).
+    # Force the "boto3 absent" path so the test is hermetic on every host —
+    # boto3 IS installed as a fleet-wide pin on this machine (measured
+    # 2026-08-10: `import boto3` succeeds), so asserting on ambient package
+    # absence is what made this test flip from FAILED("reader") to
+    # FAILED("source") here: a real `_default_reader()` was returned, it was
+    # called, and the network call raised with no AWS credentials configured.
+    # `tests/test_state_machine.py::test_no_reader_is_failed_not_empty` uses
+    # the same monkeypatch shape one layer down.
+    monkeypatch.setattr(pr, "_sm_default_reader", lambda: None)
     result = pr.fetch(_cfg(), reader=None, trading_day_checker=_checker(), now=_now())
     from console.model.envelope import AdapterStatus
-    # boto3 is not installed in the test environment (test extra only) — the
-    # default reader must decline honestly rather than the adapter crashing.
     assert result.status is AdapterStatus.FAILED
     assert "reader" in result.unavailable
 

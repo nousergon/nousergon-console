@@ -290,7 +290,8 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
 
 def landing_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
-    state and age, then the transparency-gap count. No aggregate green light."""
+    state and age · the transparency-gap count · what is waiting on Brian
+    (the decision queue) · the completeness ratio. No aggregate green light."""
     exceptions = [e for e in index.all() if is_exception(e)]
     unreported = [e for e in index.all() if e.state is State.UNREPORTED]
     conflicts = index.conflicts()
@@ -304,14 +305,25 @@ def landing_page(index: Index) -> str:
     registry_txt = f'{registries["count"]} / {registries["of"]}'
     missing = (f' · missing: {esc(", ".join(registries["missing"]))}'
                if registries["missing"] else "")
+    queue = index.decision_queue()
+    completeness = index.population_completeness()
+    completeness_txt = (
+        f'{completeness["rendered"]} / {completeness["of"]} '
+        f'({completeness["ratio"]:.0%})'
+        if completeness["ratio"] is not None
+        else "unknown — no registry configured (§9.1)"
+    )
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
-<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {len(unreported)} unreported · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
+<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {len(unreported)} unreported (transparency gap, §9.2) · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {_table(exceptions)}
+<h2>waiting on Brian</h2>
+{_table(queue)}
+<p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1)</p>
 </body></html>"""
 
 

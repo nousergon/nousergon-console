@@ -130,6 +130,10 @@ def _landing(index: Index) -> dict[str, Any]:
         "registry_pages": index.registry_coverage(),
         "view": "landing",
         "exceptions": [entity(e) for e in exceptions],
+        # §4.3's third element: what is waiting on Brian. Same query the HTML
+        # renders (§3.8) — `Index.decision_queue()`, filtered to
+        # `decision-queue-policy.md` §2's own labels, not every open Decision.
+        "decision_queue": [entity(e) for e in index.decision_queue()],
         "numbers": {
             # Every count states its denominator inline (§5.3) — a roll-up
             # that cannot state one is not rendered, and that holds on the
@@ -138,6 +142,10 @@ def _landing(index: Index) -> dict[str, Any]:
             "transparency_gap": aggregate(len(unreported), len(entities)),
             "claim_conflicts": aggregate(len(conflicts), len(entities)),
             "index_reachability": index.reachability(),
+            # §9.1: not wrapped in `aggregate()` — with no registry configured
+            # `of` is None, a real absence `aggregate()` would reject (it
+            # requires a denominator), not a count to rewrap.
+            "population_completeness": index.population_completeness(),
         },
     }
 

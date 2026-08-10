@@ -148,6 +148,41 @@ adapters:
       # are different findings.
       unit_prefixes: []
 
+  # One prefix, one event per key — the shared shape behind both the raw
+  # event-lake and its vocab-quarantine sibling (nousergon-console#60). Same
+  # adapter, two instances: state comes from the declared field/literal, never
+  # from key staleness (that is what tells this apart from `object-store`).
+  - name: changelog-entries
+    kind: changelog-events            # per-event S3 objects → Incident entities
+    enabled: false
+    produces: [incident]
+    config:
+      bucket: your-research-bucket
+      prefix: changelog/entries/
+      key_pattern: ".*/(?P<day>\\d{4}-\\d{2}-\\d{2})/(?P<event_id>[^/]+)\\.json$"
+      id_template: "{event_id}"       # assumed unique across days
+      state_field: severity           # critical/high/medium/low/informational
+
+  - name: changelog-quarantine
+    kind: changelog-events            # same shape, vocab-rejected prefix
+    enabled: false
+    produces: [incident]
+    config:
+      bucket: your-research-bucket
+      prefix: changelog/quarantine/
+      key_pattern: ".*/(?P<day>\\d{4}-\\d{2}-\\d{2})/(?P<event_id>[^/]+)\\.json$"
+      id_template: "{day}/{event_id}" # only unique within its day partition
+      state_literal: quarantined      # every row here means the same thing
+
+  - name: changelog-retros
+    kind: changelog-retro-feed        # one aggregate doc → grouped Incident entities
+    enabled: false
+    produces: [incident]
+    config:
+      bucket: your-research-bucket
+      key: changelog/retro_candidates.json
+      cadence: 1d                     # emitted daily by the docs aggregator
+
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing
 # dimension everywhere; omitting one does not hide the field.

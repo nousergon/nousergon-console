@@ -23,7 +23,7 @@ under.
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `changelog-events`, `changelog-retro-feed` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -203,6 +203,50 @@ trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
 
 Identifiers are the tracker refs the host assigns — `<repo>-I<N>` /
 `<repo>-PR<N>` — never console-minted.
+
+## `changelog-events`
+
+| | |
+|---|---|
+| **Reads** | An S3-compatible prefix of one JSON object per event (schema 1.0.0) |
+| **Emits** | `incident` (plus `produces` edges from the body's own `source`/feeder field) |
+| **Cannot supply** | anything outside the event body |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `id_template`, `state_field` or `state_literal` |
+
+Why not `object-store` plus config: that adapter always projects keys to
+Artifacts and derives staleness from last-modified. This source's entity kind
+is `incident`, and its state is a declared field read from the body
+(`state_field`, e.g. `severity`) or a literal that applies to the whole
+prefix (`state_literal`) — never key staleness. Two configured instances of
+this one adapter cover both changelog prefixes: the raw event-lake
+(`changelog/entries/`, `state_field: severity`) and its vocab-quarantine
+sibling (`changelog/quarantine/`, `state_literal: quarantined`) — one schema,
+one adapter, per `policy-shared-code`'s second-adoption rule.
+
+`id_template` builds the identifier from the `key_pattern`'s named groups —
+`{event_id}` when the source assigns a unique id across the whole prefix,
+`{day}/{event_id}` when uniqueness only holds within a day partition (the
+quarantine case). Lineage is derived from schema 1.0.0's own `source` field
+(the feeder that wrote the entry), never inferred: no per-deployment config
+needed because the schema itself already names the producer.
+
+## `changelog-retro-feed`
+
+| | |
+|---|---|
+| **Reads** | ONE S3-compatible JSON document containing a pre-grouped array |
+| **Emits** | `incident` (one per group, `{subsystem}\|{summary}` id) |
+| **Cannot supply** | narrative for a group nobody has written up yet |
+| **Config** | `bucket`, `key`, `cadence` |
+
+The opposite shape from `changelog-events`: one key holds many entities,
+already grouped by an upstream aggregator. State is `ready-for-retro` /
+`needs-triage` from the document's own `has_writeup` flag — not a member of
+observability-policy.md §8.3's twelve, because a retro group is not a
+component. A `ready_for_retro` entry with a matching group is merged in as
+`detail.resolution`; the adapter performs no filtering of its own — the
+upstream emitter already excludes non-incident events before writing the
+document.
 
 ## `local-units`
 

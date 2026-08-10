@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 
 from .adapters import (
+    changelog_events,
+    changelog_retro_feed,
     checks_envelope,
     git_host,
     local_units,
@@ -40,6 +42,8 @@ ADAPTERS = {
     "state-machine": state_machine,
     "pipeline-reliability": pipeline_reliability,
     "checks-envelope": checks_envelope,
+    "changelog-events": changelog_events,
+    "changelog-retro-feed": changelog_retro_feed,
 }
 
 

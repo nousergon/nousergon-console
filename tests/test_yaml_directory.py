@@ -14,7 +14,10 @@ def test_reads_one_component_per_file():
     result = yaml_directory.fetch({"path": EXAMPLE_REGISTRY, "id_field": "component_id"})
     assert result.status is AdapterStatus.OK
     ids = {e.id for e in result.entities}
-    assert ids == {"comp-alpha", "comp-beta"}
+    # comp-gamma (nousergon-console#56) demonstrates a `document-fields`
+    # metrics binding — two deliberately split source documents combining
+    # onto one component, alongside comp-alpha/comp-beta's plain rows.
+    assert ids == {"comp-alpha", "comp-beta", "comp-gamma"}
     assert all(e.kind is Kind.COMPONENT for e in result.entities)
 
 

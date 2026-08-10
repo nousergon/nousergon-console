@@ -18,6 +18,7 @@ from .adapters import (
     changelog_events,
     changelog_retro_feed,
     checks_envelope,
+    dated_snapshot,
     git_host,
     local_units,
     object_store,
@@ -44,6 +45,7 @@ ADAPTERS = {
     "checks-envelope": checks_envelope,
     "changelog-events": changelog_events,
     "changelog-retro-feed": changelog_retro_feed,
+    "dated-snapshot": dated_snapshot,
 }
 
 

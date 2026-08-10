@@ -52,7 +52,7 @@
       "properties": {
         "driver": {
           "type": "string",
-          "description": "A source SHAPE (2.7) — object-store, state-machine, local-unit, log-source, sql-source, emitted-envelope. A driver naming an INSTANCE is a build finding: which bucket, group, ARN or table belongs to this component is the rest of this object. A descriptor naming a driver that does not exist FAILS THE BUILD rather than rendering the component absent, because a typo and a genuinely-gone component must not look the same."
+          "description": "A source SHAPE (2.7) — object-store, state-machine, local-unit, log-source, sql-source, emitted-envelope, document-fields. A driver naming an INSTANCE is a build finding: which bucket, group, ARN or table belongs to this component is the rest of this object. A descriptor naming a driver that does not exist FAILS THE BUILD rather than rendering the component absent, because a typo and a genuinely-gone component must not look the same."
         },
         "key": {"type": "string", "description": "For object-shaped sources: the object this component wrote."},
         "cadence_minutes": {"type": "number", "exclusiveMinimum": 0, "description": "How often this is expected to change. The single most valuable optional field: without it, staleness is not computable."},

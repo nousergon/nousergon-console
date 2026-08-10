@@ -185,6 +185,13 @@ def test_the_landing_payload_is_exception_first_with_denominators(index):
     # with a top-10 that does not say it is a top-10.
     assert doc["numbers"]["not_healthy"] == {"count": 1, "of": 3}
     assert doc["numbers"]["transparency_gap"]["of"] == 3
+    # §4.3's remaining two elements, same query as the HTML (§3.8). This
+    # fixture carries no Decision entities and no DECLARATION claim, so the
+    # honest answer is an empty queue and an unknown ratio — never a
+    # fabricated 1.0 (`nousergon-console-I5`).
+    assert doc["decision_queue"] == []
+    assert doc["numbers"]["population_completeness"]["ratio"] is None
+    assert doc["numbers"]["population_completeness"]["of"] is None
 
 
 def test_aggregate_refuses_a_missing_denominator():

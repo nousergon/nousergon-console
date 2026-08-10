@@ -25,7 +25,15 @@ from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
 from .build import AdapterFetch, BuildInfo
 from .merge import Claim, NamespaceCollision, merge
 
-__all__ = ["Index", "NamespaceCollision"]
+__all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
+
+#: The Decision Queue's own labels (`decision-queue-policy.md` §2) — the
+#: escalation terminal and the ready-for-ruling state. A Decision entity is any
+#: ruling, gate, queued reserved matter or open ASK (`console-policy.md`
+#: §2.1); most of them are ordinary open backlog rather than something
+#: reserved for Brian, so "what is waiting on Brian" (§4.3) is this narrower
+#: set, not every open Decision.
+DECISION_QUEUE_LABELS: frozenset[str] = frozenset({"gate:decision", "triage:session"})
 
 
 class Index:
@@ -172,6 +180,61 @@ class Index:
         problem.
         """
         return [e for e in self.finalize()._entities.values() if e.conflicts]
+
+    def decision_queue(self) -> list[Entity]:
+        """§4.3 — what is waiting on Brian.
+
+        Filtered to `DECISION_QUEUE_LABELS`, not every open Decision: a
+        Decision entity is any ruling, gate, queued reserved matter or open
+        ASK (§2.1), and most open issues on a tracker are ordinary backlog
+        rather than something reserved for Brian's ruling. Only the two
+        canonical `decision-queue-policy.md` §2 labels mean the latter.
+        """
+        return [
+            e for e in self.finalize()._by_kind[Kind.DECISION]
+            if DECISION_QUEUE_LABELS & set(e.detail.get("labels") or ())
+        ]
+
+    def population_completeness(self) -> dict[str, object]:
+        """§9.1 — registry rows rendered ÷ registry rows, and the
+        UNREGISTERED count (`observability-policy.md` §8.4's two numbers).
+
+        "Registry rows" is every identifier that received a DECLARATION claim
+        for a Component (§2.4 — the registry is the denominator, never a
+        second console-side list). "Rendered" is how many of those
+        identifiers are actually present in the finalized index: the merge
+        never drops a claimed id today (`NamespaceCollision` aside), so this
+        is a real set comparison rather than an assertion, and it is what
+        would catch a future merge path that DOES drop one.
+
+        With no successful declaration pass there is no denominator, and a
+        ratio computed without one is a fabricated 1.0 — `config.example.yaml`
+        documents the honest behaviour: "reports population completeness as
+        unknown rather than as 1.0". `ratio` and `of` are both `None` in that
+        case, distinct from a real `0 / 0`.
+        """
+        self.finalize()
+        unregistered = sum(
+            1 for e in self._entities.values() if e.state is State.UNREGISTERED
+        )
+        if not self._saw_ok_declaration:
+            return {"rendered": 0, "of": None, "ratio": None,
+                    "unregistered": unregistered}
+        declared_ids = {
+            entity_id for entity_id, claims in self._claims.items()
+            if any(
+                c.claim_class is ClaimClass.DECLARATION
+                and c.entity.kind is Kind.COMPONENT
+                for c in claims
+            )
+        }
+        rendered = sum(1 for eid in declared_ids if eid in self._entities)
+        of = len(declared_ids)
+        return {
+            "rendered": rendered, "of": of,
+            "ratio": round(rendered / of, 4) if of else None,
+            "unregistered": unregistered,
+        }
 
     def _add_edge(self, edge: Edge) -> None:
         if edge.rel not in RELATIONS:

@@ -9,6 +9,7 @@ holds no topology of its own.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import yaml
@@ -25,6 +26,9 @@ from .adapters import (
 from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .index.build import Supervisor
 from .index.graph import Index
+from .index.onboarding import compute_onboarding_cost
+from .model.envelope import AdapterStatus
+from .qa.questions import measure as measure_answer_latency
 
 #: Adapter registry — name → module with a `fetch` callable. Adding a source
 #: is adding an adapter here (§2.3); no other wiring changes.
@@ -68,6 +72,11 @@ def build_index(config: dict[str, Any]) -> Index:
         })
         index.add_result(result)
         index.render_registry(name)
+        # §9.1's per-registry denominator: how many rows this registry
+        # offered THIS pass, and whether its adapter could even read it.
+        index.record_registry_rows(
+            name, count=len(result.entities), ok=result.status is AdapterStatus.OK,
+        )
         descriptors.extend(result.descriptors)
 
     for entry in config.get("adapters", []) or []:
@@ -86,6 +95,24 @@ def build_index(config: dict[str, Any]) -> Index:
     # because somebody added a prefix to this file.
     for result in resolve_bindings(descriptors, _driver_context(config)):
         index.add_result(result)
+
+    # §9.8: computed once per build (a git subprocess per registry row is not
+    # something a request handler should pay for). Defaults to the process's
+    # own working directory — the same convention `--config config.yaml`
+    # already uses (config.py carries no filesystem literal of its own, §2.3);
+    # `console.repo_root` overrides it for a deployment that runs elsewhere.
+    console_cfg = config.get("console") or {}
+    repo_root = console_cfg.get("repo_root") or os.getcwd()
+    registry_paths = [str(r["path"]) for r in registry_entries if r.get("path")]
+    registry_id_field = next(
+        (r.get("id_field", "component_id") for r in registry_entries if r.get("path")),
+        "component_id",
+    )
+    index.set_onboarding_cost(
+        compute_onboarding_cost(repo_root, registry_paths, id_field=registry_id_field)
+    )
+    # §9.4: run the standing question set against the index just built.
+    index.set_answer_latency(measure_answer_latency(index))
     return index
 
 

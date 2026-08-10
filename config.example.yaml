@@ -34,6 +34,13 @@ console:
   # claim about freshness that cannot be checked.
   refresh_seconds: 60
 
+  # §9.8 (onboarding cost) reads THIS repository's own git history to find
+  # when each registry row was added. Defaults to the process's working
+  # directory (the same convention `--config config.yaml` already assumes);
+  # set this only when the console runs from somewhere other than its own
+  # checkout.
+  # repo_root: /path/to/nousergon-console
+
 # The component denominator. The console renders what it knows about and reports
 # the difference between this set and what it can actually see — that difference
 # is the transparency-gap count, and it is published on the surface.

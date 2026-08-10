@@ -184,7 +184,12 @@ def test_the_landing_payload_is_exception_first_with_denominators(index):
     # on the page. A consumer reading a bare count is doing what a reader does
     # with a top-10 that does not say it is a top-10.
     assert doc["numbers"]["not_healthy"] == {"count": 1, "of": 3}
-    assert doc["numbers"]["transparency_gap"]["of"] == 3
+    # §9.2's denominator is the COMPONENT-state population (Component/Run) —
+    # not every entity kind. This fixture's third entity is an Artifact, which
+    # was never a transparency-gap candidate; folding it in only diluted the
+    # number (nousergon-console#16, the defect §9's original conformance
+    # measurement named).
+    assert doc["numbers"]["transparency_gap"]["of"] == 2
     # §4.3's remaining two elements, same query as the HTML (§3.8). This
     # fixture carries no Decision entities and no DECLARATION claim, so the
     # honest answer is an empty queue and an unknown ratio — never a

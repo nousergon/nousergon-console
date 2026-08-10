@@ -123,8 +123,8 @@ def _landing(index: Index) -> dict[str, Any]:
 
     entities = index.all()
     exceptions = [e for e in entities if is_exception(e)]
-    unreported = [e for e in entities if e.state is State.UNREPORTED]
     conflicts = index.conflicts()
+    gap = index.transparency_gap()
     return {
         "schema_version": SCHEMA_VERSION,
         "registry_pages": index.registry_coverage(),
@@ -134,20 +134,58 @@ def _landing(index: Index) -> dict[str, Any]:
         # renders (§3.8) — `Index.decision_queue()`, filtered to
         # `decision-queue-policy.md` §2's own labels, not every open Decision.
         "decision_queue": [entity(e) for e in index.decision_queue()],
-        "numbers": {
-            # Every count states its denominator inline (§5.3) — a roll-up
-            # that cannot state one is not rendered, and that holds on the
-            # wire exactly as it holds on the page.
-            "not_healthy": aggregate(len(exceptions), len(entities)),
-            "transparency_gap": aggregate(len(unreported), len(entities)),
-            "claim_conflicts": aggregate(len(conflicts), len(entities)),
-            "index_reachability": index.reachability(),
-            # §9.1: not wrapped in `aggregate()` — with no registry configured
-            # `of` is None, a real absence `aggregate()` would reject (it
-            # requires a denominator), not a count to rewrap.
-            "population_completeness": index.population_completeness(),
-        },
+        # console-policy.md §9 — the nine numbers, all published, all stating
+        # their denominator inline (§5.3). A number this build could not
+        # compute renders `state: N/A-NOT-IMPL` with the cycle it is expected
+        # by (§11) — except §9.1/§9.2, which are never allowed that token:
+        # §9.1 (population_completeness) signals uncomputable with
+        # `of`/`ratio` both `None` (not wrapped in `aggregate()`, which would
+        # reject a missing denominator outright), and §9.2 always has a real
+        # denominator (the component population), so it never needs to.
+        "numbers": numbers(index, exceptions, conflicts, gap),
     }
+
+
+#: §9.7 (surface liveness) is explicitly out of THIS issue's scope — it
+#: belongs to the console's deploy work (nous-ergon-ops-I364) rather than to
+#: the index/render layer this issue covers. §11's carve-out requires the
+#: number be named and the cycle it is expected by stated, not silently
+#: omitted — this is that statement.
+_SURFACE_LIVENESS_NOT_IMPL = {
+    "state": "N/A-NOT-IMPL",
+    "expected_cycle": "console deploy work (nous-ergon-ops-I364)",
+    "reason": (
+        "surface liveness needs a watcher component that is NOT the console "
+        "itself (§9.7) — that watcher is deploy/ops work, not an index "
+        "computation, and is tracked separately"
+    ),
+}
+
+
+def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
+           gap: dict[str, Any]) -> dict[str, Any]:
+    """console-policy.md §9 — all nine numbers, one dict, one place they are
+    assembled for both representations (§3.8: the HTML numbers section reads
+    the same shape via `render.html.landing_numbers`)."""
+    entities = index.all()
+    return {
+        "population_completeness": index.population_completeness(),   # §9.1
+        "transparency_gap": aggregate(gap["count"], gap["of"]),        # §9.2
+        "index_reachability": index.reachability(),                    # §9.3
+        "answer_latency": index.answer_latency(),                      # §9.4
+        "orphan_count": index.orphan_counts(),                         # §9.5
+        "staleness_honesty": aggregate(*_count_of(index.staleness_honesty())),  # §9.6
+        "surface_liveness": _SURFACE_LIVENESS_NOT_IMPL,                 # §9.7
+        "onboarding_cost": index.onboarding_cost(),                    # §9.8
+        "claim_conflicts": aggregate(len(conflicts), len(entities)),   # §9.9
+        # Not one of the nine, but the same denominator-inline discipline —
+        # kept here rather than dropped, since a prior response reads it.
+        "not_healthy": aggregate(len(exceptions), len(entities)),
+    }
+
+
+def _count_of(d: dict[str, Any]) -> tuple[int, int]:
+    return d["count"], d["of"]
 
 
 def _list(index: Index, req: Resolved) -> dict[str, Any]:

@@ -10,6 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow clone: §9.8 (onboarding
+          # cost) reads this repo's own git log to find when each registry
+          # row was added (console/index/onboarding.py), and a shallow clone
+          # would truncate that history and misattribute the finding — the
+          # code detects and degrades honestly rather than lying, but a
+          # shallow CI clone would mean §9.8 is never actually exercised here.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

@@ -24,3 +24,6 @@ build/
 coverage/
 .DS_Store
 *.log
+
+# `pip install -e .` build metadata — not part of the published artifact.
+*.egg-info/

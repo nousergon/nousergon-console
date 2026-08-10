@@ -23,6 +23,15 @@ deploying operator has configured as this key's reader — which derives the
 ``consumed-by`` edge the same way. Both are config-declared identifiers, never
 inferred: this adapter has no way to discover who reads an object-store key on
 its own, only what the key pattern's own named groups say (§2.3).
+
+A declared ``question`` (`console-policy.md` §4.4, `nousergon-console#61`) is
+carried as a synthetic ``text`` declared field, exactly matching the
+``s3-records`` adapter's own convention — the two are the right shape to
+share this one small piece: a source whose declared question needs no body
+content at all (a markdown briefing, a parquet dump — this adapter never
+reads a body, which is the whole reason to reach for it over ``s3-records``)
+still gets its question rendered by the existing declared-fields table, with
+no new rendering code either adapter.
 """
 from __future__ import annotations
 
@@ -78,6 +87,7 @@ def fetch(
     regex = re.compile(pattern)
     cadence = _parse_cadence(config.get("cadence"))
     staleness_factor = float(config.get("staleness_factor", 1.5))
+    question = config.get("question")
     now = now or datetime.now(timezone.utc)
 
     try:
@@ -99,6 +109,12 @@ def fetch(
             continue
         groups = m.groupdict()
         state = _state(last_modified, cadence, staleness_factor, now)
+        detail: dict[str, Any] = {k: v for k, v in groups.items()}
+        if question:
+            # Synthetic declared field (§5.8) — rendered by the existing
+            # declared-fields table, matching `s3-records`'s own convention
+            # for the same config key (§4.4).
+            detail["fields"] = {"question": {"value": str(question), "render": "text"}}
         art = Entity(
             kind=Kind.ARTIFACT,
             id=key,  # the key is the source-assigned identifier (§2.1)
@@ -109,7 +125,7 @@ def fetch(
                 evidence=f"s3://{bucket}/{key}",
             ),
             facets={"repo": bucket} if bucket else {},
-            detail={k: v for k, v in groups.items()},
+            detail=detail,
         )
         entities.append(art)
         # If the pattern names a component_id, derive the produces-edge from

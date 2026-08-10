@@ -97,3 +97,22 @@ def test_no_consumer_edge_when_pattern_names_no_consumer_id():
     # consumed-by edge is invented where the config declared none.
     result = object_store.fetch(_cfg(), lister=_lister, now=NOW)
     assert not any(e.rel == "consumed-by" for e in result.edges)
+
+
+# --------------------------------------------- declared question (nousergon-console#61) --
+
+def test_declared_question_renders_as_synthetic_text_field():
+    """A source with no body to read (a markdown briefing, a parquet dump)
+    still gets its declared question on the surface — via the same synthetic
+    declared-field convention `s3-records` uses for the same config key
+    (§4.4), so no new rendering code is needed either place."""
+    cfg = {**_cfg(), "question": "What did the research morning-briefing email say?"}
+    result = object_store.fetch(cfg, lister=_lister, now=NOW)
+    for ent in result.entities:
+        q = ent.detail["fields"]["question"]
+        assert q == {"value": "What did the research morning-briefing email say?", "render": "text"}
+
+
+def test_no_question_declared_leaves_fields_absent():
+    result = object_store.fetch(_cfg(), lister=_lister, now=NOW)
+    assert all("fields" not in e.detail for e in result.entities)

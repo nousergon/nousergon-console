@@ -215,5 +215,16 @@ def test_enumerator_failure_is_failed_not_empty():
     assert result.entities == ()
 
 
+def test_no_consumed_by_edges_declared_structural_leaf():
+    """nousergon-console#52: local-units is a documented structural leaf for
+    `consumed-by`. `systemctl show` carries a unit's load/active state and
+    its activation record only — nothing about who reads what the unit
+    produces. The only edge this adapter declares is the pre-existing
+    run-belongs-to-unit edge; this is the explicit "no consumer relation"
+    record so a future audit does not re-flag it as an oversight."""
+    result = local_units.fetch(_cfg(), enumerator=_enumerate)
+    assert not any(e.rel == "consumed-by" for e in result.edges)
+
+
 def test_local_units_is_registered():
     assert "local-units" in ADAPTERS

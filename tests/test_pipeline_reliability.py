@@ -291,6 +291,20 @@ def test_pipeline_reliability_is_registered():
     assert ADAPTERS["pipeline-reliability"] is pr
 
 
+def test_no_consumed_by_edges_declared_structural_leaf():
+    """nousergon-console#52: pipeline-reliability is a documented structural
+    leaf for `consumed-by`. Its sources (SF execution history + a trading
+    calendar) carry nothing about who reads a classified Cycle or Signal —
+    that fact belongs to whichever component's registry row declares it
+    under `consumes` (yaml_directory's existing mechanism), because only the
+    consumer side ever knows what it consumes (§2.3). This is the explicit
+    "no consumer relation" record so a future audit does not re-flag it."""
+    records = [_exec("run-1", "SUCCEEDED", "2026-08-03T13:00:00Z", "2026-08-03T13:12:00Z", role="daily")]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    assert result.entities  # sanity: the fixture does produce entities
+    assert result.edges == ()
+
+
 def test_cycle_state_is_not_a_component_state_vocabulary_member():
     """§5.1's second half: Cycle is outside COMPONENT_STATE_KINDS, so the
     six-value string is legal without touching the closed twelve."""

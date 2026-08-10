@@ -63,6 +63,16 @@ First-attempt scheduled success rate and the buffer trend are rendered via
 the self-describing field mechanism (`model/fields.py` §5.8) so no bespoke
 rendering code is needed — the generic entity/list views already render any
 `detail["fields"]` entry from its own descriptor.
+
+**Structural leaf for `consumed-by` (§3.3/§6, `nousergon-console#52`).** This
+adapter's two sources — SF execution history and a trading calendar — carry
+nothing about who reads a trading-day Cycle or a reliability Signal once
+classified. The genuine consumer of `pipeline-reliability:<pipeline>:...` is
+whichever component's registry row declares it under `consumes` (the
+`yaml_directory` adapter's existing mechanism) — that is where the fact
+belongs, because only the consumer side ever knows what it consumes (§2.3).
+Declaring a `consumed-by` edge here would mean inventing a consumer id this
+adapter's own reads never supplied, which is exactly the forbidden shape.
 """
 from __future__ import annotations
 

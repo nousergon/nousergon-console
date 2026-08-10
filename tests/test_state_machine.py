@@ -115,6 +115,62 @@ def test_durable_keys_in_input_output_become_artifacts():
             "s3://fixture-bucket/out/2026-07-31.json") in rels
 
 
+def test_input_key_field_becomes_consumed_by_edge():
+    """nousergon-console#52: an input_key field names something the run
+    READS — declared consumed-by the run, the reverse direction from
+    produces. The existing output_key/artifact_key fixture (EXEC_OK) must
+    keep producing a `produces` edge unchanged (regression guard below)."""
+    rec = {
+        **EXEC_OK,
+        "input": (
+            '{"execution_date": "2026-07-31",'
+            ' "input_key": "s3://fixture-bucket/in/2026-07-31.json"}'
+        ),
+    }
+    result = state_machine.fetch(_cfg(), reader=_reader_for({ARN_A: [rec]}))
+    rels = {(e.source, e.rel, e.target) for e in result.edges}
+    assert ("s3://fixture-bucket/in/2026-07-31.json", "consumed-by",
+            EXEC_OK["executionArn"]) in rels
+    # No produces edge was invented for the same key.
+    assert (EXEC_OK["executionArn"], "produces",
+            "s3://fixture-bucket/in/2026-07-31.json") not in rels
+
+
+def test_input_key_artifact_is_relation_reachable_via_the_run():
+    """The run itself becomes relation-reachable through ONLY this adapter's
+    own declared edge — no reliance on checks_envelope/yaml_directory."""
+    from console.index.graph import Index
+
+    rec = {
+        **EXEC_OK,
+        "input": (
+            '{"execution_date": "2026-07-31",'
+            ' "input_key": "s3://fixture-bucket/in/2026-07-31.json"}'
+        ),
+    }
+    result = state_machine.fetch(_cfg(), reader=_reader_for({ARN_A: [rec]}))
+    index = Index()
+    index.add_result(result)
+    index.finalize()
+    inbound = index.inbound(EXEC_OK["executionArn"])
+    assert any(e.rel == "consumes" for e in inbound), (
+        "the run must be relation-reachable (§3.1) via the derived reverse "
+        "of the consumed-by edge this adapter now declares"
+    )
+
+
+def test_output_key_and_artifact_key_still_produce_not_consume():
+    """Regression guard: the pre-existing EXEC_OK fixture's output_key
+    (inside input) and artifact_key (inside output) both name the SAME key
+    and must both stay classified as produced — field name overrides which
+    payload (input vs output) carried them."""
+    result = state_machine.fetch(_cfg(), reader=_reader_for({ARN_A: [EXEC_OK]}))
+    rels = {(e.source, e.rel, e.target) for e in result.edges}
+    key = "s3://fixture-bucket/out/2026-07-31.json"
+    assert (EXEC_OK["executionArn"], "produces", key) in rels
+    assert not any(e.rel == "consumed-by" and e.source == key for e in result.edges)
+
+
 def test_horizon_is_declared_on_cycles_not_silently_truncated():
     """§3.4 / I3 gotcha: the adapter pages fully and declares the horizon it
     covered. A cycle carries earliest/latest/count so a truncated history

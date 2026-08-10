@@ -41,6 +41,15 @@ whose state is the activation's outcome: a live run is HEALTHY, a failed
 unit's run FAILING, a finished activation HEALTHY on ``Result=success`` and
 FAILING on any other recorded result. launchd is a future extension; this
 adapter reads systemd only.
+
+**Structural leaf for `consumed-by` (§3.3/§6, `nousergon-console#52`).**
+`systemctl show` carries the unit's own load/active state and its activation
+record — nothing about who, if anyone, reads the unit's output. A systemd
+unit is not itself a durable artifact with a reader; whatever a unit produces
+is a job for the emitting unit's own declared lineage (`checks_envelope` /
+`yaml_directory`'s `consumes`), not for this adapter to guess. §2.3 forbids
+minting a consumer id this source never supplied, so this is a genuine leaf,
+not an oversight.
 """
 from __future__ import annotations
 

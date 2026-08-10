@@ -63,3 +63,18 @@ def test_lister_failure_is_failed_state_not_empty():
 def test_missing_org_is_failed():
     result = git_host.fetch({"repos": ["r"]}, lister=_lister)
     assert result.status is AdapterStatus.FAILED
+
+
+def test_no_consumed_by_edges_declared_structural_leaf():
+    """nousergon-console#52: git-host is a documented structural leaf for
+    `consumed-by` — a Decision/Incident is a terminal record a human rules
+    on, and the host API this adapter reads (number, title, tracker state,
+    labels, timestamps) carries no consumer identifier to declare. This is
+    the explicit "no consumer relation" record §6/§3.3 asks for, so a future
+    audit does not re-flag the adapter as an oversight."""
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "incident_label": "incident"},
+        lister=_lister,
+    )
+    assert result.entities  # sanity: the fixture does produce entities
+    assert result.edges == ()

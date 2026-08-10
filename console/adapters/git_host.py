@@ -13,6 +13,16 @@ The adapter is hermetic: the network call is one injectable function,
 ``groom-sweep-policy.md`` §8.1 standard). In production ``_lister`` shells to
 the host's CLI (`gh`), which is configuration-resolved, not a hardcoded
 endpoint.
+
+**Structural leaf for `consumed-by` (§3.3/§6, `nousergon-console#52`).** A
+Decision or Incident is a terminal record — it is read by a human making a
+ruling, not consumed by another fleet component with a declarable id. The host
+API this adapter reads (`gh issue list`) carries only number, title, tracker
+state, labels and timestamps: no field names a consuming component, and §2.3
+forbids minting one by reaching into another adapter's output. Unlike
+`checks_envelope`/`yaml_directory`/`object_store`/`state_machine`, there is no
+config or source field here to declare a consumer from — this is not an
+oversight, it is the adapter genuinely having nothing to declare.
 """
 from __future__ import annotations
 

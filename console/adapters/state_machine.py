@@ -14,6 +14,15 @@ recorded execution lists with no live AWS (groom-sweep §8.1).
 Horizon honesty (§3.4): the adapter pages **fully** and records the covered
 horizon in ``detail`` and ``unavailable`` rather than silently truncating. A
 silently truncated execution history is the forbidden shape at the data layer.
+
+Lineage (§3.3/§6, `nousergon-console#52`): a durable key named by an
+``input_key`` field is something the run reads — declared as a ``consumed-by``
+edge from the key to the run. A key named by ``output_key``/``artifact_key``/
+``artifact``/``key``, or a bare ``s3://`` value found under the execution's
+output, is something the run writes — declared as ``produces``, as before.
+The field name is the only signal used: it is already read verbatim from the
+execution record the adapter owns, never inferred by reaching into another
+adapter's output (§2.3).
 """
 from __future__ import annotations
 
@@ -238,7 +247,7 @@ def _to_entities(
 
     arts: list[Entity] = []
     edges: list[Edge] = []
-    for key in _durable_keys(input_obj) + _durable_keys(output_obj):
+    for key, consumed in _durable_keys(input_obj, True) + _durable_keys(output_obj, False):
         arts.append(Entity(
             kind=Kind.ARTIFACT,
             id=key,
@@ -253,36 +262,67 @@ def _to_entities(
             ),
             detail={"named_by_run": run_id},
         ))
-        edges.append(Edge(source=run_id, rel="produces", target=key))
+        if consumed:
+            # Declared lineage (§6, nousergon-console#52): the run reads this
+            # key, so the key is consumed-by the run — the direction that
+            # exists nowhere unless the emitter's own data states it.
+            edges.append(Edge(source=key, rel="consumed-by", target=run_id))
+        else:
+            edges.append(Edge(source=run_id, rel="produces", target=key))
 
     return run, cycle_id, arts, edges
 
 
-def _durable_keys(obj: Any) -> list[str]:
-    """Pull s3:// URIs and explicit artifact-key fields out of input/output.
+#: Field names this adapter already recognises as durable-key references
+#: (pre-existing). Their names are also the lineage-direction signal
+#: (nousergon-console#52): ``input_key`` is always consumed, the rest are
+#: always produced, regardless of whether they were found under the
+#: execution's input or output payload — a pipeline sometimes states its
+#: intended output location inside its own input.
+_PRODUCED_FIELD_NAMES = ("artifact_key", "artifact", "key", "output_key")
+_CONSUMED_FIELD_NAMES = ("input_key",)
+
+
+def _durable_keys(obj: Any, default_consumed: bool) -> list[tuple[str, bool]]:
+    """Pull s3:// URIs and explicit artifact-key fields out of input/output,
+    each paired with whether the run CONSUMES (True) or PRODUCES (False) it.
 
     Conservative: only values that are clearly durable references, never every
     string. Walks one level of dict/list so a typical SF payload is covered
     without a full JSONPath dependency.
+
+    ``default_consumed`` is the fallback direction for a bare ``s3://`` value
+    with no naming field: True when scanning the execution's input (a value
+    with no other signal, found in what was fed in, is read by the run),
+    False when scanning its output (found in what came out, is written by the
+    run). A recognised field name (see ``_PRODUCED_FIELD_NAMES`` /
+    ``_CONSUMED_FIELD_NAMES``) always overrides the default.
     """
-    found: list[str] = []
+    found: list[tuple[str, bool]] = []
     if obj is None:
         return found
     if isinstance(obj, str):
         if obj.startswith("s3://"):
-            found.append(obj)
+            found.append((obj, default_consumed))
         return found
     if isinstance(obj, dict):
         for k, v in obj.items():
             if isinstance(v, str) and v.startswith("s3://"):
-                found.append(v)
-            elif isinstance(v, str) and k in ("artifact_key", "artifact", "key", "output_key", "input_key") and v:
-                found.append(v)
+                if k in _CONSUMED_FIELD_NAMES:
+                    found.append((v, True))
+                elif k in _PRODUCED_FIELD_NAMES:
+                    found.append((v, False))
+                else:
+                    found.append((v, default_consumed))
+            elif isinstance(v, str) and k in _PRODUCED_FIELD_NAMES and v:
+                found.append((v, False))
+            elif isinstance(v, str) and k in _CONSUMED_FIELD_NAMES and v:
+                found.append((v, True))
             elif isinstance(v, (dict, list)):
-                found.extend(_durable_keys(v))
+                found.extend(_durable_keys(v, default_consumed))
     elif isinstance(obj, list):
         for item in obj:
-            found.extend(_durable_keys(item))
+            found.extend(_durable_keys(item, default_consumed))
     return found
 
 

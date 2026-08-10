@@ -15,6 +15,14 @@ Staleness is computable when the source supplies a last-modified stamp and the
 config declares a ``cadence``: a key older than its cadence ×
 ``staleness_factor`` renders STALE (§5.2), never as its last value in normal
 styling.
+
+Lineage (§3.3/§6, `nousergon-console#52`): a ``component_id`` named group
+derives the ``produces`` edge (the key's own producer). A key pattern may
+symmetrically name a ``consumer_id`` group — the id of whichever component the
+deploying operator has configured as this key's reader — which derives the
+``consumed-by`` edge the same way. Both are config-declared identifiers, never
+inferred: this adapter has no way to discover who reads an object-store key on
+its own, only what the key pattern's own named groups say (§2.3).
 """
 from __future__ import annotations
 
@@ -111,6 +119,16 @@ def fetch(
             from ..model.entity import Edge
 
             edges.append(Edge(source=cid, rel="produces", target=key))
+        # Symmetrically, a consumer_id group derives the consumed-by edge
+        # (§3.3/§6, nousergon-console#52). Declared lineage only: this
+        # adapter reads one S3-compatible prefix and nothing else, so a
+        # consumer can only be named by the deploying operator's own key
+        # pattern, never discovered by reaching into another adapter (§2.3).
+        consumer_id = groups.get("consumer_id")
+        if consumer_id:
+            from ..model.entity import Edge
+
+            edges.append(Edge(source=key, rel="consumed-by", target=consumer_id))
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,

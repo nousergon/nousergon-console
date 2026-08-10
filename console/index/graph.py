@@ -61,6 +61,24 @@ class Index:
         self._in: dict[str, list[Edge]] = {}
         self._declared_registries: set[str] = set()
         self._rendered_registries: set[str] = set()
+        # §9.1's per-registry row count, keyed by registry name — populated by
+        # config.build_index right after each registry adapter runs. Separate
+        # from _rendered_registries (§7's PAGE coverage): a registry can have
+        # a generated page and still have failed to read this pass.
+        self._registry_rows: dict[str, dict[str, object]] = {}
+        # §9.4/§9.8 are computed once per build (a question-set run and a git
+        # subprocess are both too costly to redo per request) and cached here
+        # by config.build_index — see set_answer_latency/set_onboarding_cost.
+        self._answer_latency: dict[str, object] = {
+            "computable": False,
+            "reason": "not computed for this build — built directly via Index() "
+                      "rather than console.config.build_index",
+        }
+        self._onboarding_cost: dict[str, object] = {
+            "count": None, "of": 0, "computable": False,
+            "reason": "not computed for this build — built directly via Index() "
+                      "rather than console.config.build_index",
+        }
 
     def declare_registry(self, name: str) -> None:
         """Record a configured registry even when its adapter cannot build it."""
@@ -68,6 +86,25 @@ class Index:
 
     def render_registry(self, name: str) -> None:
         self._rendered_registries.add(name)
+
+    def record_registry_rows(self, name: str, count: int, ok: bool) -> None:
+        """§9.1's per-registry denominator: how many rows this registry
+        offered this pass, and whether the adapter could read it at all."""
+        self._registry_rows[name] = {"count": count, "ok": ok}
+
+    def set_answer_latency(self, value: dict[str, object]) -> None:
+        self._answer_latency = value
+
+    def answer_latency(self) -> dict[str, object]:
+        """§9.4 — the last question-set run against this build."""
+        return self._answer_latency
+
+    def set_onboarding_cost(self, value: dict[str, object]) -> None:
+        self._onboarding_cost = value
+
+    def onboarding_cost(self) -> dict[str, object]:
+        """§9.8 — the last onboarding-cost computation for this build."""
+        return self._onboarding_cost
 
     def registry_coverage(self) -> dict[str, object]:
         """The denominator-backed generated-page coverage required by §7."""
@@ -195,9 +232,11 @@ class Index:
             if DECISION_QUEUE_LABELS & set(e.detail.get("labels") or ())
         ]
 
+    # ---- §9.1 / §9.2 completeness ------------------------------------------
+
     def population_completeness(self) -> dict[str, object]:
-        """§9.1 — registry rows rendered ÷ registry rows, and the
-        UNREGISTERED count (`observability-policy.md` §8.4's two numbers).
+        """§9.1 — registry rows RENDERED ÷ registry rows, plus the separate
+        UNREGISTERED count (`observability-policy.md` §8.4).
 
         "Registry rows" is every identifier that received a DECLARATION claim
         for a Component (§2.4 — the registry is the denominator, never a
@@ -207,17 +246,26 @@ class Index:
         is a real set comparison rather than an assertion, and it is what
         would catch a future merge path that DOES drop one.
 
-        With no successful declaration pass there is no denominator, and a
-        ratio computed without one is a fabricated 1.0 — `config.example.yaml`
-        documents the honest behaviour: "reports population completeness as
-        unknown rather than as 1.0". `ratio` and `of` are both `None` in that
-        case, distinct from a real `0 / 0`.
+        Uncomputable — `of`/`ratio` both `None`, never the reserved
+        `N/A-NOT-IMPL` token; §11's carve-out does not cover §9.1 — with no
+        successful declaration pass at all, OR when any registry that WAS
+        declared could not be read this pass: a ratio computed only over the
+        registries that happened to work would silently pretend the broken
+        ones do not exist (§5.3 — no aggregate over incomplete input). The
+        second case is the narrower one this method adds on top of the
+        original "no registry configured" check: `_saw_ok_declaration` alone
+        goes true the moment ONE of several configured registries succeeds,
+        which would otherwise report a ratio as if a second, failed registry
+        did not exist.
         """
         self.finalize()
         unregistered = sum(
             1 for e in self._entities.values() if e.state is State.UNREGISTERED
         )
-        if not self._saw_ok_declaration:
+        unread = sorted(self._declared_registries - set(self._registry_rows))
+        failed = sorted(n for n, info in self._registry_rows.items() if not info["ok"])
+        broken = sorted(set(unread) | set(failed))
+        if not self._saw_ok_declaration or broken:
             return {"rendered": 0, "of": None, "ratio": None,
                     "unregistered": unregistered}
         declared_ids = {
@@ -235,6 +283,33 @@ class Index:
             "ratio": round(rendered / of, 4) if of else None,
             "unregistered": unregistered,
         }
+
+    def transparency_gap(self) -> dict[str, object]:
+        """§9.2 — components in UNREPORTED, over the population that could
+        BE `UNREPORTED` (Component/Run), never every entity kind (§9's
+        original defect: an Artifact or Decision is never a transparency-gap
+        candidate, and folding it into the denominator only dilutes it).
+        """
+        self.finalize()
+        population = [
+            e for e in self._entities.values() if e.kind in COMPONENT_STATE_KINDS
+        ]
+        unreported = [e for e in population if e.state is State.UNREPORTED]
+        return {"count": len(unreported), "of": len(population)}
+
+    # ---- §9.5 / §9.6 --------------------------------------------------------
+
+    def orphan_counts(self) -> dict[str, object]:
+        """§9.5 — panes with no kind, and kinds with no pane."""
+        from .numbers import orphan_counts as _orphan_counts
+
+        return _orphan_counts(self)
+
+    def staleness_honesty(self, now=None, staleness_factor: float = 1.5) -> dict[str, object]:
+        """§9.6 — rows older than their own declared cadence with no marker."""
+        from .numbers import staleness_honesty as _staleness_honesty
+
+        return _staleness_honesty(self, now=now, staleness_factor=staleness_factor)
 
     def _add_edge(self, edge: Edge) -> None:
         if edge.rel not in RELATIONS:

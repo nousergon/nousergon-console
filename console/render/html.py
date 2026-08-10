@@ -293,7 +293,6 @@ def landing_page(index: Index) -> str:
     state and age · the transparency-gap count · what is waiting on Brian
     (the decision queue) · the completeness ratio. No aggregate green light."""
     exceptions = [e for e in index.all() if is_exception(e)]
-    unreported = [e for e in index.all() if e.state is State.UNREPORTED]
     conflicts = index.conflicts()
     reach = index.reachability()
     ratio = reach["ratio"]
@@ -311,20 +310,92 @@ def landing_page(index: Index) -> str:
         f'{completeness["rendered"]} / {completeness["of"]} '
         f'({completeness["ratio"]:.0%})'
         if completeness["ratio"] is not None
-        else "unknown — no registry configured (§9.1)"
+        else "unknown — no registry configured, or a declared registry could "
+             "not be read (§9.1)"
     )
+    gap = index.transparency_gap()
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
-<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {len(unreported)} unreported (transparency gap, §9.2) · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
+<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2) · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {_table(exceptions)}
 <h2>waiting on Brian</h2>
 {_table(queue)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1)</p>
+{numbers_section(index, exceptions, conflicts, gap)}
 </body></html>"""
+
+
+def numbers_section(index: Index, exceptions: list[Entity], conflicts: list[Entity],
+                    gap: dict) -> str:
+    """console-policy.md §9 — the nine numbers, rendered (§3.8: the JSON
+    representation carries the identical shape via `render.json.numbers`,
+    which this function reads rather than recomputing)."""
+    from .json import numbers as _numbers
+
+    n = _numbers(index, exceptions, conflicts, gap)
+    rows = "".join(_number_row(label, key, n[key]) for label, key in _NUMBER_ROWS)
+    return f"""<h2>the nine numbers</h2>
+<table><thead><tr><th>§</th><th>number</th><th>value</th></tr></thead>
+<tbody>{rows}</tbody></table>"""
+
+
+#: §9's numbered order, matching console-policy.md §9's own enumeration —
+#: §9.7 is rendered by `_SURFACE_LIVENESS_NOT_IMPL` above, in step with the
+#: others rather than as a special case.
+_NUMBER_ROWS = (
+    ("§9.1 population completeness", "population_completeness"),
+    ("§9.2 transparency gap", "transparency_gap"),
+    ("§9.3 index reachability", "index_reachability"),
+    ("§9.4 answer latency", "answer_latency"),
+    ("§9.5 orphan count", "orphan_count"),
+    ("§9.6 staleness honesty", "staleness_honesty"),
+    ("§9.7 surface liveness", "surface_liveness"),
+    ("§9.8 onboarding cost", "onboarding_cost"),
+    ("§9.9 claim conflicts", "claim_conflicts"),
+)
+
+
+def _number_row(label: str, key: str, value: object) -> str:
+    return (f'<tr class="number-{esc(key)}"><td>{esc(label)}</td>'
+            f"<td>{esc(key)}</td><td>{esc(_format_number(value))}</td></tr>")
+
+
+def _format_number(value: object) -> str:
+    """A compact, honest one-line rendering of any §9 number's shape.
+
+    Never invents a ratio: `state: N/A-NOT-IMPL` and `computable: False` both
+    render their stated reason rather than a number, matching §5.4 — a figure
+    with no baseline (or no VALUE at all) is telemetry, never a coloured verdict.
+    """
+    if not isinstance(value, dict):
+        return str(value)
+    if value.get("state") == "N/A-NOT-IMPL":
+        return f'N/A-NOT-IMPL (expected: {value.get("expected_cycle", "unstated")})'
+    if value.get("computable") is False:
+        return f'not computable — {value.get("reason", "no reason given")}'
+    if "count" in value and "of" in value:
+        return f'{value["count"]} / {value["of"]}'
+    if {"pane_orphans", "kind_orphans"} <= value.keys():
+        po, ko = value["pane_orphans"], value["kind_orphans"]
+        return f'panes {po["count"]}/{po["of"]} · kinds {ko["count"]}/{ko["of"]}'
+    if "ratio" in value:
+        of = value.get("of")
+        rendered = value.get("rendered", 0)
+        unreg = value.get("unregistered")
+        tail = f' · {unreg} unregistered' if unreg is not None else ''
+        if of is None:
+            return f'unknown — no registry configured or unreadable (§9.1){tail}'
+        return f'{rendered} / {of}{tail}'
+    if "total" in value:  # reachability's own shape
+        return f'{value.get("reachable_all_three", 0)} / {value["total"]}'
+    if "of" in value and "applicable" in value:  # answer latency
+        return (f'{value["within_budget"]} / {value["applicable"]} within budget'
+                f' (v{value.get("version")})')
+    return str(value)
 
 
 def registry_page(index: Index, name: str) -> str:

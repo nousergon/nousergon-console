@@ -35,3 +35,14 @@ jobs:
         # this is the fixture-scale gate the runtime degrade in
         # console/index/build.py backs up for anything this can't see.)
         run: python -m console index --config config.example.yaml
+
+      - name: Assert the declared namespace is unique (§3.6, nousergon-console-I80)
+        # The step above builds the index, which catches a KIND disagreement —
+        # two different things under one identifier — because that raises. It
+        # does not catch the case §3.6 names first: two registry rows declaring
+        # the same id with the same kind MERGE, so the second shadows the first
+        # and the losing row's owner, authority tier and declared lifecycle
+        # disappear silently. This asserts the declared namespace — registry
+        # rows and registry names, all knowable from committed files — is
+        # unique, and fails the PR that introduces a duplicate.
+        run: python -m console check-namespace --config config.example.yaml

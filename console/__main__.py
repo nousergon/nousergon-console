@@ -20,6 +20,7 @@ from typing import Any
 from .config import build_index, load_config, supervised_index
 from .diagnose import doctor, render_text
 from .index.graph import Index
+from .index.namespace import check as check_namespace
 from .render.json import index_dump
 from .server.app import serve
 
@@ -30,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="path to config.yaml (gitignored; see config.example.yaml)")
     ap.add_argument("--host", default=None, help="override bind host (default from config)")
     ap.add_argument("--port", type=int, default=None, help="override port (default from config)")
-    sub = ap.add_subparsers(dest="command", metavar="{serve,index}")
+    sub = ap.add_subparsers(dest="command", metavar="{serve,index,check-namespace,doctor}")
     # Sub-parser flags use SUPPRESS so a flag given before the subcommand
     # survives (the sub-parser default would otherwise overwrite it).
     serve_p = sub.add_parser("serve", help="build the index and serve it (default)")
@@ -46,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     index_p.add_argument("--config", default=argparse.SUPPRESS,
                          help="path to config.yaml (gitignored; see config.example.yaml)")
+    ns_p = sub.add_parser(
+        "check-namespace",
+        help="fail if this configuration declares any identifier twice (§3.6)",
+    )
+    ns_p.add_argument("--config", default=argparse.SUPPRESS,
+                      help="path to config.yaml (gitignored; see config.example.yaml)")
     doctor_p = sub.add_parser(
         "doctor",
         help="say why an identifier is or is not on the surface (§3.9)",
@@ -59,6 +66,21 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     if args.command == "index":
         print(_dump(build_index(config)))
+        return 0
+    if args.command == "check-namespace":
+        # Reads committed files only — no adapter runs, so this is usable as a
+        # pull-request gate on a machine with no access to any fleet source.
+        collisions = check_namespace(config)
+        for collision in collisions:
+            print(collision.render())
+        if collisions:
+            print(
+                "\ndeclared namespace is not unique — console-policy.md §3.6 "
+                "requires a collision to fail the build rather than shadow "
+                "(nousergon-console-I80)"
+            )
+            return 1
+        print("declared namespace is unique (§3.6)")
         return 0
     if args.command == "doctor":
         diagnosis = doctor(build_index(config), args.identifier)

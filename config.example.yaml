@@ -85,13 +85,198 @@ adapters:
   - name: repos
     kind: git-host                   # github / gitlab api
     enabled: false
-    produces: [decision, incident]
+    produces: [decision, incident, artifact]
     config:
       org: your-org
-      # Trackers to index. Issues and pull requests become Decision entities;
-      # anything carrying an incident label becomes an Incident.
+      # Trackers to index. Issues become Decision entities; anything carrying
+      # an incident label becomes an Incident.
       repos: []
       incident_label: incident
+      # Optional. When true, also lists pull requests: an OPEN pr joins the
+      # decision queue at `<repo>-PR<N>` (its own namespace — never collides
+      # with an issue of the same number); a MERGED pr becomes an Artifact at
+      # `<org>/<repo>#<N>` ("which PRs merged, human or agent"). A closed,
+      # unmerged pr answers neither question and is not emitted.
+      include_prs: false
+
+  # ---------------------------------------------------------------------
+  # Fleet Ops Meta slice (nousergon-console#59) — four more s3-records
+  # instances alongside the Portfolio & Trading slice's five above. Field
+  # names below are read from the real crucible-dashboard producer/loader
+  # pair for each view, not invented.
+  # ---------------------------------------------------------------------
+
+  - name: llm-cost-personal
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: claude_code_usage/
+      kind: signal                   # one Signal per (source, date, model)
+      question: >-
+        How much are we spending on pay-per-token LLM calls this week,
+        personal vs. research-pipeline?
+      key_pattern: "claude_code_usage/(?P<source>[^/]+)/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      records_path: models            # fan out the per-model rows in each day's file
+      id_template: "{source}:{date}:{model}"
+      as_of_field: date
+      fields:
+        provider: {path: provider, render: text}
+        raw_tokens: {path: total, render: count}
+        cost_usd: {path: cost_usd, unit: usd}
+      # NOT covered here: the research-pipeline half of 23_LLM_Cost.py
+      # (per-call Anthropic spend from `decision_artifacts/_cost/{date}/cost.parquet`)
+      # — s3-records reads json/csv only; that source is Parquet. See
+      # alpha-engine-config-I6805.
+
+  - name: llm-usage-plan
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: claude_code_usage/
+      kind: signal                   # one Signal per (source, date) — the flat
+                                      # Claude Max 20x quota view, distinct from
+                                      # llm-cost-personal above (not a fork —
+                                      # different billing mechanism, #59 §Cluster B)
+      question: >-
+        How much of the flat Claude Max 20x subscription quota has been used,
+        and cache efficiency?
+      key_pattern: "claude_code_usage/(?P<source>[^/]+)/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      id_template: "{source}:{date}"  # whole-body — no per-model fan-out
+      as_of_field: date
+      fields:
+        wet: {path: wet}
+        cache_read_input_tokens: {path: cache_read_input_tokens, render: count}
+        cache_creation_input_tokens: {path: cache_creation_input_tokens, render: count}
+
+  - name: expenses
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: expenses/
+      # A single well-known object (rewritten twice daily), not a dated
+      # partition — the pattern names no groups, and id_template below
+      # draws entirely on the record's own fields instead.
+      key_pattern: "expenses/latest\\.json$"
+      kind: signal                   # one Signal per provider row
+      question: >-
+        Which external providers are trending over/under their monthly
+        budget, and what will each cost by month-end?
+      records_path: providers
+      id_template: "{key}:{period}"   # provider_key : billing period
+      as_of_field: as_of
+      state_field: pace               # over / under / null
+      fields:
+        mtd_cost_usd: {path: mtd_cost_usd, unit: usd}
+        status: {path: status, render: text}
+        source: {path: source, render: text}
+
+  - name: backlog-groom
+    kind: s3-records
+    enabled: false
+    produces: [run]
+    config:
+      bucket: your-research-bucket
+      prefix: groom/
+      kind: run                      # one Run per groom/PR-sweep invocation
+      question: >-
+        Did the groom actually engage each queued backlog issue this run,
+        and is the backlog draining?
+      key_pattern: "groom/(?P<date>[^/]+)/(?P<run_id>[^/]+)\\.json$"
+      id_template: "{date}:{run_id}"
+      as_of_field: run_start
+      # No single status field on the raw artifact (§5.1: Run resolves
+      # through §8.3's closed twelve and must carry one) — a groom run
+      # that wrote its artifact at all completed; `floor_fail` below is
+      # the degradation signal, surfaced as its own field rather than
+      # folded into state.
+      state_default: HEALTHY
+      fields:
+        run_kind: {path: run_kind, render: text}
+        engaged: {path: engaged, render: count}
+        floor: {path: floor, render: count}
+        undispositioned: {path: undispositioned, render: count}
+        floor_fail: {path: floor_fail, render: text}
+
+  # 54_PR_Pipeline reads the SAME groom/{date}/*.json artifacts as
+  # backlog-groom above (run_kind == "sweep"), a different aggregation
+  # (nousergon-console#59 explicitly keeps these as two panes). Its
+  # bucket/throughput/verdict counters are NOT plain JSON fields on the
+  # artifact, though — crucible-dashboard's loaders/pr_pipeline.py derives
+  # them by parsing `digest_markdown`'s prose bold-header sections
+  # (config#2709's own documented issue-text-vs-live-artifact gap).
+  # s3-records binds structured field paths only; it cannot replicate that
+  # parse. Wiring this pane for real needs EITHER the groom producer to also
+  # emit those counts as structured JSON (the correct root-cause fix) or a
+  # dedicated small parsing adapter mirroring pr_pipeline.py — tracked as
+  # alpha-engine-config-I6805, not built here.
+  - name: pr-pipeline
+    kind: s3-records
+    enabled: false
+    produces: [cycle]
+    config:
+      bucket: your-research-bucket
+      prefix: groom/
+      kind: cycle                    # one Cycle per sweep run
+      question: >-
+        How are PR-sweep cycles trending over 14 days — bucket sizes, merge
+        throughput, gate verdicts?
+      key_pattern: "groom/(?P<date>[^/]+)/(?P<run_id>[^/]+)\\.json$"
+      id_template: "{date}:{run_id}"
+      as_of_field: run_start
+      state_field: run_kind           # "sweep" vs "coverage" — verbatim (Cycle
+                                      # does not resolve through §8.3)
+      fields:
+        digest_issue: {path: digest_issue, render: link}
+        # bucket/throughput/verdict fields intentionally absent — see above.
+
+  - name: watch-status-sf
+    kind: s3-records
+    enabled: false
+    produces: [incident]
+    config:
+      bucket: your-research-bucket
+      prefix: consolidated/saturday_sf_watch/
+      kind: incident                 # one Incident per failure event
+      question: >-
+        What did the SF Watch / CI Watch agents do the last time a run
+        failed, and how well is watch performing?
+      key_pattern: "consolidated/saturday_sf_watch/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      records_path: events            # many events nested in one date's key —
+                                      # failure-driven: a date exists only
+                                      # where the pipeline actually failed
+      id_template: "{date}:{detected_at}"
+      as_of_field: detected_at
+      state_field: status             # FAILED / TIMED_OUT / ABORTED — verbatim
+      fields:
+        failed_state: {path: failed_state, render: text}
+        action: {path: action, render: text}
+        cause: {path: cause, render: text}
+
+  - name: watch-status-ci
+    kind: s3-records
+    enabled: false
+    produces: [incident]
+    config:
+      bucket: your-research-bucket
+      prefix: consolidated/ci_watch/
+      kind: incident                 # same shape, the CI Watch sibling log
+      question: >-
+        What did the SF Watch / CI Watch agents do the last time a run
+        failed, and how well is watch performing?
+      key_pattern: "consolidated/ci_watch/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      records_path: events
+      id_template: "{date}:{repo}:{run_id}"
+      state_field: action
+      fields:
+        repo: {path: repo, render: text}
+        workflow: {path: workflow, render: text}
+        diagnosis: {path: diagnosis, render: text}
 
   - name: pipelines
     kind: state-machine              # step functions / airflow / equivalent

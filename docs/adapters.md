@@ -197,12 +197,16 @@ trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
 | | |
 |---|---|
 | **Reads** | A Git host's issue/PR trackers (via `gh` by default) |
-| **Emits** | `decision`, `incident` |
+| **Emits** | `decision`, `incident`, `artifact` (PRs, when `include_prs: true`) |
 | **Cannot supply** | anything outside the tracker |
-| **Config** | `org`, `repos`, `incident_label` |
+| **Config** | `org`, `repos`, `incident_label`, `include_prs` |
 
-Identifiers are the tracker refs the host assigns — `<repo>-I<N>` /
-`<repo>-PR<N>` — never console-minted.
+Identifiers are the tracker refs the host assigns, never console-minted.
+Issues: `<repo>-I<N>`. With `include_prs: true`, an **open** PR joins the
+queue at `<repo>-PR<N>` — its own namespace, so an issue and a PR sharing a
+number never collide — and a **merged** PR becomes an Artifact at
+`<org>/<repo>#<N>`. A closed, unmerged PR answers neither "waiting on Brian"
+nor "what merged" and is not emitted. `include_prs` defaults false.
 
 ## `changelog-events`
 

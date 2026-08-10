@@ -245,8 +245,20 @@ link, or retire). Retirement PR issue: deliverable 4, depends on all 8 slices + 
 
 ## 6. Follow-up issues filed
 
-Filled in the PR that carries this document once filed — see the PR body / `alpha-engine-config#6131`
-comment for the issue list.
+All filed in `nousergon-console`, referencing this PR (#53):
+
+| # | Issue | Views | Resolves |
+|---|---|---|---|
+| [#54](https://github.com/nousergon/nousergon-console/issues/54) | Portfolio & Trading slice | 6 (S1) | Cluster C fork (§2) |
+| [#55](https://github.com/nousergon/nousergon-console/issues/55) | Research & Signals slice | 10 (S2) | — |
+| [#56](https://github.com/nousergon/nousergon-console/issues/56) | Predictor & Model Lifecycle slice | 7 (S3) | — |
+| [#57](https://github.com/nousergon/nousergon-console/issues/57) | Evaluation & Backtesting slice | 8 (S4) | possible Report_Card overlap |
+| [#58](https://github.com/nousergon/nousergon-console/issues/58) | Pipeline & Fleet Reliability slice | 8 (S5) | Cluster A fork (§2) |
+| [#59](https://github.com/nousergon/nousergon-console/issues/59) | Fleet Ops Meta slice | 8 (S6) | Cluster B non-fork (§2) |
+| [#60](https://github.com/nousergon/nousergon-console/issues/60) | Incidents & Changelog slice | 4 (S7) | — |
+| [#61](https://github.com/nousergon/nousergon-console/issues/61) | Research Content & Scheduling slice | 7 (S8) | — |
+| [#62](https://github.com/nousergon/nousergon-console/issues/62) | Orphan disposition | 6 content orphans | §3 |
+| [#63](https://github.com/nousergon/nousergon-console/issues/63) | Retirement PR (deliverable 4) | all 75 | gated on #54–#62 |
 
 ---
 Prepared by: Claude Sonnet 5 via [Claude Code](https://claude.com/claude-code)

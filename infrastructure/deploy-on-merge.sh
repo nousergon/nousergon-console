@@ -3,7 +3,7 @@
 # Invoked via SSM (as root) from .github/workflows/deploy.yml AFTER the caller
 # has already pulled the repo to the target SHA.
 #
-# Steps: venv + editable install with [aws] extra · fetch private config.yaml
+# Steps: venv + editable install with [aws,calendar] extras · fetch private config.yaml
 # from SSM · install/refresh the systemd unit · restart · health-check :5180.
 #
 # Usage: bash infrastructure/deploy-on-merge.sh <target-sha>
@@ -50,8 +50,8 @@ if [ ! -x "$VENV_PY" ]; then
         || fail "venv create failed"
 fi
 "$VENV_PY" -m pip install -q --upgrade pip
-"$VENV_PY" -m pip install -q -e "$REPO_DIR[aws]" || fail "pip install failed"
-log "installed package with [aws] extra"
+"$VENV_PY" -m pip install -q -e "$REPO_DIR[aws,calendar]" || fail "pip install failed"
+log "installed package with [aws,calendar] extras"
 
 # 2. private config from SSM (never from the repo)
 if ! conf_body=$(aws ssm get-parameter --name "$CONFIG_SSM" --with-decryption \

@@ -23,7 +23,7 @@ under.
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `sql-query`, `object-store-records` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query`, `object-store-records` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -203,6 +203,96 @@ trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
 
 Identifiers are the tracker refs the host assigns — `<repo>-I<N>` /
 `<repo>-PR<N>` — never console-minted.
+
+## `changelog-events`
+
+| | |
+|---|---|
+| **Reads** | An S3-compatible prefix of one JSON object per event (schema 1.0.0) |
+| **Emits** | `incident` (plus `produces` edges from the body's own `source`/feeder field) |
+| **Cannot supply** | anything outside the event body |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `id_template`, `state_field` or `state_literal` |
+
+Why not `object-store` plus config: that adapter always projects keys to
+Artifacts and derives staleness from last-modified. This source's entity kind
+is `incident`, and its state is a declared field read from the body
+(`state_field`, e.g. `severity`) or a literal that applies to the whole
+prefix (`state_literal`) — never key staleness. Two configured instances of
+this one adapter cover both changelog prefixes: the raw event-lake
+(`changelog/entries/`, `state_field: severity`) and its vocab-quarantine
+sibling (`changelog/quarantine/`, `state_literal: quarantined`) — one schema,
+one adapter, per `policy-shared-code`'s second-adoption rule.
+
+`id_template` builds the identifier from the `key_pattern`'s named groups —
+`{event_id}` when the source assigns a unique id across the whole prefix,
+`{day}/{event_id}` when uniqueness only holds within a day partition (the
+quarantine case). Lineage is derived from schema 1.0.0's own `source` field
+(the feeder that wrote the entry), never inferred: no per-deployment config
+needed because the schema itself already names the producer.
+
+## `changelog-retro-feed`
+
+| | |
+|---|---|
+| **Reads** | ONE S3-compatible JSON document containing a pre-grouped array |
+| **Emits** | `incident` (one per group, `{subsystem}\|{summary}` id) |
+| **Cannot supply** | narrative for a group nobody has written up yet |
+| **Config** | `bucket`, `key`, `cadence` |
+
+The opposite shape from `changelog-events`: one key holds many entities,
+already grouped by an upstream aggregator. State is `ready-for-retro` /
+`needs-triage` from the document's own `has_writeup` flag — not a member of
+observability-policy.md §8.3's twelve, because a retro group is not a
+component. A `ready_for_retro` entry with a matching group is merged in as
+`detail.resolution`; the adapter performs no filtering of its own — the
+upstream emitter already excludes non-incident events before writing the
+document.
+
+## `s3-records`
+
+| | |
+|---|---|
+| **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
+| **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
+| **Cannot supply** | anything not reachable by a declared field `path` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
+
+Generalizes `object-store` past "keys → Artifact" to **any** kind, by making
+the entity kind and every field a config declaration instead of Python. Reach
+for this over a bespoke adapter when a source you do not control already
+carries everything a row needs — the same JSON/CSV a legacy consumer reads —
+so nothing about *what a field means* is compiled in (§2.3's "one adapter per
+source" is satisfied by config, not by a new module per source instance).
+
+Three ways one key's body becomes N entities, picked by which config key is
+present (`records_path` and `array_fields` are mutually exclusive; `format:
+csv` ignores both — the whole file is the record list):
+
+- **Whole-body** (none declared): the object is the one record — one Cycle
+  per `consolidated/{date}/eod_report.json`.
+- **`records_path`** (a dotted path to a JSON array of objects): fan out one
+  entity per list item — one Decision per ticker in an artifact's `tickers`
+  array.
+- **`array_fields`** (a list of equal-length array field names): zip
+  index-wise into one record per index — a source with no per-instance object
+  at all, only parallel arrays (`tickers`, `target_weights`, …).
+- **`format: csv`**: each row is a record.
+
+`id_template` is a Python format string resolved against regex named groups
+∪ body-level scalars ∪ the current record (record wins on collision) — e.g.
+`"{date}:{ticker}"`. Every declared `fields` entry's `path` resolves against
+the **nested** merge of body ∪ record, so a field can reach either a
+per-record value or a body-level one (`optimizer_cfg.risk_aversion`) through
+the same dotted syntax. `question` (`console-policy.md` §4.4) is carried
+through as a synthetic `text` declared field, so the pane renders the
+question with no kind-specific rendering code.
+
+`state_field`/`state_default` resolve the same way: for `component`/`run`
+(§8.3's twelve-state kinds) the resolved value is mapped through `State` by
+name, defaulting to `UNREPORTED` when nothing matches; for every other kind
+the raw value renders verbatim (§5.1's "otherwise the value itself"). With
+neither declared, state falls back to the `object-store` freshness convention
+(`fresh`/`stale`/`no-freshness-stamp`/`no-cadence-declared`/`unreadable`).
 
 ## `sql-query`
 

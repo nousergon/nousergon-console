@@ -152,7 +152,29 @@ class Supervisor:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._current = builder()
+        try:
+            self._current = builder()
+        except Exception as exc:  # noqa: BLE001 - symmetric with refresh_once
+            # A collision (or any other build failure) in the FIRST build used
+            # to propagate out of __init__ and crash the process before it
+            # ever bound a port — the one case where a source failure emptied
+            # the surface entirely (§2.3), because there was no previous good
+            # index for refresh_once()'s handling to fall back to. An empty,
+            # freshly-marked-stale Index is that fallback: the monitoring
+            # surface itself comes up and says what's wrong, rather than the
+            # deploy just failing silently from the outside.
+            # Local import: graph.py imports FROM this module (AdapterFetch,
+            # BuildInfo), so a module-level import here would be circular.
+            from .graph import Index
+
+            self._current = Index()
+            self._current.build_info = replace(
+                self._current.build_info,
+                built_at=now_iso(self._clock),
+                refresh_seconds=refresh_seconds,
+            )
+            _mark_stale(self._current, self._clock, exc)
+            return
         _stamp(self._current, self._clock, refresh_seconds)
 
     @property

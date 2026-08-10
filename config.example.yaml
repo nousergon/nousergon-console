@@ -138,6 +138,31 @@ adapters:
       open_time: "06:30"
       open_timezone: America/Los_Angeles
 
+  # A family of per-date JSON snapshots under one prefix, projected onto typed
+  # Signal or Run entities with declared fields — e.g. a champion/challenger
+  # leaderboard (kind: signal) or a per-cycle training-gate result (kind:
+  # run). Same lister shape as `object-store`, plus a content read.
+  - name: model-cycle-results
+    kind: dated-snapshot
+    enabled: false
+    produces: [run]
+    config:
+      bucket: your-bucket
+      prefix: models/training_summary_
+      key_pattern: "models/training_summary_(?P<date>[^/]+)\\.json"
+      id_template: "model-training:{date}"
+      kind: run
+      # A raw value the document carries -> one of §8.3's twelve. Never
+      # hardcoded (§2.3) — a value with no entry renders DEGRADED, named, not
+      # a fabricated green.
+      state_field: promoted
+      state_map:
+        "True": HEALTHY
+        "False": DEGRADED
+      fields:
+        ic_gate_passed: {path: ic_gate_passed, render: text}
+      cadence: 7d
+
   # A SQLite-shaped database a research/scoring pipeline already writes to.
   # Each named query's rows become the entities — a Decision per (ticker,
   # eval_date), a Run per (team, eval_date) — never a fact about one

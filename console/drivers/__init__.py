@@ -16,7 +16,7 @@ from typing import Any
 
 from ..model.descriptor import Binding, Descriptor
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
-from . import emitted_envelope, log_source, object_store, sql_source
+from . import document_fields, emitted_envelope, log_source, object_store, sql_source
 from .base import Cost, DriverResult
 
 #: shape name → module. Adding a source SHAPE is adding a row here; adding a
@@ -27,6 +27,7 @@ DRIVERS: dict[str, Any] = {
     emitted_envelope.name: emitted_envelope,
     log_source.name: log_source,
     sql_source.name: sql_source,
+    document_fields.name: document_fields,
 }
 
 KNOWN_DRIVERS = frozenset(DRIVERS)

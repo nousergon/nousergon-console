@@ -23,7 +23,7 @@ under.
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query`, `object-store-records` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query`, `object-store-records`, `dated-snapshot` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -247,6 +247,35 @@ component. A `ready_for_retro` entry with a matching group is merged in as
 `detail.resolution`; the adapter performs no filtering of its own — the
 upstream emitter already excludes non-incident events before writing the
 document.
+
+## `dated-snapshot`
+
+| | |
+|---|---|
+| **Reads** | An S3-compatible bucket/prefix of per-date or per-version JSON documents |
+| **Emits** | `signal` or `run`, **configured** per deployment — never guessed |
+| **Cannot supply** | a business verdict for an unmapped `run` state (renders `DEGRADED`, named, never a fabricated green) |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `id_template`, `kind` (`signal`\|`run`), `fields`, `state_field`, `state_map`, `cadence` |
+
+Same lister shape as `object-store` (a key plus an optional last-modified
+stamp), a different projection: where `object-store` stops at freshness
+(a key becomes an Artifact, "fresh"/"stale"), this reads each matched
+object's **content** and projects declared fields (§5.8) onto a typed entity —
+a champion/challenger leaderboard becoming one `Signal` per date, or a
+per-cycle training-gate result becoming one `Run` per date.
+
+`kind: run` resolves to `observability-policy.md` §8.3's twelve states
+(`Run` is in `COMPONENT_STATE_KINDS`); `state_field` + `state_map` are then
+**required**, config-declared (§2.3) — never hardcoded business logic in
+adapter source. An unmapped raw value renders `DEGRADED` with the raw value
+kept on `detail.raw_state`, never guessed green. `kind: signal` carries the
+source's own value verbatim (§5.1's second half, the same convention
+`pipeline-reliability`'s Signal entities use) — `state_field` is optional and
+defaults to `"reporting"`.
+
+A single broken snapshot (unreadable object, non-JSON body) is excluded from
+that pass and does not fail the whole source — a hundred other dated
+snapshots under the same prefix render fine (§2.3).
 
 ## `declared-registry`
 

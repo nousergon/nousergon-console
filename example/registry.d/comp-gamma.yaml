@@ -1,0 +1,26 @@
+# Example registry row — synthetic component, no fleet topology.
+#
+# Demonstrates a `metrics` binding to the `document-fields` driver: two
+# legacy JSON reports the component was already writing before it had a
+# console descriptor, each contributing a disjoint set of declared fields to
+# the same entity (nousergon-console#56's "two deliberately split sources of
+# truth" shape).
+component_id: comp-gamma
+owning_repo: example-repo
+substrate: batch-job
+origin: aws:batch:comp-gamma
+owner: example-owner
+lifecycle: in-service
+authority_tier: unknown
+metrics:
+  driver: document-fields
+  documents:
+    - key: "s3://your-bucket/comp-gamma/latest.json"
+      fields:
+        version: {path: version, render: text}
+        hit_rate: {unit: ratio, baseline: 0.55, render: ratio}
+    - key: "s3://your-bucket/comp-gamma/manifest.json"
+      fields:
+        promoted: {render: text}
+        last_trained: {render: text}
+  cadence_minutes: 1440

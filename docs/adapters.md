@@ -255,7 +255,7 @@ document.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
 
 Generalizes `object-store` past "keys → Artifact" to **any** kind, by making
 the entity kind and every field a config declaration instead of Python. Reach
@@ -273,6 +273,15 @@ csv` ignores both — the whole file is the record list):
 - **`records_path`** (a dotted path to a JSON array of objects): fan out one
   entity per list item — one Decision per ticker in an artifact's `tickers`
   array.
+- **`records_path` with a `*` segment, plus `group_field`**
+  (`nousergon-console#57`): `*` iterates a DICT at that point in the path
+  rather than indexing a named key, injecting its key under `group_field`
+  onto every record reached beneath it — the same mechanism reaches a nested
+  dict-then-array (`"tiles.*.components"`: a report card's per-tile
+  MetricRecords, tile name injected) and a dict OF records
+  (`"loops.*"`: an apply-audit's per-loop outcomes, loop id injected), since
+  neither shape is a JSON array at any single dotted path the plain
+  `records_path` case above can name.
 - **`array_fields`** (a list of equal-length array field names): zip
   index-wise into one record per index — a source with no per-instance object
   at all, only parallel arrays (`tickers`, `target_weights`, …).

@@ -16,6 +16,16 @@ different ways a body expresses that:
 - **List-of-dicts** (``records_path``, a dotted path to a JSON array of
   objects): fan out one entity per list item (`order_book_rationale`'s
   ``tickers`` array → one Decision per ticker).
+- **Grouped** (``records_path`` containing a ``*`` segment, plus
+  ``group_field``): a ``*`` iterates a DICT at that point in the path rather
+  than indexing a named key, injecting its key under ``group_field`` into
+  every record it reaches — covers a nested dict-then-array
+  (``"tiles.*.components"``: a report card's per-tile MetricRecords, the
+  tile name injected onto each) and a dict OF records
+  (``"loops.*"``: an apply-audit's per-loop outcomes, the loop id injected)
+  with one mechanism, since neither is a JSON array at any single dotted
+  path the plain ``records_path`` case above can reach
+  (`nousergon-console#57`).
 - **Parallel arrays** (``array_fields``, a list of equal-length array field
   names): zip index-wise into one record per index (`optimizer_shadow`'s
   ``tickers``/``target_weights``/… arrays → one Decision per ticker with no
@@ -190,6 +200,9 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
     records_path = config.get("records_path")
     array_fields = config.get("array_fields")
     if records_path:
+        parts = str(records_path).split(".")
+        if "*" in parts:
+            return _explode_grouped(parsed, parts, config.get("group_field")), parsed
         raw_list = _get_path(parsed, records_path)
         if not isinstance(raw_list, list):
             raise TypeError(f"records_path {records_path!r} is not a list")
@@ -205,6 +218,41 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
         return rows, parsed
     # Whole-body mode: the object IS the one record.
     return [{}], parsed
+
+
+def _explode_grouped(cur: Any, parts: list[str], group_field: str | None) -> list[dict]:
+    """Resolve a `records_path` containing a `*` segment (module docstring's
+    "Grouped" shape). `*` iterates a dict's keys — rather than indexing a
+    named key like every other segment — injecting each key under
+    `group_field` into every record reached beneath it. The terminal value
+    may be a list (each dict item becomes one record) or a dict (a
+    dict-of-records: each VALUE becomes one record, its key injected the
+    same way `*` injects one mid-path) — both are "a dict names several
+    records" at different depths, so one walk covers both."""
+    out: list[dict] = []
+    _walk_grouped(cur, parts, group_field, out)
+    return out
+
+
+def _walk_grouped(cur: Any, parts: list[str], group_field: str | None, out: list[dict]) -> None:
+    if not parts:
+        if isinstance(cur, dict):
+            out.append(cur)
+        elif isinstance(cur, list):
+            out.extend(item for item in cur if isinstance(item, dict))
+        return
+    part, rest = parts[0], parts[1:]
+    if part == "*":
+        if not isinstance(cur, dict):
+            return
+        for key, value in cur.items():
+            before = len(out)
+            _walk_grouped(value, rest, group_field, out)
+            for rec in out[before:]:
+                rec.setdefault(group_field or "group", key)
+        return
+    if isinstance(cur, dict) and part in cur:
+        _walk_grouped(cur[part], rest, group_field, out)
 
 
 def _get_path(obj: Any, path: str) -> Any:

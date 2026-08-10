@@ -7,7 +7,16 @@ components in UNREPORTED. Both are computable against a fixture/example
 registry now (nousergon-console#16) — the real fleet registry is tracked
 separately (alpha-engine-config-I6115) — and §11's N/A-NOT-IMPL carve-out
 does NOT cover either number, so an unreadable registry must render an
-honest "not computable" shape instead of the reserved placeholder token.
+honest not-computable shape instead of the reserved placeholder token.
+
+`Index.population_completeness()` itself landed in `nousergon-console-PR65`
+(`nousergon-console-I5`, §4.3's decision-queue/completeness-ratio work) with
+a 4-key shape (`rendered`/`of`/`ratio`/`unregistered`; `of`/`ratio` both
+`None` signals "not computable"). This file extends that already-shipped
+implementation to also degrade honestly when a SECOND, declared registry
+fails to read — PR65's own `_saw_ok_declaration` check goes true the moment
+ONE registry succeeds, which would otherwise silently report a ratio as if a
+second, broken registry did not exist.
 """
 from __future__ import annotations
 
@@ -36,7 +45,6 @@ def test_population_completeness_over_a_healthy_registry_is_1(tmp_path):
                            "id_field": "component_id"}}
     index = build_index(config)
     result = index.population_completeness()
-    assert result["computable"] is True
     assert result["ratio"] == 1.0
     assert result["rendered"] == 2
     assert result["of"] == 2
@@ -66,12 +74,12 @@ def test_population_completeness_names_its_denominator_not_total_entities():
 def test_population_completeness_uncomputable_with_no_registry():
     idx = Index()
     result = idx.population_completeness()
-    assert result["computable"] is False
+    assert result["ratio"] is None
+    assert result["of"] is None
     assert "N/A-NOT-IMPL" not in str(result)  # the reserved token is forbidden here (§11)
-    assert result["reason"]
 
 
-def test_population_completeness_uncomputable_when_a_registry_is_unreadable(tmp_path):
+def test_population_completeness_uncomputable_when_a_second_registry_is_unreadable(tmp_path):
     reg = tmp_path / "registry.d"
     reg.mkdir()
     _write_registry(str(reg), {"comp-one": {}})
@@ -85,9 +93,12 @@ def test_population_completeness_uncomputable_when_a_registry_is_unreadable(tmp_
     result = index.population_completeness()
     # A second, unreadable registry must not let the ratio silently report 1.0
     # over just the registry that happened to work (§5.3 — no aggregate over
-    # incomplete input).
-    assert result["computable"] is False
-    assert "secondary" in result["reason"]
+    # incomplete input). Without this PR's addition, `_saw_ok_declaration`
+    # alone would have let this through: `primary` succeeded, so the old
+    # guard passed, and the ratio would have been 1/1 as though `secondary`
+    # were never configured at all.
+    assert result["ratio"] is None
+    assert result["of"] is None
 
 
 def test_population_completeness_reports_unregistered_separately(tmp_path):

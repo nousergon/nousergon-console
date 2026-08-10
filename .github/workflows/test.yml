@@ -25,3 +25,13 @@ jobs:
         run: pip install -e ".[test]"
       - name: Test
         run: python -m pytest tests/ -q
+      - name: Build the index against the example config (§3.6 build-time gate)
+        # nousergon-console-I4, ruled 2026-08-10: a namespace collision is
+        # supposed to "fail the build loudly" — this is that build. Runs the
+        # same `console index` a deploy would, against the tracked
+        # config.example.yaml fixture, so a collision introduced by a config
+        # or adapter change is caught on the PR rather than discovered live.
+        # (The real fleet config.yaml is gitignored and unavailable here —
+        # this is the fixture-scale gate the runtime degrade in
+        # console/index/build.py backs up for anything this can't see.)
+        run: python -m console index --config config.example.yaml

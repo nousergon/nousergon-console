@@ -158,6 +158,30 @@ def test_a_failed_refresh_keeps_the_previous_index_AND_MARKS_IT():
     assert "SURFACE STALE" in html_freshness(served, T0)
 
 
+def test_a_collision_on_the_FIRST_build_degrades_instead_of_crashing():
+    """nousergon-console-I4 / §3.6, ruled 2026-08-10: a first-boot build
+    failure used to propagate out of `Supervisor.__init__` and crash the
+    process before it ever served a page — the one case where a source
+    failure genuinely emptied the surface (§2.3), because there was no
+    previous good index for the refresh-time handling to fall back to.
+    Symmetric with `test_a_failed_refresh_keeps_the_previous_index_AND_MARKS_IT`:
+    the console itself must come up and say what's wrong, never just fail to
+    start.
+    """
+    def builder():
+        raise RuntimeError("namespace collision: two kinds for id 'x'")
+
+    sup = Supervisor(builder, refresh_seconds=60, clock=_clock([0]))
+    served = sup.current
+    assert served is not None                # the process came up
+    assert served.entity("anything") is None  # honestly empty, not fabricated
+    info = served.build_info
+    assert info.stale_since is not None
+    assert "namespace collision" in info.last_error
+    assert info.is_stale(T0)
+    assert "SURFACE STALE" in html_freshness(served, T0)
+
+
 def test_a_failed_refresh_is_stale_even_with_no_declared_cadence():
     """The index is older than it claims by an amount nobody has measured."""
     info = BuildInfo(built_at=T0.isoformat(), stale_since=T0.isoformat(),

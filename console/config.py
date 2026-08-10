@@ -23,6 +23,7 @@ from .adapters import (
     local_units,
     object_store,
     pipeline_reliability,
+    s3_records,
     state_machine,
     yaml_directory,
 )
@@ -46,6 +47,7 @@ ADAPTERS = {
     "changelog-events": changelog_events,
     "changelog-retro-feed": changelog_retro_feed,
     "dated-snapshot": dated_snapshot,
+    "s3-records": s3_records,
 }
 
 

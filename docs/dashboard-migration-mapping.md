@@ -304,5 +304,20 @@ than a new issue, per this issue's own instructions.** Re-check before merging:
 `gh pr list --repo nousergon/nousergon-console --search "docs migration" --state all` and read
 each PR body's own findings section.
 
+## 8. Cluster C fork resolved (§54)
+
+`host_execution.py`'s live routing still delegates to `Optimizer.py` (confirmed against
+`crucible-dashboard`'s own `tests/test_host_execution_wiring.py::test_optimizer_tabs_removed_from_eval_host`,
+which pins `30_Optimizer_Risk.py`/`32_Optimizer_Decision.py` as retired FROM the eval host and asserts
+`host_execution.py`'s tab list is `[Order Book, Execution, Optimizer]` — not the split pair). `Optimizer.py`
+itself imports and `_exec_view`s `30_`/`32_` as two lenses (`st.segmented_control`), so the mtime-vs-routing
+disagreement §2/Cluster C flagged resolves as: **`Optimizer.py` wins** — the numbered files are its
+lens implementations, not independent survivors. S1 migrates the Portfolio & Trading slice as **5** panes,
+not 6: `1_Performance`, `6_Execution`, `16_Order_Book_Rationale`, and one merged Optimizer Decision-kind
+pane carrying both the per-ticker sizing lens and the per-day risk-lever lens (the latter as a Signal-kind
+entity on the same artifact, since a lever time-series and a per-ticker decision are genuinely different
+questions per §4.4, even sourced from one key). See `nousergon-console#54`'s closing PR for the adapter
+config and row-contract verification.
+
 ---
 Prepared by: Claude Sonnet 5 via [Claude Code](https://claude.com/claude-code)

@@ -260,5 +260,49 @@ All filed in `nousergon-console`, referencing this PR (#53):
 | [#62](https://github.com/nousergon/nousergon-console/issues/62) | Orphan disposition | 6 content orphans | §3 |
 | [#63](https://github.com/nousergon/nousergon-console/issues/63) | Retirement PR (deliverable 4) | all 75 | gated on #54–#62 |
 
+## 7. Orphan disposition (issue #62) — final calls
+
+Each of the 6 content orphans from §3, read in full (not just their docstring) and disposed per
+§9.5 ("named explicitly, never silently dropped"). None resolves as a console pane — each is
+confirmed, on closer reading, to be genuinely outside the seven entity kinds (§2.1); none is
+recategorized. No pane code accompanies this PR because none of the 6 gets a pane.
+
+| View | Disposition | Reachability after retirement | Mechanism |
+|---|---|---|---|
+| `10_Architecture.py` | **Retire.** Static topic page (hardcoded mermaid + module cards), no per-instance identifier — confirmed against §4.4's "topic, not a question" test. The page's own docstring/footer already treats itself as disposable: it points readers at `OVERVIEW.md` / `nousergon-docs` "so it doesn't drift out of sync," per config#1989's ruling to delete hand-kept prose in favor of a pointer. | `nousergon-docs` README / `OVERVIEW.md` (public repo, GitHub-native markdown rendering) | Zero new mechanism — the pointer this page already uses is the disposition. |
+| `50_System_State.py` | **Retire.** Hand-authored prose invariants/arcs. Doesn't reduce to any of the seven kinds; forcing it into an entity page truncates the prose or invents an eighth kind (forbidden, §2.1). | `alpha-engine-config/private-docs/SYSTEM_STATE.md` (+ `system_state/*.md`), viewed via GitHub's native markdown rendering of the private repo | Zero new mechanism — already reachable today by anyone with repo access; nothing changes. |
+| `51_Architecture_Doc.py` | **Retire.** Static markdown mirror of design rationale, not state. | `alpha-engine-config/private-docs/ARCHITECTURE.md`, GitHub-native rendering | Zero new mechanism. |
+| `52_Experiments_Log.py` | **Retire.** Static markdown mirror, append-only ledger prose (distinct from `46_Experiments.py`, a live Signal pane — confirmed not conflated). | `alpha-engine-config/private-docs/EXPERIMENTS.md`, GitHub-native rendering | Zero new mechanism. |
+| `53_Status_Generated.py` | **Retire the page now; do not retire the generator.** Confirmed live consumers of `STATUS_GENERATED.md` beyond the dashboard: `alpha-engine-config/AGENTS.md` documents it as the derived-state source of truth, `.github/groom-conflict-resolve-prompt.md` names it explicitly, and `SYSTEM_STATE_changelog.md` shows it regenerated as a routine step of nearly every session wind-down. Retiring `regenerate-status.yml` today would break those. Content is redistributable — per-repo HEAD/lib-pin state becomes a Component facet once each repo carries a §2.6 descriptor; open PRs are already Decision entities the console indexes (`49_Decision_Queue.py` → S6 pane, `47_Merged_PRs.py` → S6 pane). | Short-term: `alpha-engine-config/private-docs/STATUS_GENERATED.md`, GitHub-native rendering (same as the three docs above). Long-term: Component/Decision facets on the console, once descriptor rollout covers the repos it currently summarizes. | Short-term: zero new mechanism. Long-term: tracked as [`alpha-engine-config-I6800`](https://github.com/nousergon/alpha-engine-config/issues/6800) — decompose-and-retire, gated on descriptor coverage, not actionable yet. |
+| `Crucible_Overview.py` | **Retire, no replacement pane.** Not a doc mirror — a tear-sheet landing page compositing Evaluation/Validation/Execution/Trust facts at once. Its constituent facts are already assigned to panes in the Evaluation & Backtesting slice (issue #57 — `Report_Card.py`, `Crucible_Trust.py`, `Crucible_Validation.py`, `Crucible_Evaluation.py`). A bespoke cross-linking landing view is not worth building on top of that: `console-policy.md` §4.3 already mandates an exception-first landing view (everything not `HEALTHY`, transparency-gap count, decision queue, completeness ratio) which serves the "at a glance, is it doing well" need structurally, without a per-experiment narrative tear-sheet — and adding a second landing-style pane is exactly what §4.4 forbids ("same-question, different-place is a fork"). | Individual facts: the S4 panes named above, plus §4.3's generated landing view for the aggregate "is anything wrong" question. | Zero new mechanism — §4.3 already covers this; no gap. |
+
+**Orphan count (§9 item 5) re-measured:** 0 panes silently dropped — all 6 have an explicit, recorded disposition above. 5 of 6 retire outright with reachability preserved by the owning repo's existing GitHub rendering (nothing new built). 1 (`53_Status_Generated.py`) retires as a *page* now while its *generator* stays live, pending a tracked future decomposition.
+
+### Policy gap flagged, not resolved here
+
+`console-policy.md` has **no carve-out** for "content that must stay reachable but is not a fact
+about any of the seven entity kinds" — confirmed by reading §2.1, §3.5, and §4.1–§4.5 in full.
+§3.5 forbids a hand-maintained nav entry; §2.1 forbids an eighth kind; §4.1's three tiers
+(Overview → Domain → Entity) are generated from the registry, with no room for a hand-placed
+static link. The disposition above works around this cleanly for all 6 cases — each source doc
+already lives in a repo with its own native GitHub rendering, so "stays reachable" costs zero
+console-side mechanism — but that is a favorable accident of *these* 6 orphans (each has an
+existing home with a public or private GitHub repo behind it), not a structural answer. A future
+orphan without an existing repo-native home would have nowhere to go. Filed as
+[`alpha-engine-config-I6801`](https://github.com/nousergon/alpha-engine-config/issues/6801) for Brian to rule whether this needs a narrow policy
+amendment or an explicit "permanently out of scope" ruling.
+
+### TODO — orphans flagged by sibling slices after this PR
+
+None as of this PR's opening (2026-08-10) — `gh pr list --search "docs migration"` shows only #53
+(the mapping table itself, merged) matching that search; the 8 domain-slice PRs (#54–#61) were
+still in flight and none had posted an orphan flag in their PR body at the time this was written.
+**If a sibling slice PR (#54–#61) surfaces an additional orphan — a view that looked
+entity-shaped in the mapping table but wasn't, once its builder read the source — add it to the
+table above with the same disposition columns, as a follow-up commit on this branch/PR rather
+than a new issue, per this issue's own instructions.** Re-check before merging:
+`gh pr list --repo nousergon/nousergon-console --search "docs migration" --state all` and read
+each PR body's own findings section.
+
 ---
 Prepared by: Claude Sonnet 5 via [Claude Code](https://claude.com/claude-code)

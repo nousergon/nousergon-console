@@ -163,6 +163,166 @@ adapters:
         ic_gate_passed: {path: ic_gate_passed, render: text}
       cadence: 7d
 
+  # A SQLite-shaped database a research/scoring pipeline already writes to.
+  # Each named query's rows become the entities — a Decision per (ticker,
+  # eval_date), a Run per (team, eval_date) — never a fact about one
+  # already-known component (that shape is the `sql-source` DRIVER, bound
+  # from a component descriptor, not this adapter). See docs/adapters.md.
+  - name: research-db
+    kind: sql-query
+    enabled: false
+    produces: [signal, decision, run]
+    config:
+      db_path: /path/to/research.db
+      queries:
+        # Signal: one row per (ticker, score_date) from the pipeline's own
+        # persisted scoring history — the direct source of truth for "how has
+        # this ticker's score evolved."
+        - name: score-history
+          entity_kind: signal
+          query: "SELECT symbol AS ticker, score_date, score FROM score_performance"
+          id_template: "{ticker}:{score_date}"
+          as_of_field: score_date
+        # A second claim about the SAME (ticker, score_date) identifier, from
+        # a different table — merges by identifier (§2.5), no join needed.
+        - name: investment-thesis
+          entity_kind: signal
+          query: "SELECT symbol AS ticker, date AS score_date, thesis_summary, conviction, price_target FROM investment_thesis"
+          id_template: "{ticker}:{score_date}"
+          as_of_field: score_date
+        # Decision: one row per (ticker, eval_date) that reached a CIO
+        # ruling, enriched with the scanner-stage funnel context via a SQL
+        # join rather than a second competing claim (two claims proposing
+        # different raw `state` values for one id would render a spurious
+        # §2.5 conflict — a join keeps it one row, one state).
+        - name: cio-decisions
+          entity_kind: decision
+          query: >-
+            SELECT c.ticker, c.eval_date, c.team_id, c.cio_decision, c.cio_rank,
+                   c.cio_conviction, c.final_score, c.rationale, s.sector,
+                   s.quant_filter_pass, s.filter_fail_reason
+            FROM cio_evaluations c
+            LEFT JOIN scanner_evaluations s
+              ON s.ticker = c.ticker AND s.eval_date = c.eval_date
+          id_template: "{ticker}:{eval_date}"
+          state_field: cio_decision
+          as_of_field: eval_date
+          facets: {team_id: team_id}
+        # Run: one row per (team_id, eval_date) — a team's weekly review
+        # cycle. Existence in `team_candidates` declares the cycle happened
+        # (`default_state`), since the table carries no separate status
+        # column; the candidate list rides along as a self-describing field
+        # via SQLite's own JSON aggregation, so no second query is needed for
+        # drill-to-rows (§3.4).
+        - name: sector-team-runs
+          entity_kind: run
+          query: >-
+            SELECT eval_date, team_id, COUNT(*) AS n_candidates,
+                   SUM(CASE WHEN team_recommended THEN 1 ELSE 0 END) AS n_recommended,
+                   json_group_array(json_object(
+                     'ticker', ticker, 'quant_rank', quant_rank,
+                     'quant_score', quant_score, 'qual_score', qual_score,
+                     'team_recommended', team_recommended
+                   )) AS candidates_json
+            FROM team_candidates
+            GROUP BY eval_date, team_id
+          id_template: "{team_id}:{eval_date}"
+          default_state: HEALTHY
+          as_of_field: eval_date
+          facets: {team_id: team_id}
+          json_columns: [candidates_json]
+        # Run: one row per eval_date — the weekly scanner cycle, with the
+        # full per-ticker gate result carried as a declared field rather than
+        # a separate per-ticker entity (Universe Board, below, already owns
+        # the per-ticker Artifact view of the same gate).
+        - name: scanner-cycles
+          entity_kind: run
+          query: >-
+            SELECT eval_date, COUNT(*) AS n_total,
+                   SUM(CASE WHEN quant_filter_pass THEN 1 ELSE 0 END) AS n_quant_pass,
+                   SUM(CASE WHEN liquidity_pass THEN 1 ELSE 0 END) AS n_liquidity_pass,
+                   SUM(CASE WHEN volatility_pass THEN 1 ELSE 0 END) AS n_volatility_pass,
+                   SUM(CASE WHEN balance_sheet_pass THEN 1 ELSE 0 END) AS n_balance_sheet_pass,
+                   json_group_array(json_object(
+                     'ticker', ticker, 'sector', sector, 'tech_score', tech_score,
+                     'quant_filter_pass', quant_filter_pass,
+                     'filter_fail_reason', filter_fail_reason
+                   )) AS tickers_json
+            FROM scanner_evaluations
+            GROUP BY eval_date
+          id_template: "{eval_date}"
+          default_state: HEALTHY
+          as_of_field: eval_date
+          json_columns: [tickers_json]
+        # Signal: one row per (eval_date, focus_team_id) — the weekly focus-
+        # list summary. Empty before this pipeline's schema migration date is
+        # an honest absence (zero rows), rendered by the generic list pane as
+        # "no entities" rather than a bespoke placeholder — no special-cased
+        # code needed for a column that simply has not started being written
+        # yet.
+        - name: focus-list-weekly
+          entity_kind: signal
+          query: >-
+            SELECT eval_date, COALESCE(focus_team_id, override_team_id) AS focus_team_id,
+                   COUNT(*) AS n_focus_list,
+                   SUM(CASE WHEN agent_override THEN 1 ELSE 0 END) AS n_overrides
+            FROM scanner_evaluations
+            WHERE focus_team_id IS NOT NULL OR agent_override = 1
+            GROUP BY eval_date, COALESCE(focus_team_id, override_team_id)
+          id_template: "{eval_date}:{focus_team_id}"
+          as_of_field: eval_date
+          facets: {focus_team_id: focus_team_id}
+
+  # A single snapshot object whose body is a scored universe — one entity per
+  # record inside it, not one entity for the object as a whole (that shape is
+  # `object-store`, above). See docs/adapters.md.
+  - name: universe-board
+    kind: object-store-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-bucket
+      keys: ["scanner/universe/latest.json"]
+      entity_kind: artifact
+      records_path: stocks
+      id_template: "{ticker}"
+      body_as_of_field: as_of
+      state_field: gate.quant_filter_pass   # dotted path into the record
+      facets: {sector: sector}
+
+  - name: attractiveness-trends
+    kind: object-store-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-bucket
+      keys: ["scanner/universe/trajectory/latest.json"]
+      entity_kind: signal
+      records_path: stocks
+      # `as_of` is a top-level body field, not a per-record one — injected
+      # into each record's format context (never overriding a genuine
+      # per-record field of the same name).
+      id_template: "{ticker}:{as_of}"
+      body_as_of_field: as_of
+      facets: {sector: sector}
+
+  # A dated family of Artifacts under one prefix — the EXISTING `object-store`
+  # adapter, reused rather than extended: the identifier IS the key, exactly
+  # what this adapter already projects, so a weekly universe-membership
+  # snapshot needs a config entry and no new code. Retention-bounded history
+  # (`console/history.py`, #48) then answers "what changed week to week" as a
+  # query over this Artifact's retained versions — not a bespoke churn
+  # adapter.
+  - name: universe-membership
+    kind: object-store
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-bucket
+      prefix: universe_membership/
+      key_pattern: "universe_membership/(?P<run_date>[^/]+)/membership\\.json"
+      cadence: 1w
+
   - name: schedules
     kind: local-units                # systemd / launchd / cron
     enabled: false
@@ -207,6 +367,51 @@ adapters:
       bucket: your-research-bucket
       key: changelog/retro_candidates.json
       cadence: 1d                     # emitted daily by the docs aggregator
+
+  # `declared-registry` generalises `yaml-directory` to "one YAML document,
+  # many entries, any kind" — for a registry that is not shaped one-file-per-
+  # component. Two example bindings below: a declared inventory of Artifacts
+  # (merges against an `object-store` adapter pointed at the same keys to
+  # compute MISSING — declared and never observed) and a declared inventory
+  # of Decisions (a rollout's own gate state; nothing else observes it, so
+  # this claim renders unmerged).
+  - name: artifact-registry
+    kind: declared-registry
+    enabled: false
+    produces: [artifact]
+    config:
+      path: ./example/artifact-registry.yaml   # one YAML doc: a list or an id-keyed mapping
+      kind: artifact
+      id_field: key                            # each entry's S3 key, matching object-store's own id
+      default_state: absent                    # the honest answer when nothing else claims this key
+
+  - name: observation-registry
+    kind: declared-registry
+    enabled: false
+    produces: [decision]
+    config:
+      path: ./example/observation-registry.yaml
+      kind: decision
+      id_field: id
+      state_field: state                       # e.g. gated-off / gated-on / always-on, carried verbatim
+
+  # `sql-source` (the ADAPTER) enumerates a whole query the console's config
+  # names, returning MANY rows → many entities of a configured kind — the
+  # opposite direction from `drivers/sql_source.py`'s per-component, one-row
+  # DRIVER. `component_id_field` is optional: when a row names the component
+  # it is about, the derived `measures` edge makes it appear as a facet on
+  # that Component's own entity page with no bespoke rendering.
+  - name: data-integrity
+    kind: sql-source
+    enabled: false
+    produces: [signal]
+    config:
+      database: /path/to/research.db           # sqlite by default; inject `connect` for another engine
+      query: "SELECT phase, ticker, disagreement_pct FROM data_integrity_signals"
+      kind: signal
+      id_fields: [phase, ticker]
+      field_descriptors:
+        disagreement_pct: {unit: ratio, baseline: 0.0}
 
   # ---------------------------------------------------------------------
   # s3-records — a source you do not control the shape of, whose objects
@@ -336,6 +541,173 @@ adapters:
         active_share_vs_spy: {path: diagnostics.active_share_vs_spy, unit: ratio}
         turnover_one_way: {path: diagnostics.turnover_one_way, unit: ratio}
         expected_alpha: {path: diagnostics.expected_alpha}
+
+  # Evaluation & Backtesting slice (nousergon-console#57). Overlap
+  # investigation: the former `Report_Card.py` (module-rollup framing) and
+  # `Crucible_Evaluation.py` (per-tile metric-browser framing) both read this
+  # ONE artifact and carry the same MetricRecord fields — merged into one
+  # Signal-kind pane rather than two, per console-policy.md §4.4 ("same-
+  # question, different-place is a fork"): the generic Signal list (facetable
+  # by `tile`) plus each Signal's own entity page already serve both framings.
+  - name: crucible-report-card
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: evaluator/
+      kind: signal                     # one Signal per (tile, component)
+      question: >-
+        What is the current institutional grade (RED/WATCH/GREEN) for each
+        module/component, and why?
+      key_pattern: "evaluator/(?P<date>\\d{4}-\\d{2}-\\d{2})/report_card\\.json$"
+      # Grouped fan-out: neither a plain array nor parallel arrays reach
+      # this — `tiles` is a dict keyed by tile name, each value carrying its
+      # own `components` array. `*` iterates the dict; `group_field` injects
+      # the tile name onto every component record it reaches.
+      records_path: tiles.*.components
+      group_field: tile
+      id_template: "{tile}:{name}"
+      state_field: status              # RED / WATCH / GREEN / N/A, verbatim
+      fields:
+        value: {path: value}
+        ci_low: {path: ci_low}
+        ci_high: {path: ci_high}
+        n_samples: {path: n_samples, render: count}
+        target: {path: target}
+        red_line: {path: red_line}
+        trend: {path: trend_decoration, render: text}
+        criticality: {path: criticality, render: text}
+        reason: {path: status_reason, render: text}
+
+  - name: crucible-execution
+    kind: s3-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: artifact                   # one Artifact per (date, filename)
+      question: >-
+        For a selected backtest run, how good were entry/exit timing, and
+        did the risk guard add value?
+      # Alternation over the three JSON files this pane covers — one adapter
+      # instance, `filename` a named group available to id_template.
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/(?P<filename>trigger_scorecard|exit_timing|shadow_book)\\.json$"
+      id_template: "{date}:{filename}"
+      cadence: 7d
+
+  - name: crucible-execution-blotter
+    kind: s3-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: artifact                   # one Artifact per date's order blotter
+      question: >-
+        For a selected backtest run, what orders did the engine place?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/all_orders\\.csv$"
+      format: csv
+      id_template: "{date}:all_orders.csv"
+      cadence: 7d
+      state_default: reported
+
+  - name: crucible-validation
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: signal                     # one Signal per (backtest_date, check)
+      question: >-
+        For a selected backtest run, do integrity checks pass, and which
+        sub-scores predict the 21-day outcome?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/(?P<filename>pit_parity|sample_size|walk_forward_stability|optimizer_churn|attribution)\\.json$"
+      id_template: "{date}:{filename}"
+      state_field: status
+      cadence: 7d
+
+  - name: crucible-validation-signal-quality
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: backtest/
+      kind: signal                     # one Signal per (backtest_date, ticker)
+      question: >-
+        For a selected backtest run, which per-signal sub-scores predict the
+        21-day outcome?
+      key_pattern: "backtest/(?P<date>\\d{4}-\\d{2}-\\d{2})/signal_quality\\.csv$"
+      format: csv
+      id_template: "{date}:{ticker}"
+      cadence: 7d
+      state_default: reported
+
+  - name: crucible-feedback
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: config/apply_audit/
+      kind: decision                   # one Decision per (loop, as-of week)
+      question: >-
+        For each auto-apply optimizer loop, was this week's parameter change
+        promoted, blocked, or gated — why?
+      key_pattern: "config/apply_audit/latest\\.json$"
+      # `loops` is a DICT keyed by loop id, not an array — same grouped
+      # mechanism as `crucible-report-card`, one level shallower (no nested
+      # array beneath the `*`, so the terminal dict-of-records branch applies).
+      records_path: loops.*
+      group_field: loop
+      id_template: "{loop}:{as_of}"    # `as_of` is body-level, reachable via
+      state_field: outcome             # the same body_root merge every shape uses
+      fields:
+        blocked_by: {path: blocked_by, render: text}
+        consecutive_blocked_weeks: {path: consecutive_blocked_weeks, render: count}
+
+  - name: crucible-feedback-configs
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: config/autoapply/
+      kind: decision                   # presence/absence IS the decision outcome
+      question: >-
+        Which live auto-apply config artifacts has the optimizer promoted?
+      key_pattern: "config/autoapply/(?P<config_name>executor_params|scoring_weights|entry_thresholds|exit_rules)\\.json$"
+      id_template: "config:{config_name}"
+      state_default: promoted          # this adapter only sees keys that EXIST;
+      # a config that has never promoted never writes this key at all — its
+      # "NEVER WRITTEN" state is the ABSENCE of an entity here, not a value on
+      # one, exactly like `object-store`'s "declared and not there" convention.
+
+  - name: eval-quality
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: decision_artifacts/_eval/
+      kind: signal                     # one Signal per (agent, criterion, judge)
+      question: >-
+        Are LLM-agent outputs holding rubric-scored quality over time, per
+        agent/criterion, and did a prompt bump move scores?
+      key_pattern: "decision_artifacts/_eval/.*\\.json$"
+      # judge_model/judged_agent_id sit BESIDE dimension_scores on the
+      # enclosing body, not inside each score — reachable via body_root, same
+      # as `as_of` above; no separate mechanism needed for that half.
+      records_path: dimension_scores
+      id_template: "{judged_agent_id}:{dimension}:{judge_model}"
+      fields:
+        score: {path: score}
+        reasoning: {path: reasoning, render: text}
+        rubric_id: {path: rubric_id, render: text}
+        rubric_version: {path: rubric_version, render: text}
 
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing

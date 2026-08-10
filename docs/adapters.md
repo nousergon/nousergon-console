@@ -22,8 +22,8 @@ under.
 
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
-| `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `dated-snapshot` |
+| `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query`, `object-store-records`, `dated-snapshot` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -277,6 +277,62 @@ A single broken snapshot (unreadable object, non-JSON body) is excluded from
 that pass and does not fail the whole source — a hundred other dated
 snapshots under the same prefix render fine (§2.3).
 
+## `declared-registry`
+
+| | |
+|---|---|
+| **Reads** | One YAML document (a list of entries, or an id-keyed mapping) |
+| **Emits** | Any one kind, configured — never Component/Run state, only a declared `lifecycle` |
+| **Cannot supply** | state for a Component/Run target (a declaration never supplies state) |
+| **Config** | `path`, `kind`, `id_field`, `state_field`, `default_state`, `entries_field` |
+
+Generalises `yaml-directory` ("a directory of files, one Component per file")
+to "one file, many entries, any kind" — for a registry that does not have that
+shape, e.g. a declared inventory of load-bearing Artifacts or a declared
+inventory of Decision-kind rollout gates.
+
+**This is what makes "missing" computable for an Artifact.** `object-store`
+can only say what a bucket prefix actually contains; it has no notion of what
+*should* be there. A `declared-registry` DECLARATION claim, merged (§2.5) by
+identifier against an `object-store` OBSERVATION claim pointed at the same
+keys, is what turns "declared, never showed up in a listing" into a rendered
+fact. Configure `default_state` to the same token `object-store`'s own driver
+uses for a confirmed-missing artifact (`"absent"`) so the single surviving
+claim — when nothing observes it — reads correctly on the exception list.
+
+A target kind of Decision needs no merge at all: an observation registry's own
+gate value (gated-off / gated-on / always-on) *is* the fact nothing else
+observes, so the lone claim renders unmerged.
+
+## `sql-source` (adapter)
+
+| | |
+|---|---|
+| **Reads** | One SQL query (sqlite by default; inject `connect` for another engine) |
+| **Emits** | Any one kind, configured, one entity per returned row |
+| **Cannot supply** | anything outside the query's own columns |
+| **Config** | `database`, `query`, `kind`, `id_fields`, `id_separator`, `state_field`, `default_state`, `component_id_field`, `field_descriptors` |
+
+The `drivers/sql_source.py` **driver** is one component's own descriptor
+naming one parameterless `SELECT` whose single row becomes that component's
+metrics. This adapter is the same source shape, opposite direction (same
+precedent as `object-store` existing as both an adapter and a driver): the
+console's own config names a query that returns **many** rows, each becoming
+one entity keyed by a composite identifier (`id_fields`, joined by
+`id_separator`) — for a question that does not belong to any one component's
+descriptor, e.g. a per-(phase, ticker) data-integrity Signal.
+
+Every non-identifier column becomes a §5.8 declared field automatically —
+`field_descriptors` lets a deployment supply `unit`/`baseline`/`render` for a
+column that needs one; without it the field still renders, undecorated,
+never dropped.
+
+`component_id_field` is optional: when a row names the component it is
+about (e.g. a `process_id` column on an SLA hit-rate row), the adapter derives
+a `measures` edge from the row's Signal to that Component. The index derives
+the reverse (`measured-by`), so the Signal appears as a related entity — a
+facet — on the Component's own entity page with no new rendering path.
+
 ## `s3-records`
 
 | | |
@@ -284,7 +340,7 @@ snapshots under the same prefix render fine (§2.3).
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
 
 Generalizes `object-store` past "keys → Artifact" to **any** kind, by making
 the entity kind and every field a config declaration instead of Python. Reach
@@ -302,6 +358,15 @@ csv` ignores both — the whole file is the record list):
 - **`records_path`** (a dotted path to a JSON array of objects): fan out one
   entity per list item — one Decision per ticker in an artifact's `tickers`
   array.
+- **`records_path` with a `*` segment, plus `group_field`**
+  (`nousergon-console#57`): `*` iterates a DICT at that point in the path
+  rather than indexing a named key, injecting its key under `group_field`
+  onto every record reached beneath it — the same mechanism reaches a nested
+  dict-then-array (`"tiles.*.components"`: a report card's per-tile
+  MetricRecords, tile name injected) and a dict OF records
+  (`"loops.*"`: an apply-audit's per-loop outcomes, loop id injected), since
+  neither shape is a JSON array at any single dotted path the plain
+  `records_path` case above can name.
 - **`array_fields`** (a list of equal-length array field names): zip
   index-wise into one record per index — a source with no per-instance object
   at all, only parallel arrays (`tickers`, `target_weights`, …).
@@ -322,6 +387,70 @@ name, defaulting to `UNREPORTED` when nothing matches; for every other kind
 the raw value renders verbatim (§5.1's "otherwise the value itself"). With
 neither declared, state falls back to the `object-store` freshness convention
 (`fresh`/`stale`/`no-freshness-stamp`/`no-cadence-declared`/`unreadable`).
+
+## `sql-query`
+
+| | |
+|---|---|
+| **Reads** | Named `SELECT` queries against a SQLite-shaped database |
+| **Emits** | `signal`, `decision`, `run` (raw-value kinds; `component`/`run` need an explicit `state_map` or `default_state`) |
+| **Cannot supply** | anything outside the configured query's own columns |
+| **Config** | `db_path`, `queries` (`name`, `entity_kind`, `query`, `id_template`, `state_field`, `state_map`, `default_state`, `as_of_field`, `evidence_template`, `facets`, `detail_columns`, `json_columns`) |
+
+Distinct from the `sql-source` **driver**: that driver reads one row bound to
+one already-known component, from a spec in a component descriptor (a file
+committed beside the component — a public repo means the spec itself must
+never carry a credential, hence its `credential` indirection). This adapter
+is the many-row counterpart, used when a query's rows ARE the entities — a
+Signal per ticker-date, a Decision per ticker-eval_date, a Run per team
+cycle. Its config lives in the console's own gitignored `config.yaml`, so a
+literal `db_path` is the same shape as `object-store`'s literal `bucket` — no
+credential indirection needed at this layer.
+
+Every query is validated as one parameterless `SELECT` before anything runs.
+Two claims from different queries about the SAME identifier merge by
+identifier (§2.5) — useful when two tables each know something about one
+row; a query proposing a *different* raw `state` for that identifier
+produces a §2.5 conflict, so prefer a SQL join over two competing claims when
+one row's state must stay singular.
+
+`entity_kind: run`/`component` resolve to §8.3's closed vocabulary, never a
+raw string — via `state_map` (raw column value → state name) or
+`default_state` (a row's mere presence declares this state, for a query that
+enumerates completed cycles with no failure column of their own). Neither is
+hardcoded here: which opinion a schema licenses belongs in the query
+binding's config. A row resolving neither renders `UNREPORTED` and is named
+in `unavailable`.
+
+`json_columns` decodes a column holding a JSON string (e.g. SQLite's own
+`json_group_array(json_object(...))` aggregate) into a structured `detail`
+value — the mechanism a `GROUP BY` query uses to carry a drill-to-rows list
+(§3.4) inside one entity's row, with no second query and no bespoke
+rendering.
+
+## `object-store-records`
+
+| | |
+|---|---|
+| **Reads** | One or more explicitly-named JSON objects |
+| **Emits** | `artifact`, `signal`, `decision`, `incident`, `cycle` (raw-value kinds only — `component`/`run` are rejected at fetch time) |
+| **Cannot supply** | anything outside the body |
+| **Config** | `bucket`, `keys`, `entity_kind`, `records_path`, `id_template`, `body_as_of_field`, `state_field`, `default_state`, `facets`, `evidence_template` |
+
+Why not `object-store` plus config: that adapter projects a key's *existence*
+onto one Artifact. This adapter reads a key's *content*, finds a configured
+list of records inside the body (`records_path`, a dotted path), and
+projects EACH RECORD into its own entity — the shape a snapshot artifact
+takes when its value is a scored universe (one row per ticker) rather than a
+single fact about the object. Same "same source shape, different
+projection" split as `checks-envelope` vs. `object-store`.
+
+`id_template` and `state_field` (dotted path) read from the record itself; a
+top-level body field (`body_as_of_field`, default `as_of`) is injected into
+every record's format context under `as_of` — but only when the record
+carries no such key of its own, so a genuine per-record field is never
+overwritten. Nested sub-objects (a record's own `gate`, `pillars`, `metrics`)
+pass into `detail` untouched.
 
 ## `local-units`
 

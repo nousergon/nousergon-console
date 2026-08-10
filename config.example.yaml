@@ -343,6 +343,51 @@ adapters:
       key: changelog/retro_candidates.json
       cadence: 1d                     # emitted daily by the docs aggregator
 
+  # `declared-registry` generalises `yaml-directory` to "one YAML document,
+  # many entries, any kind" — for a registry that is not shaped one-file-per-
+  # component. Two example bindings below: a declared inventory of Artifacts
+  # (merges against an `object-store` adapter pointed at the same keys to
+  # compute MISSING — declared and never observed) and a declared inventory
+  # of Decisions (a rollout's own gate state; nothing else observes it, so
+  # this claim renders unmerged).
+  - name: artifact-registry
+    kind: declared-registry
+    enabled: false
+    produces: [artifact]
+    config:
+      path: ./example/artifact-registry.yaml   # one YAML doc: a list or an id-keyed mapping
+      kind: artifact
+      id_field: key                            # each entry's S3 key, matching object-store's own id
+      default_state: absent                    # the honest answer when nothing else claims this key
+
+  - name: observation-registry
+    kind: declared-registry
+    enabled: false
+    produces: [decision]
+    config:
+      path: ./example/observation-registry.yaml
+      kind: decision
+      id_field: id
+      state_field: state                       # e.g. gated-off / gated-on / always-on, carried verbatim
+
+  # `sql-source` (the ADAPTER) enumerates a whole query the console's config
+  # names, returning MANY rows → many entities of a configured kind — the
+  # opposite direction from `drivers/sql_source.py`'s per-component, one-row
+  # DRIVER. `component_id_field` is optional: when a row names the component
+  # it is about, the derived `measures` edge makes it appear as a facet on
+  # that Component's own entity page with no bespoke rendering.
+  - name: data-integrity
+    kind: sql-source
+    enabled: false
+    produces: [signal]
+    config:
+      database: /path/to/research.db           # sqlite by default; inject `connect` for another engine
+      query: "SELECT phase, ticker, disagreement_pct FROM data_integrity_signals"
+      kind: signal
+      id_fields: [phase, ticker]
+      field_descriptors:
+        disagreement_pct: {unit: ratio, baseline: 0.0}
+
   # ---------------------------------------------------------------------
   # s3-records — a source you do not control the shape of, whose objects
   # already carry one-or-many per-instance records (nousergon-console#54).

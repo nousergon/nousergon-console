@@ -228,6 +228,135 @@ adapters:
       field_descriptors:
         disagreement_pct: {unit: ratio, baseline: 0.0}
 
+  # ---------------------------------------------------------------------
+  # s3-records — a source you do not control the shape of, whose objects
+  # already carry one-or-many per-instance records (nousergon-console#54).
+  # One adapter, configured five different ways below (Portfolio & Trading
+  # slice): whole-body (Performance), CSV rows (Execution), list-of-dicts
+  # fan-out (Order Book Rationale), and parallel-array fan-out, twice, for
+  # the Optimizer pane's two lenses on one artifact. See docs/adapters.md.
+  # ---------------------------------------------------------------------
+
+  - name: portfolio-performance
+    kind: s3-records
+    enabled: false
+    produces: [cycle]
+    config:
+      bucket: your-executor-bucket
+      prefix: consolidated/
+      kind: cycle                    # one Cycle per trading date
+      question: >-
+        What did the portfolio do (NAV, alpha, attribution, positions) over a
+        selected window, and does the as-of day's EOD report match the
+        emailed version?
+      key_pattern: "consolidated/(?P<date>\\d{4}-\\d{2}-\\d{2})/eod_report\\.json$"
+      id_template: "{date}"
+      as_of_field: generated_at
+      cadence: 1d
+      fields:
+        nav: {path: summary.nav, unit: usd}
+        daily_return_pct: {path: summary.daily_return_pct, unit: pct}
+        daily_alpha_pct: {path: summary.daily_alpha_pct, unit: pct}
+        spy_return_pct: {path: summary.spy_return_pct, unit: pct}
+
+  - name: portfolio-execution
+    kind: s3-records
+    enabled: false
+    produces: [run]
+    config:
+      bucket: your-executor-bucket
+      prefix: ""
+      kind: run                      # one Run per trade row
+      question: >-
+        What trades were executed, and how did fills/slippage compare to
+        intended price?
+      key_pattern: "trades_full\\.csv$"
+      format: csv
+      id_template: "{ticker}:{created_at}"
+      # A row in trades_full IS a completed execution — there is no separate
+      # per-trade status column, so every row maps to the same closed-vocab
+      # state (§5.1: Run resolves to a component state and must carry one).
+      state_default: HEALTHY
+      fields:
+        action: {path: action, render: text}
+        price_at_order: {path: price_at_order, unit: usd}
+        fill_price: {path: fill_price, unit: usd}
+
+  - name: portfolio-order-book-rationale
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: trades/order_book_rationale/
+      kind: decision                 # one Decision per (ticker, date)
+      question: >-
+        Why is each ticker in the universe in its current order-book state
+        today?
+      key_pattern: "trades/order_book_rationale/(?P<run_id>\\d{10})\\.json$"
+      records_path: tickers          # fan out the per-ticker list
+      id_template: "{calendar_date}:{ticker}"
+      state_field: terminal_state    # the source's own domain vocabulary
+      fields:
+        research_signal: {path: research.signal, render: text}
+        research_score: {path: research.score}
+        predictor_direction: {path: predictor.predicted_direction, render: text}
+        current_weight: {path: optimizer.current_weight, unit: ratio}
+        target_weight: {path: optimizer.target_weight, unit: ratio}
+
+  # Optimizer — merged Decision+Risk pane, two lenses on the SAME artifact
+  # (`predictor/optimizer_shadow/{date}.json`). host_execution.py's live
+  # routing still delegates to Optimizer.py, not to the split 30_/32_ pages
+  # (tests/test_host_execution_wiring.py pins this) — Optimizer.py wins the
+  # fork, so both lenses migrate as one Decision-kind pane with two facets
+  # rather than two separate panes.
+  - name: portfolio-optimizer-decision
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: predictor/optimizer_shadow/
+      kind: decision                 # per-ticker sizing lens
+      question: >-
+        Why did the MVO optimizer assign each stock the target weight it did
+        on a given day?
+      # The literal date segment excludes the latest.json sidecar and any
+      # replays/ re-run without this adapter knowing either convention.
+      key_pattern: "predictor/optimizer_shadow/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      array_fields: [tickers, sectors, eligibility, alpha_hat, current_weights, target_weights, stance_caps]
+      id_template: "{date}:{tickers}"
+      state_field: eligibility
+      fields:
+        sector: {path: sectors, render: text}
+        alpha_hat: {path: alpha_hat}
+        current_weight: {path: current_weights, unit: ratio}
+        target_weight: {path: target_weights, unit: ratio}
+        stance_cap: {path: stance_caps, unit: ratio}
+
+  - name: portfolio-optimizer-risk
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: predictor/optimizer_shadow/
+      kind: signal                   # per-day lever/risk-posture lens
+      question: >-
+        How have the optimizer's deployed risk levers and the live book's
+        realized risk moved day to day?
+      key_pattern: "predictor/optimizer_shadow/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      id_template: "{date}"          # whole-body — no fan-out
+      state_field: shadow_status
+      fields:
+        risk_aversion: {path: optimizer_cfg.risk_aversion}
+        tcost_bps: {path: optimizer_cfg.tcost_bps}
+        max_sector_pct: {path: optimizer_cfg.max_sector_pct, unit: pct}
+        portfolio_vol_ann: {path: diagnostics.portfolio_vol_ann, unit: ratio}
+        active_share_vs_spy: {path: diagnostics.active_share_vs_spy, unit: ratio}
+        turnover_one_way: {path: diagnostics.turnover_one_way, unit: ratio}
+        expected_alpha: {path: diagnostics.expected_alpha}
+
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing
 # dimension everywhere; omitting one does not hide the field.

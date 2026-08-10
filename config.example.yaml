@@ -41,6 +41,20 @@ console:
   # checkout.
   # repo_root: /path/to/nousergon-console
 
+  # §9.7 (surface liveness) — the component id of a watcher that runs OFF this
+  # surface and writes somewhere an adapter here reads. A surface cannot notice
+  # its own absence, so the console never computes this from its own uptime: it
+  # RENDERS the external watcher's verdict, and if the console is dark nothing
+  # renders at all. That is why the watcher's own alerting path, not this
+  # number, is what reaches a human — this number answers the different
+  # question, "is anything watching, and what did it last say?".
+  #
+  # Undeclared renders `N/A-NOT-IMPL`. DECLARED BUT ABSENT FROM THE INDEX
+  # renders `UNREPORTED`, which is a finding rather than a fallback: it means
+  # the watcher is not running, or nothing is configured to read what it
+  # writes.
+  # liveness_watcher: your-external-watcher-component-id
+
 # The component denominator. The console renders what it knows about and reports
 # the difference between this set and what it can actually see — that difference
 # is the transparency-gap count, and it is published on the surface.

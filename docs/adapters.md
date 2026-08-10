@@ -23,7 +23,7 @@ under.
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `git-host`, `object-store`, `sql-query`, `object-store-records` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
 
 Two rules fall out of this and neither is negotiable:
@@ -203,6 +203,70 @@ trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
 
 Identifiers are the tracker refs the host assigns — `<repo>-I<N>` /
 `<repo>-PR<N>` — never console-minted.
+
+## `sql-query`
+
+| | |
+|---|---|
+| **Reads** | Named `SELECT` queries against a SQLite-shaped database |
+| **Emits** | `signal`, `decision`, `run` (raw-value kinds; `component`/`run` need an explicit `state_map` or `default_state`) |
+| **Cannot supply** | anything outside the configured query's own columns |
+| **Config** | `db_path`, `queries` (`name`, `entity_kind`, `query`, `id_template`, `state_field`, `state_map`, `default_state`, `as_of_field`, `evidence_template`, `facets`, `detail_columns`, `json_columns`) |
+
+Distinct from the `sql-source` **driver**: that driver reads one row bound to
+one already-known component, from a spec in a component descriptor (a file
+committed beside the component — a public repo means the spec itself must
+never carry a credential, hence its `credential` indirection). This adapter
+is the many-row counterpart, used when a query's rows ARE the entities — a
+Signal per ticker-date, a Decision per ticker-eval_date, a Run per team
+cycle. Its config lives in the console's own gitignored `config.yaml`, so a
+literal `db_path` is the same shape as `object-store`'s literal `bucket` — no
+credential indirection needed at this layer.
+
+Every query is validated as one parameterless `SELECT` before anything runs.
+Two claims from different queries about the SAME identifier merge by
+identifier (§2.5) — useful when two tables each know something about one
+row; a query proposing a *different* raw `state` for that identifier
+produces a §2.5 conflict, so prefer a SQL join over two competing claims when
+one row's state must stay singular.
+
+`entity_kind: run`/`component` resolve to §8.3's closed vocabulary, never a
+raw string — via `state_map` (raw column value → state name) or
+`default_state` (a row's mere presence declares this state, for a query that
+enumerates completed cycles with no failure column of their own). Neither is
+hardcoded here: which opinion a schema licenses belongs in the query
+binding's config. A row resolving neither renders `UNREPORTED` and is named
+in `unavailable`.
+
+`json_columns` decodes a column holding a JSON string (e.g. SQLite's own
+`json_group_array(json_object(...))` aggregate) into a structured `detail`
+value — the mechanism a `GROUP BY` query uses to carry a drill-to-rows list
+(§3.4) inside one entity's row, with no second query and no bespoke
+rendering.
+
+## `object-store-records`
+
+| | |
+|---|---|
+| **Reads** | One or more explicitly-named JSON objects |
+| **Emits** | `artifact`, `signal`, `decision`, `incident`, `cycle` (raw-value kinds only — `component`/`run` are rejected at fetch time) |
+| **Cannot supply** | anything outside the body |
+| **Config** | `bucket`, `keys`, `entity_kind`, `records_path`, `id_template`, `body_as_of_field`, `state_field`, `default_state`, `facets`, `evidence_template` |
+
+Why not `object-store` plus config: that adapter projects a key's *existence*
+onto one Artifact. This adapter reads a key's *content*, finds a configured
+list of records inside the body (`records_path`, a dotted path), and
+projects EACH RECORD into its own entity — the shape a snapshot artifact
+takes when its value is a scored universe (one row per ticker) rather than a
+single fact about the object. Same "same source shape, different
+projection" split as `checks-envelope` vs. `object-store`.
+
+`id_template` and `state_field` (dotted path) read from the record itself; a
+top-level body field (`body_as_of_field`, default `as_of`) is injected into
+every record's format context under `as_of` — but only when the record
+carries no such key of its own, so a genuine per-record field is never
+overwritten. Nested sub-objects (a record's own `gate`, `pillars`, `metrics`)
+pass into `detail` untouched.
 
 ## `local-units`
 

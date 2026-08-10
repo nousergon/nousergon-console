@@ -19,7 +19,9 @@ from .adapters import (
     git_host,
     local_units,
     object_store,
+    object_store_records,
     pipeline_reliability,
+    sql_query,
     state_machine,
     yaml_directory,
 )
@@ -40,6 +42,8 @@ ADAPTERS = {
     "state-machine": state_machine,
     "pipeline-reliability": pipeline_reliability,
     "checks-envelope": checks_envelope,
+    "sql-query": sql_query,
+    "object-store-records": object_store_records,
 }
 
 

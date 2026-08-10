@@ -83,14 +83,21 @@ unknown rather than as 1.0.
 | | |
 |---|---|
 | **Reads** | An S3-compatible bucket/prefix |
-| **Emits** | `artifact` (and `produces` edges when the key pattern names a `component_id`) |
-| **Cannot supply** | envelope body fields (status, summary, findings) |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `cadence`, `staleness_factor` |
+| **Emits** | `artifact` (and `produces`/`consumed-by` edges when the key pattern names a `component_id`/`consumer_id`) |
+| **Cannot supply** | envelope body fields (status, summary, findings) — it never reads a body at all |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `cadence`, `staleness_factor`, `question` |
 
 Projects **keys → Artifact entities**. Staleness is derived from last-modified
 versus the configured cadence. Use this when the object *is* the fact (a
-report, a snapshot). When the object is a **check-result envelope** whose body
-carries status, prefer `checks-envelope`.
+report, a snapshot) and freshness alone answers the declared question — a
+markdown briefing, a parquet dump, or anything else `s3-records` cannot parse
+(it reads JSON/CSV only). A declared `question` (`nousergon-console#61`)
+renders as a synthetic `text` declared field, matching `s3-records`' own
+convention for the same config key — the two adapters deliberately share
+this one small piece of surface, since a source with no body to read still
+answers `console-policy.md` §4.4. When the object is a **check-result
+envelope** whose body carries status, prefer `checks-envelope`; when the
+question needs the object's own numbers, prefer `s3-records`.
 
 ## `checks-envelope`
 

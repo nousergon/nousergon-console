@@ -894,6 +894,202 @@ adapters:
         rubric_id: {path: rubric_id, render: text}
         rubric_version: {path: rubric_version, render: text}
 
+  # ---------------------------------------------------------------------
+  # Research Content & Scheduling slice (nousergon-console#61). Field names
+  # below are read from the real crucible-dashboard producer/loader pair for
+  # each view (14_RAG_Inventory.py, 17_Research_Briefing_Archive.py,
+  # 43_Distillation_Corpus.py, 44_Think_Tank.py,
+  # 45_Morning_Signal_Schedule.py + loaders/morning_signal_schedule.py,
+  # Daily_News.py, Director_Plan.py + components/director_plan.py), not
+  # invented.
+  # ---------------------------------------------------------------------
+
+  - name: rag-inventory
+    kind: s3-records
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: rag/manifest/
+      kind: artifact                  # one Artifact per manifest snapshot
+      question: >-
+        How large and fresh is the RAG corpus backing the research agents,
+        by source and ticker?
+      key_pattern: "rag/manifest/(?P<date>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      # Namespaced rather than a bare date (§3.6: one namespace, one name) —
+      # a bare `{date}` here collides with any OTHER enabled instance minting
+      # the same identifier for a different kind (e.g. a Cycle keyed by the
+      # same calendar date, per `morning-signal-schedule` below) the moment
+      # both are enabled against a real fleet. See nousergon-console#61 PR
+      # discussion — this is a general risk across this file's `{date}`-only
+      # id_templates, not specific to this entry.
+      id_template: "rag-manifest:{date}"
+      as_of_field: generated_at
+      cadence: 7d
+      # `by_source`/`by_ticker_coverage`/`embedding` are all nested dicts of
+      # aggregates (never per-doc or per-chunk content — the manifest's own
+      # disclosure boundary, respected here by construction: this adapter
+      # only ever reads the configured top-level/nested paths below, never
+      # arbitrary body content).
+      fields:
+        documents: {path: totals.documents, render: count}
+        chunks: {path: totals.chunks, render: count}
+        tickers: {path: totals.tickers, render: count}
+        tickers_with_any_doc: {path: by_ticker_coverage.tickers_with_any_doc, render: count}
+        p50_docs_per_ticker: {path: by_ticker_coverage.p50_docs_per_ticker, render: count}
+        embedding_model: {path: embedding.model, render: text}
+
+  - name: research-briefing-archive
+    kind: object-store               # markdown body — s3-records reads json/csv only
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: consolidated/
+      question: >-
+        What did the research morning-briefing email say on a given date,
+        vs. recent weeks?
+      key_pattern: "consolidated/(?P<date>[^/]+)/morning\\.md$"
+      cadence: 7d
+
+  - name: distillation-corpus
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: decision_artifacts/distillation/corpus_stats/
+      kind: signal                   # one Signal per corpus-stats snapshot
+      question: "How close is the SFT distillation corpus to the ~1000-pair kill-gate trigger?"
+      key_pattern: "decision_artifacts/distillation/corpus_stats/latest\\.json$"
+      # The key is a single well-known object (rewritten each Saturday), not
+      # a dated partition — same shape as `expenses` above. `generated_at` is
+      # a top-level body field (unlike `capture.last_captured_date`, which is
+      # nested and NOT reachable by `id_template` — only `fields`/`as_of_field`
+      # resolve dotted paths; `id_template` only sees flat top-level scalars).
+      id_template: "{generated_at}"
+      as_of_field: generated_at
+      cadence: 7d
+      fields:
+        # Static baseline, matching the source view's own fallback default
+        # (`trg.get("target_pairs", 1000)`) — s3-records' `fields.baseline` is
+        # a config literal, not a dynamically-read body value; if config#1542
+        # moves the target, this needs a config edit alongside it.
+        deduped_single_teacher_pairs:
+          path: trigger.deduped_single_teacher
+          unit: pairs
+          baseline: 1000
+          render: count
+        crossed: {path: trigger.crossed, render: text}
+
+  - name: think-tank-ratings
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: thinktank/ratings/
+      kind: signal                   # one Signal per (ticker, trading_day)
+      question: >-
+        How does the daily think tank's independent rating compare to the
+        scanner's attractiveness score?
+      key_pattern: "thinktank/ratings/(?P<trading_day>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      # `rows` is a ticker-keyed OBJECT, not an array (load_thinktank_ratings()
+      # → `{"rows": {"AAPL": {...}, ...}}`) — the grouped `*` mechanism (same
+      # as `crucible-feedback`'s `loops.*` above) covers a dict-of-records at
+      # one level, with no nested array beneath it.
+      records_path: rows.*
+      group_field: ticker
+      id_template: "{trading_day}:{ticker}"
+      cadence: 1d          # declared, so staleness is computable (§5.2)
+      fields:
+        rating: {path: rating, unit: score, render: value}
+        attractiveness_score: {path: attractiveness_score, unit: score, render: value}
+        # Already computed upstream (crucible-research thinktank/analyst.py)
+        # — rendered rather than re-derived.
+        delta_vs_scanner: {path: rating_minus_attractiveness, render: value}
+
+  # Read-only by design (`console-policy.md` §5.6, `nousergon-console#61`):
+  # the real source is a calendar EDITOR (a streamlit-calendar write-back
+  # UI over `schedule/schedule.json`). This slice renders what is scheduled
+  # and whether it aired; the write path stays in the authoring tool — "the
+  # console renders; it never owns." A date with no entry (regular
+  # programming, the default) has no Cycle entity here; that absence is the
+  # fact, not a gap (§5.5).
+  - name: morning-signal-schedule
+    kind: s3-records
+    enabled: false
+    produces: [cycle]
+    config:
+      bucket: your-podcast-bucket
+      prefix: schedule/
+      kind: cycle                    # one Cycle per scheduled date
+      question: "What is the morning-signal podcast scheduled to air on a given day?"
+      key_pattern: "schedule/schedule\\.json$"
+      # `entries` is a date-keyed OBJECT (`{"2026-08-09": {"mode": ..., ...}}
+      # — same grouped-object shape as `think-tank-ratings` above.
+      records_path: entries.*
+      group_field: date
+      id_template: "{date}"
+      state_field: mode               # override / extend / skip — verbatim
+      fields:
+        topic: {path: topic, render: text}
+        guidance: {path: guidance, render: text}
+
+  - name: morning-signal-applied
+    kind: s3-records
+    enabled: false
+    produces: [cycle]
+    config:
+      bucket: your-podcast-bucket
+      prefix: schedule/applied/
+      kind: cycle
+      # Applied markers are per (date, edition); normalized to the bare date
+      # so both editions' markers claim-merge (§2.5) onto the same Cycle id
+      # the manifest above declares — a deployment distinguishing editions
+      # separately would keep `edition` as its own facet instead.
+      key_pattern: "schedule/applied/(?P<date>\\d{4}-\\d{2}-\\d{2})(?:-(?:am|pm))?\\.json$"
+      id_template: "{date}"
+      state_default: aired            # this instance's whole claim IS "aired"
+
+  - name: daily-news
+    kind: object-store               # parquet body — s3-records reads json/csv only
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      prefix: data/news_articles_daily/
+      question: >-
+        What news stories, sentiment, and event flags fired today for the
+        held+tracked universe?
+      key_pattern: "data/news_articles_daily/(?P<run_id>[^/]+)_articles\\.parquet$"
+      cadence: 1d
+
+  - name: director-plan
+    kind: s3-records
+    enabled: false
+    produces: [decision]
+    config:
+      bucket: your-research-bucket
+      prefix: director/
+      kind: decision                 # one Decision per weekly action item
+      question: >-
+        What did the weekly Director advisory pass propose, and what
+        carried over from last week?
+      key_pattern: "director/(?P<run_date>[^/]+)/action_plan\\.json$"
+      records_path: action_items
+      # `action_items` carries no stable id of its own — unlike the
+      # companion `carryover_ledger.json`, whose items DO (`id`). `title` is
+      # the best available identifier: stable in practice, not GUARANTEED
+      # unique within one week's plan. Prefer a real id the moment the
+      # source publishes one (nousergon-console#61).
+      id_template: "{run_date}:{title}"
+      state_field: status             # proposed / carried_over / resolved / dropped
+      fields:
+        priority: {path: priority, render: text}
+        proposed_owner: {path: proposed_owner, render: text}
+        confidence: {path: confidence, unit: score, render: value}
+
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing
 # dimension everywhere; omitting one does not hide the field.

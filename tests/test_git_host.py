@@ -65,6 +65,93 @@ def test_missing_org_is_failed():
     assert result.status is AdapterStatus.FAILED
 
 
+# ------------------------------------------------------------- pull requests
+# nousergon-console#59: merged PRs (47_Merged_PRs, Artifact) and open PRs
+# joining the Decision Queue (49_Decision_Queue's own declared source names
+# "GitHub Issues/PRs", not issues alone).
+
+FIXTURE_PRS = [
+    {"number": 66, "title": "feat(index): compute the nine numbers",
+     "state": "MERGED", "labels": [], "updatedAt": "2026-08-10T15:48:23Z",
+     "url": "https://example/pull/66", "mergedAt": "2026-08-10T15:48:23Z"},
+    {"number": 70, "title": "wip: still cooking", "state": "OPEN",
+     "labels": [{"name": "gate:decision"}], "updatedAt": "2026-08-10T16:00:00Z",
+     "url": "https://example/pull/70", "mergedAt": None},
+    {"number": 55, "title": "abandoned approach", "state": "CLOSED",
+     "labels": [], "updatedAt": "2026-08-01T00:00:00Z",
+     "url": "https://example/pull/55", "mergedAt": None},
+]
+
+
+def _pr_lister(org, repo):
+    return FIXTURE_PRS
+
+
+def test_prs_not_fetched_by_default():
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"]},
+        lister=_lister, pr_lister=_pr_lister,
+    )
+    assert not any(e.id.startswith("some-repo-PR") for e in result.entities)
+    assert not any(e.id == "example-org/some-repo#66" for e in result.entities)
+
+
+def test_merged_pr_becomes_an_artifact():
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "include_prs": True},
+        lister=_lister, pr_lister=_pr_lister,
+    )
+    artifact = next(e for e in result.entities if e.id == "example-org/some-repo#66")
+    assert artifact.kind is Kind.ARTIFACT
+    assert artifact.state == "merged"
+
+
+def test_open_pr_becomes_a_decision_in_its_own_namespace():
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "include_prs": True},
+        lister=_lister, pr_lister=_pr_lister,
+    )
+    decision = next(e for e in result.entities if e.id == "some-repo-PR70")
+    assert decision.kind is Kind.DECISION
+    assert decision.state == "open"
+    assert decision.detail["is_pull_request"] is True
+
+
+def test_closed_unmerged_pr_is_not_emitted():
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "include_prs": True},
+        lister=_lister, pr_lister=_pr_lister,
+    )
+    assert not any("55" in e.id for e in result.entities)
+
+
+def test_pr_and_issue_numbers_do_not_collide():
+    """A repo's issue #12 and PR #12 must render as two distinct entities —
+    `<repo>-I<N>` vs `<repo>-PR<N>` are different identifiers on purpose."""
+    def lister(org, repo):
+        return [{"number": 66, "title": "an issue, not the PR above", "state": "OPEN",
+                  "labels": [], "updatedAt": "2026-08-10T00:00:00Z", "url": "https://example/66"}]
+
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "include_prs": True},
+        lister=lister, pr_lister=_pr_lister,
+    )
+    ids = {e.id for e in result.entities}
+    assert "some-repo-I66" in ids
+    assert "example-org/some-repo#66" in ids  # the merged PR, same number, different namespace
+
+
+def test_pr_lister_failure_does_not_drop_already_read_issues():
+    def boom(org, repo):
+        raise RuntimeError("PR search unreachable")
+
+    result = git_host.fetch(
+        {"org": "example-org", "repos": ["some-repo"], "include_prs": True},
+        lister=_lister, pr_lister=boom,
+    )
+    assert any(e.id == "some-repo-I327" for e in result.entities)
+
+
 def test_no_consumed_by_edges_declared_structural_leaf():
     """nousergon-console#52: git-host is a documented structural leaf for
     `consumed-by` — a Decision/Incident is a terminal record a human rules

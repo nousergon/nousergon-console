@@ -42,6 +42,25 @@ meaning (which JSON key means what) is compiled into this module. The
 synthetic ``text`` declared field so the pane renders it without any
 kind-specific rendering code.
 
+**Component/Run state** comes from ``state_field`` (a dotted path), resolved in
+this order: an optional ``state_map`` translating the source's own vocabulary
+(``{"passed": "HEALTHY", "failed": "FAILED"}``) into
+`observability-policy.md` §8.3's twelve, then a direct match on a state name.
+Three outcomes stay three facts (§5.5): **no value** renders ``UNREPORTED``
+(nothing reported), a value **nothing can interpret** renders ``DEGRADED``
+(something reported, uninterpretable — a finding), and a ``state_map`` entry
+naming a state that does not exist also renders ``DEGRADED``, because a typo in
+the map must never read as healthy.
+
+**One adapter, one source shape (§2.3).** Three sibling adapters implementing
+this same shape — ``object-store-records``, ``dated-snapshot`` and this one —
+were built within an hour by concurrent sessions on 2026-08-10, none able to see
+another's in-flight branch. Consolidated onto this module by Brian's ruling of
+2026-08-11 (`nousergon-console#79`): ``object-store-records``' explicit key list
+is a ``key_pattern`` matching one literal, and ``dated-snapshot``'s ``state_map``
+is folded in above. Two record-shaped adapters remain deliberately separate and
+are NOT candidates to fold here — see `docs/adapters.md` for the boundary test.
+
 Hermetic: listing and body-reading are two injectable callables so tests run
 over recorded fixtures with no live bucket (groom-sweep §8.1).
 """
@@ -310,7 +329,13 @@ def _one_entity(
     if question:
         fields_out["question"] = {"value": str(question), "render": "text"}
     for fname, spec in (config.get("fields") or {}).items():
-        val = _get_path(path_root, spec.get("path")) if spec.get("path") else None
+        # `path` defaults to the field's own name — folded in from
+        # `dated-snapshot` during the I79 consolidation. The overwhelmingly
+        # common case is a field named after the key it reads, and requiring
+        # `{path: x}` for a field called `x` is config noise that invites
+        # copy-paste errors. An explicit `path` still wins, so no existing
+        # configuration changes meaning.
+        val = _get_path(path_root, spec.get("path", fname))
         entry: dict[str, Any] = {"value": val, "render": spec.get("render", "value")}
         if spec.get("unit") is not None:
             entry["unit"] = spec["unit"]
@@ -318,11 +343,25 @@ def _one_entity(
             entry["baseline"] = spec["baseline"]
         fields_out[fname] = entry
 
+    # Facets are what §2.2 filters on uniformly across the whole index, so they
+    # are a different thing from declared `fields` (§5.8), which are rendered.
+    # Folded in from `object-store-records` during the I79 consolidation — it
+    # was that adapter's second real capability, alongside its explicit key
+    # list. A facet whose path resolves to nothing is OMITTED rather than
+    # written as an empty string: an absent facet and a facet whose value is ""
+    # filter differently, and inventing the second is a fabricated fact.
+    facets: dict[str, str] = {}
+    for facet_name, facet_path in (config.get("facets") or {}).items():
+        value = _get_path(path_root, str(facet_path))
+        if value is not None:
+            facets[str(facet_name)] = str(value)
+
     return Entity(
         kind=kind,
         id=entity_id,
         state=state,
         provenance=Provenance(source=source_label, as_of=as_of, evidence=evidence),
+        facets=facets,
         detail={"fields": fields_out, "key": key},
     )
 
@@ -345,11 +384,34 @@ def _resolve_state(
         # §5.1: Component/Run MUST carry one of the twelve — never a raw
         # passthrough (Entity.__post_init__ enforces this structurally).
         if raw is None:
+            # Nothing said anything. UNREPORTED is the honest answer, and it is
+            # a DIFFERENT fact from "said something I cannot interpret" below.
             return State.UNREPORTED
+        # `state_map` translates a source's own vocabulary (passed/failed,
+        # green/red) into the twelve. Folded in from `dated-snapshot` when the
+        # four record-shaped adapters were consolidated (I79, Brian ruling
+        # 2026-08-11): it was that adapter's one genuine capability, and
+        # without it this adapter can only read sources that already emit the
+        # twelve state names verbatim.
+        state_map = config.get("state_map") or {}
+        mapped = state_map.get(str(raw))
+        if mapped is not None:
+            try:
+                return State[str(mapped).upper()]
+            except KeyError:
+                # The MAP is wrong, not the source. Loud rather than silently
+                # green: a typo'd target state must not read as healthy.
+                return State.DEGRADED
         try:
             return State[str(raw).upper()]
         except KeyError:
-            return State.UNREPORTED
+            # A value arrived and nothing could interpret it. `dated-snapshot`
+            # resolved this to DEGRADED and this adapter to UNREPORTED; DEGRADED
+            # is the one kept, because the two cases are not the same fact
+            # (§5.5) and "reported something uninterpretable" is a finding,
+            # while UNREPORTED means nothing reported at all. The raw value
+            # stays on the entity so the reason is visible, not just the verdict.
+            return State.DEGRADED
 
     if raw is not None:
         return str(raw)

@@ -557,3 +557,188 @@ def test_produces_covers_every_kind_reachable_via_config():
     assert set(s3_records.produces) == {
         "component", "run", "cycle", "artifact", "signal", "decision", "incident",
     }
+
+
+# ---------------------------------------------------------------------------
+# state_map — folded in from `dated-snapshot` when the four record-shaped
+# adapters were consolidated (nousergon-console#79, Brian ruling 2026-08-11).
+#
+# It was that adapter's ONE genuine capability. Without it this adapter can only
+# read sources that already emit `observability-policy.md` §8.3's twelve state
+# names verbatim, which almost no real source does.
+#
+# The three outcomes below are three different facts (§5.5), and collapsing any
+# pair of them is how a surface reports health it does not have.
+# ---------------------------------------------------------------------------
+
+RUN_BODY_PASSED = {"finished_at": "2026-08-08T02:00:00+00:00", "outcome": "passed"}
+RUN_BODY_FAILED = {"finished_at": "2026-08-09T02:00:00+00:00", "outcome": "failed"}
+RUN_BODY_WEIRD = {"finished_at": "2026-08-10T02:00:00+00:00", "outcome": "banana"}
+RUN_BODY_SILENT = {"finished_at": "2026-08-10T02:00:00+00:00"}
+
+
+def _run_cfg(**extra):
+    return {
+        "bucket": BUCKET,
+        "prefix": "runs/",
+        "kind": "run",
+        "key_pattern": r"runs/(?P<date>\d{4}-\d{2}-\d{2})/result\.json$",
+        "id_template": "nightly@{date}",
+        "as_of_field": "finished_at",
+        "state_field": "outcome",
+        **extra,
+    }
+
+
+def _run_fetch(body, **extra):
+    return s3_records.fetch(
+        _run_cfg(**extra),
+        lister=lambda b, p: [("runs/2026-08-08/result.json", "2026-08-08T02:01:00+00:00")],
+        reader=lambda b, k: body,
+        now=NOW,
+    )
+
+
+def test_state_map_translates_the_sources_own_vocabulary():
+    result = _run_fetch(RUN_BODY_PASSED, state_map={"passed": "HEALTHY", "failed": "FAILED"})
+    assert list(_by_id(result).values())[0].state is State.HEALTHY
+
+
+def test_state_map_translates_a_failure_too():
+    result = _run_fetch(RUN_BODY_FAILED, state_map={"passed": "HEALTHY", "failed": "FAILED"})
+    assert list(_by_id(result).values())[0].state is State.FAILED
+
+
+def test_a_value_nothing_can_interpret_is_DEGRADED_not_unreported():
+    """`dated-snapshot` resolved this to DEGRADED and this adapter to
+    UNREPORTED. DEGRADED is the one kept: "reported something uninterpretable"
+    is a finding, while UNREPORTED means nothing reported at all."""
+    result = _run_fetch(RUN_BODY_WEIRD, state_map={"passed": "HEALTHY"})
+    assert list(_by_id(result).values())[0].state is State.DEGRADED
+
+
+def test_no_value_at_all_is_UNREPORTED_not_degraded():
+    """The other half of the same distinction — and the reason both exist."""
+    result = _run_fetch(RUN_BODY_SILENT, state_map={"passed": "HEALTHY"})
+    assert list(_by_id(result).values())[0].state is State.UNREPORTED
+
+
+def test_a_state_map_naming_a_nonexistent_state_is_DEGRADED_never_green():
+    """The MAP is wrong, not the source. A typo'd target must not read as
+    healthy — that is a fabricated green, produced by configuration."""
+    result = _run_fetch(RUN_BODY_PASSED, state_map={"passed": "TOTALLY_FINE"})
+    assert list(_by_id(result).values())[0].state is State.DEGRADED
+
+
+def test_a_direct_state_name_still_resolves_without_any_map():
+    """The pre-existing behaviour is unchanged: a source already emitting the
+    twelve needs no map, and adding one must not have made a map mandatory."""
+    result = _run_fetch({"finished_at": "2026-08-08T02:00:00+00:00", "outcome": "healthy"})
+    assert list(_by_id(result).values())[0].state is State.HEALTHY
+
+
+def test_the_map_wins_over_a_coincidental_direct_match():
+    """A source emitting `degraded` while its own map says that means FAILED is
+    a real case — the declared translation is authoritative, not the accident
+    that the raw value happens to be a state name."""
+    result = _run_fetch(
+        {"finished_at": "2026-08-08T02:00:00+00:00", "outcome": "degraded"},
+        state_map={"degraded": "FAILED"},
+    )
+    assert list(_by_id(result).values())[0].state is State.FAILED
+
+
+# ---------------------------------------------------------------------------
+# facets — folded in from `object-store-records` (I79).
+#
+# Facets are what §2.2 filters on uniformly across the whole index, which makes
+# them a different thing from declared `fields` (§5.8): fields are RENDERED,
+# facets are FILTERED ON. An adapter without facets produces entities the index
+# cannot narrow, which is why this could not simply be dropped.
+# ---------------------------------------------------------------------------
+
+UNIVERSE_BODY = {
+    "as_of": "2026-08-08T13:00:00+00:00",
+    "stocks": [
+        {"ticker": "AAA", "sector": "tech", "score": 0.9},
+        {"ticker": "BBB", "sector": "energy", "score": 0.4},
+        {"ticker": "CCC", "score": 0.1},
+    ],
+}
+
+
+def _universe_result(**extra):
+    cfg = {
+        "bucket": BUCKET,
+        "prefix": "scanner/",
+        "kind": "artifact",
+        "key_pattern": r"scanner/universe/latest\.json$",
+        "records_path": "stocks",
+        "id_template": "{ticker}",
+        "as_of_field": "as_of",
+        "facets": {"sector": "sector"},
+        **extra,
+    }
+    return s3_records.fetch(
+        cfg,
+        lister=lambda b, p: [("scanner/universe/latest.json", "2026-08-08T13:01:00+00:00")],
+        reader=lambda b, k: UNIVERSE_BODY,
+        now=NOW,
+    )
+
+
+def test_a_declared_facet_reaches_the_entity():
+    entities = _by_id(_universe_result())
+    assert entities["AAA"].facets["sector"] == "tech"
+    assert entities["BBB"].facets["sector"] == "energy"
+
+
+def test_a_facet_whose_path_resolves_to_nothing_is_OMITTED_not_empty():
+    """An absent facet and a facet whose value is "" filter differently, and
+    inventing the second is a fabricated fact about the record."""
+    entities = _by_id(_universe_result())
+    assert "sector" not in entities["CCC"].facets
+
+
+def test_a_facet_can_read_a_body_level_field_not_only_a_record_one():
+    """`path_root` merges body and record, so a facet may come from either —
+    the case `object-store-records` handled via its own body/record merge."""
+    entities = _by_id(_universe_result(facets={"sector": "sector", "cut": "as_of"}))
+    assert entities["AAA"].facets["cut"] == "2026-08-08T13:00:00+00:00"
+
+
+def test_no_facets_declared_leaves_the_entity_unfaceted_rather_than_failing():
+    entities = _by_id(_universe_result(facets={}))
+    assert entities["AAA"].facets == {}
+
+
+def test_an_explicit_single_key_is_reachable_as_a_key_pattern():
+    """The whole of `object-store-records`' `keys:` list capability: a literal
+    key is a pattern that matches exactly one thing. This is why that adapter
+    needed no feature folded in beyond facets."""
+    result = _universe_result()
+    assert {e.id for e in result.entities} == {"AAA", "BBB", "CCC"}
+    assert result.status is AdapterStatus.OK
+
+
+def test_a_declared_field_defaults_its_path_to_its_own_name():
+    """Folded in from `dated-snapshot` (I79). A field named after the key it
+    reads is the common case, and requiring `{path: x}` for a field called `x`
+    is config noise that invites copy-paste errors."""
+    entities = _by_id(_universe_result(fields={"score": {"render": "value"}}))
+    assert entities["AAA"].detail["fields"]["score"]["value"] == 0.9
+
+
+def test_an_explicit_path_still_wins_over_the_default():
+    """No existing configuration may change meaning because of the default."""
+    entities = _by_id(_universe_result(
+        fields={"score": {"path": "sector", "render": "text"}}))
+    assert entities["AAA"].detail["fields"]["score"]["value"] == "tech"
+
+
+def test_a_field_matching_nothing_renders_None_rather_than_vanishing():
+    """§5.5: a declared field whose source is absent is a fact about the
+    record. Dropping it would make 'not declared' and 'declared but missing'
+    the same shape."""
+    entities = _by_id(_universe_result(fields={"nope": {"render": "value"}}))
+    assert entities["AAA"].detail["fields"]["nope"]["value"] is None

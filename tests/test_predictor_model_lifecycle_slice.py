@@ -8,7 +8,7 @@ Two mechanisms, both generic and configured (no fleet topology, §1.1):
 
 - `document-fields` (driver): 7_Predictor.py -> one Component, two
   deliberately split source documents (nousergon-console#56's own gotcha).
-- `dated-snapshot` (adapter): 15_Regime.py / 35_Model_Zoo.py /
+- `s3-records` (adapter, was `dated-snapshot` until #79): 15_Regime.py / 35_Model_Zoo.py /
   36_Predictor_Training.py / 46_Experiments.py -> one Signal or Run per
   dated snapshot.
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from console.adapters import dated_snapshot, object_store
+from console.adapters import object_store, s3_records
 from console.config import build_index
 from console.drivers import document_fields
 from console.model.descriptor import Binding
@@ -119,7 +119,7 @@ def test_regime_signal_carries_weekly_state_verbatim():
     Component (regime state is a domain value, not a §8.3 member)."""
     def lister(bucket, prefix):
         return [("regime_substrate/2026-08-08.json", "2026-08-08T00:00:00Z")]
-    def reader(key):
+    def reader(bucket, key):  # s3-records' BodyReader is (bucket, key)
         return {
             "regime": "risk-on", "agrees_with_macro": True,
             "change_signal_firing": False,
@@ -136,7 +136,7 @@ def test_regime_signal_carries_weekly_state_verbatim():
         },
         "cadence": "7d",
     }
-    result = dated_snapshot.fetch(cfg, lister=lister, document_reader=reader, now=NOW)
+    result = s3_records.fetch(cfg, lister=lister, reader=reader, now=NOW)
     ent = result.entities[0]
     assert ent.kind is Kind.SIGNAL
     assert ent.id == "regime:2026-08-08"
@@ -152,7 +152,7 @@ def test_model_zoo_leaderboard_becomes_one_run_per_cycle():
     version_id) — a Run, resolving to §8.3."""
     def lister(bucket, prefix):
         return [("predictor/model_zoo/leaderboard/2026-08-08.json", "2026-08-08T06:00:00Z")]
-    def reader(key):
+    def reader(bucket, key):  # s3-records' BodyReader is (bucket, key)
         return {"champion_version": "v9", "promoted": True, "rotation_delta": "none"}
     cfg = {
         "bucket": "research", "prefix": "predictor/model_zoo/leaderboard/",
@@ -164,7 +164,7 @@ def test_model_zoo_leaderboard_becomes_one_run_per_cycle():
         "fields": {"champion_version": {"render": "text"}},
         "cadence": "1d",
     }
-    result = dated_snapshot.fetch(cfg, lister=lister, document_reader=reader, now=NOW)
+    result = s3_records.fetch(cfg, lister=lister, reader=reader, now=NOW)
     ent = result.entities[0]
     assert ent.kind is Kind.RUN
     assert ent.state is State.HEALTHY
@@ -178,7 +178,7 @@ def test_predictor_training_run_reflects_the_ic_gate_verdict():
     get promoted?' Identifier: (run_date, model_version) — a Run."""
     def lister(bucket, prefix):
         return [("predictor/metrics/training_summary_2026-08-08.json", "2026-08-08T06:00:00Z")]
-    def reader(key):
+    def reader(bucket, key):  # s3-records' BodyReader is (bucket, key)
         return {"ic_gate_passed": False, "promoted": False, "model_version": "v10"}
     cfg = {
         "bucket": "research", "prefix": "predictor/metrics/",
@@ -190,7 +190,7 @@ def test_predictor_training_run_reflects_the_ic_gate_verdict():
         "fields": {"ic_gate_passed": {"render": "text"}, "model_version": {"render": "text"}},
         "cadence": "7d",
     }
-    result = dated_snapshot.fetch(cfg, lister=lister, document_reader=reader, now=NOW)
+    result = s3_records.fetch(cfg, lister=lister, reader=reader, now=NOW)
     ent = result.entities[0]
     assert ent.kind is Kind.RUN
     assert ent.state is State.DEGRADED  # not promoted, named honestly
@@ -205,7 +205,7 @@ def test_experiments_producer_leaderboard_signal_names_the_live_arm():
     cohort_date) — a Signal."""
     def lister(bucket, prefix):
         return [("producer_leaderboard/2026-08-08.json", "2026-08-08T00:00:00Z")]
-    def reader(key):
+    def reader(bucket, key):  # s3-records' BodyReader is (bucket, key)
         return {"live_arm": "champion", "challenger_score": 0.31, "champion_score": 0.34}
     cfg = {
         "bucket": "research", "prefix": "producer_leaderboard/",
@@ -219,7 +219,7 @@ def test_experiments_producer_leaderboard_signal_names_the_live_arm():
         },
         "cadence": "1d",
     }
-    result = dated_snapshot.fetch(cfg, lister=lister, document_reader=reader, now=NOW)
+    result = s3_records.fetch(cfg, lister=lister, reader=reader, now=NOW)
     ent = result.entities[0]
     assert ent.kind is Kind.SIGNAL
     assert ent.state == "champion"

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from console.adapters import object_store, object_store_records, sql_query
+from console.adapters import object_store, s3_records, sql_query
 from console.model.kinds import Kind, State
 
 _CONFIG_EXAMPLE = Path(__file__).resolve().parent.parent / "config.example.yaml"
@@ -149,8 +149,13 @@ def test_universe_board_one_artifact_per_ticker():
             {"ticker": "ACME", "sector": "technology", "gate": {"quant_filter_pass": True}},
         ],
     }
-    result = object_store_records.fetch(
+    # Migrated from `object-store-records` to `s3-records` by #79's
+    # consolidation. The slice must render identically through the surviving
+    # adapter — same kind, same id, same raw state, same facets — which is what
+    # makes this a migration rather than a rewrite.
+    result = s3_records.fetch(
         UNIVERSE_BOARD["config"],
+        lister=lambda bucket, prefix: [("scanner/universe/latest.json", "2026-08-09T12:01:00Z")],
         reader=lambda bucket, key: body,
     )
     (entity,) = result.entities
@@ -166,8 +171,11 @@ def test_attractiveness_trends_keyed_by_ticker_and_as_of():
         "as_of": "2026-08-09T00:00:00Z",
         "stocks": [{"ticker": "ACME", "sector": "technology", "rising": True, "attr_slope": 0.4}],
     }
-    result = object_store_records.fetch(
+    result = s3_records.fetch(
         ATTRACTIVENESS_TRENDS["config"],
+        lister=lambda bucket, prefix: [
+            ("scanner/universe/trajectory/latest.json", "2026-08-09T00:01:00Z"),
+        ],
         reader=lambda bucket, key: body,
     )
     (entity,) = result.entities

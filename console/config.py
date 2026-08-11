@@ -18,12 +18,10 @@ from .adapters import (
     changelog_events,
     changelog_retro_feed,
     checks_envelope,
-    dated_snapshot,
     declared_registry,
     git_host,
     local_units,
     object_store,
-    object_store_records,
     pipeline_reliability,
     s3_records,
     sql_query,
@@ -50,12 +48,10 @@ ADAPTERS = {
     "checks-envelope": checks_envelope,
     "changelog-events": changelog_events,
     "changelog-retro-feed": changelog_retro_feed,
-    "dated-snapshot": dated_snapshot,
     "declared-registry": declared_registry,
     "sql-source": sql_source,
     "s3-records": s3_records,
     "sql-query": sql_query,
-    "object-store-records": object_store_records,
 }
 
 

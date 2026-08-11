@@ -342,7 +342,7 @@ adapters:
   # leaderboard (kind: signal) or a per-cycle training-gate result (kind:
   # run). Same lister shape as `object-store`, plus a content read.
   - name: model-cycle-results
-    kind: dated-snapshot
+    kind: s3-records                 # was `dated-snapshot` until #79
     enabled: false
     produces: [run]
     config:
@@ -351,6 +351,9 @@ adapters:
       key_pattern: "models/training_summary_(?P<date>[^/]+)\\.json"
       id_template: "model-training:{date}"
       kind: run
+      # No `records_path`: the object IS the entity (whole-body mode), which is
+      # the shape `dated-snapshot` existed for.
+      #
       # A raw value the document carries -> one of §8.3's twelve. Never
       # hardcoded (§2.3) — a value with no entry renders DEGRADED, named, not
       # a fabricated green.
@@ -476,33 +479,38 @@ adapters:
   # record inside it, not one entity for the object as a whole (that shape is
   # `object-store`, above). See docs/adapters.md.
   - name: universe-board
-    kind: object-store-records
+    kind: s3-records                 # was `object-store-records` until #79
     enabled: false
     produces: [artifact]
     config:
       bucket: your-bucket
-      keys: ["scanner/universe/latest.json"]
-      entity_kind: artifact
+      # An explicit key list is a `key_pattern` matching exactly one literal —
+      # which is why that adapter needed nothing folded in but its facets.
+      prefix: scanner/universe/
+      key_pattern: "scanner/universe/latest\\.json$"
+      kind: artifact
       records_path: stocks
       id_template: "{ticker}"
-      body_as_of_field: as_of
+      as_of_field: as_of
       state_field: gate.quant_filter_pass   # dotted path into the record
       facets: {sector: sector}
 
   - name: attractiveness-trends
-    kind: object-store-records
+    kind: s3-records                 # was `object-store-records` until #79
     enabled: false
     produces: [signal]
     config:
       bucket: your-bucket
-      keys: ["scanner/universe/trajectory/latest.json"]
-      entity_kind: signal
+      prefix: scanner/universe/trajectory/
+      key_pattern: "scanner/universe/trajectory/latest\\.json$"
+      kind: signal
       records_path: stocks
-      # `as_of` is a top-level body field, not a per-record one — injected
-      # into each record's format context (never overriding a genuine
-      # per-record field of the same name).
+      # `as_of` is a top-level body field, not a per-record one — `path_root`
+      # merges body and record, so it resolves for both the id template and
+      # `as_of_field` without overriding a genuine per-record field of the
+      # same name.
       id_template: "{ticker}:{as_of}"
-      body_as_of_field: as_of
+      as_of_field: as_of
       facets: {sector: sector}
 
   # A dated family of Artifacts under one prefix — the EXISTING `object-store`

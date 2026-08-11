@@ -23,8 +23,43 @@ under.
 | Class | The source is | Supplies | Adapters |
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
-| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query`, `object-store-records`, `dated-snapshot` |
+| `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
+
+## Before you write a new adapter: the boundary test
+
+**Ruled 2026-08-11 (Brian, `nousergon-console#79`).** Four adapters implementing
+one shape — *read an S3 object, find records in the body, project each onto a
+typed entity* — were built within an hour by four concurrent sessions, each
+having correctly checked the sibling issues and merged PRs first. None could see
+another's in-flight branch. Consolidated onto `s3-records`; `object-store-records`
+and `dated-snapshot` are retired.
+
+So, in order, and stop at the first **yes**:
+
+1. **Can a descriptor do it?** Then no adapter. See the note at the top of this
+   file — that is the §2.6 path and it costs zero console changes.
+2. **Does an existing adapter read this SOURCE SHAPE**, differing only in which
+   bucket, prefix, table, query or key it points at? Then it is a config entry.
+   *A different instance is never a different shape* (§2.7).
+3. **Does an existing adapter read this shape but lack one capability?** Then
+   fold that capability in, with a test, and reuse it. The three folded into
+   `s3-records` by this ruling were `state_map`, `facets`, and a field `path`
+   defaulting to the field's own name — small, and each made the surviving
+   adapter strictly more capable.
+4. **Only if none of the above**: a new adapter, whose docstring states which
+   existing adapter it is NOT and why.
+
+The two record-shaped adapters that legitimately stayed separate are the worked
+example of step 4. `changelog-events` reads one fixed, shared, two-instance
+schema rather than a generic shape. `object-store` projects a key's *existence*
+onto an Artifact and never reads the body at all, which is why it still serves
+non-JSON sources `s3-records` cannot parse. Neither is "S3 body → typed
+entities" with different configuration.
+
+**A different KIND is not a different shape either.** `s3-records` takes `kind`
+from configuration precisely so that emitting a `Signal` here and a `Run` there
+does not fork the adapter.
 
 Two rules fall out of this and neither is negotiable:
 
@@ -259,35 +294,6 @@ component. A `ready_for_retro` entry with a matching group is merged in as
 upstream emitter already excludes non-incident events before writing the
 document.
 
-## `dated-snapshot`
-
-| | |
-|---|---|
-| **Reads** | An S3-compatible bucket/prefix of per-date or per-version JSON documents |
-| **Emits** | `signal` or `run`, **configured** per deployment — never guessed |
-| **Cannot supply** | a business verdict for an unmapped `run` state (renders `DEGRADED`, named, never a fabricated green) |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `id_template`, `kind` (`signal`\|`run`), `fields`, `state_field`, `state_map`, `cadence` |
-
-Same lister shape as `object-store` (a key plus an optional last-modified
-stamp), a different projection: where `object-store` stops at freshness
-(a key becomes an Artifact, "fresh"/"stale"), this reads each matched
-object's **content** and projects declared fields (§5.8) onto a typed entity —
-a champion/challenger leaderboard becoming one `Signal` per date, or a
-per-cycle training-gate result becoming one `Run` per date.
-
-`kind: run` resolves to `observability-policy.md` §8.3's twelve states
-(`Run` is in `COMPONENT_STATE_KINDS`); `state_field` + `state_map` are then
-**required**, config-declared (§2.3) — never hardcoded business logic in
-adapter source. An unmapped raw value renders `DEGRADED` with the raw value
-kept on `detail.raw_state`, never guessed green. `kind: signal` carries the
-source's own value verbatim (§5.1's second half, the same convention
-`pipeline-reliability`'s Signal entities use) — `state_field` is optional and
-defaults to `"reporting"`.
-
-A single broken snapshot (unreadable object, non-JSON body) is excluded from
-that pass and does not fail the whole source — a hundred other dated
-snapshots under the same prefix render fine (§2.3).
-
 ## `declared-registry`
 
 | | |
@@ -351,7 +357,24 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`, `as_of_field`, `evidence_template`, `fields` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets` |
+
+**State resolution for `component`/`run`**, in order: `state_map` translates the
+source's own vocabulary (`{"passed": "HEALTHY"}`) into
+`observability-policy.md` §8.3's twelve, then a direct match on a state name.
+Three outcomes stay three facts (§5.5) — **no value** renders `UNREPORTED`
+(nothing reported), a value **nothing can interpret** renders `DEGRADED`
+(something reported, uninterpretable — a finding), and a `state_map` entry
+naming a state that does not exist also renders `DEGRADED`, because a typo in
+the map must never read as healthy.
+
+**`facets`** map record or body paths onto the fields §2.2 filters on uniformly
+across the index — a different thing from declared `fields`, which are
+*rendered*. A facet whose path resolves to nothing is omitted, never written as
+an empty string: absent and `""` filter differently.
+
+**A field's `path` defaults to its own name**, so `{score: {render: value}}`
+reads `score`. An explicit `path` still wins.
 
 Generalizes `object-store` past "keys → Artifact" to **any** kind, by making
 the entity kind and every field a config declaration instead of Python. Reach
@@ -438,30 +461,6 @@ in `unavailable`.
 value — the mechanism a `GROUP BY` query uses to carry a drill-to-rows list
 (§3.4) inside one entity's row, with no second query and no bespoke
 rendering.
-
-## `object-store-records`
-
-| | |
-|---|---|
-| **Reads** | One or more explicitly-named JSON objects |
-| **Emits** | `artifact`, `signal`, `decision`, `incident`, `cycle` (raw-value kinds only — `component`/`run` are rejected at fetch time) |
-| **Cannot supply** | anything outside the body |
-| **Config** | `bucket`, `keys`, `entity_kind`, `records_path`, `id_template`, `body_as_of_field`, `state_field`, `default_state`, `facets`, `evidence_template` |
-
-Why not `object-store` plus config: that adapter projects a key's *existence*
-onto one Artifact. This adapter reads a key's *content*, finds a configured
-list of records inside the body (`records_path`, a dotted path), and
-projects EACH RECORD into its own entity — the shape a snapshot artifact
-takes when its value is a scored universe (one row per ticker) rather than a
-single fact about the object. Same "same source shape, different
-projection" split as `checks-envelope` vs. `object-store`.
-
-`id_template` and `state_field` (dotted path) read from the record itself; a
-top-level body field (`body_as_of_field`, default `as_of`) is injected into
-every record's format context under `as_of` — but only when the record
-carries no such key of its own, so a genuine per-record field is never
-overwritten. Nested sub-objects (a record's own `gate`, `pillars`, `metrics`)
-pass into `detail` untouched.
 
 ## `local-units`
 

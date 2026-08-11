@@ -112,6 +112,12 @@ adapters:
       # `<org>/<repo>#<N>` ("which PRs merged, human or agent"). A closed,
       # unmerged pr answers neither question and is not emitted.
       include_prs: false
+      # Emits one Component per workflow the repo declares, at the id the
+      # fleet's own discoverer derives (<repo>-<workflow-file-stem>), so a
+      # registry declaration and this observation merge rather than rendering
+      # the same workflow twice. A workflow that has NEVER fired renders
+      # NEVER_RAN — the finding a runs-only listing cannot make.
+      include_workflow_runs: false
 
   # ---------------------------------------------------------------------
   # Fleet Ops Meta slice (nousergon-console#59) — four more s3-records

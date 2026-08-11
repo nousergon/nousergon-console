@@ -241,7 +241,20 @@ trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
 | **Reads** | A Git host's issue/PR trackers (via `gh` by default) |
 | **Emits** | `decision`, `incident`, `artifact` (PRs, when `include_prs: true`) |
 | **Cannot supply** | anything outside the tracker |
-| **Config** | `org`, `repos`, `incident_label`, `include_prs` |
+| **Config** | `org`, `repos`, `incident_label`, `include_prs`, `include_workflow_runs` |
+
+**`include_workflow_runs`** emits one **Component** per workflow the repo
+declares, at the id the fleet's own discoverer derives —
+`<repo>-<workflow-file-stem>`, slugified identically — so a registry
+declaration and this observation MERGE (§2.5) rather than rendering the same
+workflow twice. The lister enumerates workflows FIRST and joins runs onto them,
+so a scheduled workflow that has **never fired** renders `NEVER_RAN` instead of
+being invisible, which is the most serious finding available here. A run in
+flight keeps the last concluded state with `detail.in_flight` set — §8.3's
+twelve have no in-progress member (`alpha-engine-config-I6358`), and both
+alternatives are worse: a thirteenth state breaks the closed vocabulary, and
+`UNREPORTED` would blink a healthy nightly job to "nothing reported" every night
+while it ran.
 
 Identifiers are the tracker refs the host assigns, never console-minted.
 Issues: `<repo>-I<N>`. With `include_prs: true`, an **open** PR joins the

@@ -122,6 +122,34 @@ def test_population_completeness_reports_unregistered_separately(tmp_path):
     assert result["unregistered"] == 1
 
 
+def test_population_completeness_unregistered_excludes_run_kind_entities():
+    """alpha-engine-config-I6970: a RUN entity that never matched its own
+    component's registry row must not count toward `unregistered` — the
+    checks-envelope adapter mints run ids as `f"{check_id}@{ran_at}"`
+    (console/adapters/checks_envelope.py), which never equals the component
+    id a registry row declares, even when that component IS registered. Left
+    unscoped to Kind.COMPONENT, this inflated the live count 8.5x (15 of 17
+    exceptions were runs of already-declared components, not registry gaps)."""
+    idx = Index()
+    idx.declare_registry("registry")
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="box_memory_headroom",
+                         state=State.UNREPORTED, provenance=Provenance("registry")),),
+    ))
+    idx.record_registry_rows("registry", count=1, ok=True)
+    # A run of the SAME component, minted with the check_id@ran_at id shape —
+    # never declared under that exact id, only discovered/observed.
+    idx.add_result(AdapterResult(
+        name="checks", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(Entity(kind=Kind.RUN,
+                         id="box_memory_headroom@2026-08-12T14:48:52.988741+00:00",
+                         state=State.UNREPORTED, provenance=Provenance("checks")),),
+    ))
+    result = idx.population_completeness()
+    assert result["unregistered"] == 0
+
+
 def test_transparency_gap_denominator_is_component_population_not_all_entities():
     idx = Index()
     idx.add_result(AdapterResult(

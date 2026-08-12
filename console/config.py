@@ -18,6 +18,7 @@ from .adapters import (
     changelog_events,
     changelog_retro_feed,
     checks_envelope,
+    cloudwatch_metrics,
     declared_registry,
     git_host,
     local_units,
@@ -30,10 +31,10 @@ from .adapters import (
     yaml_directory,
 )
 from .drivers import KNOWN_DRIVERS, resolve_bindings
-from .index.build import Supervisor
+from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
-from .model.envelope import AdapterStatus
+from .model.envelope import AdapterResult, AdapterStatus
 from .qa.questions import measure as measure_answer_latency
 
 #: Adapter registry — name → module with a `fetch` callable. Adding a source
@@ -46,6 +47,7 @@ ADAPTERS = {
     "state-machine": state_machine,
     "pipeline-reliability": pipeline_reliability,
     "checks-envelope": checks_envelope,
+    "cloudwatch-metrics": cloudwatch_metrics,
     "changelog-events": changelog_events,
     "changelog-retro-feed": changelog_retro_feed,
     "declared-registry": declared_registry,
@@ -76,6 +78,7 @@ def build_index(config: dict[str, Any]) -> Index:
         name = reg.get("name", f"registry-{ordinal}")
         index.declare_registry(name)
         if reg.get("adapter") not in ADAPTERS:
+            index.add_result(_unknown_adapter(name, reg.get("adapter")))
             continue
         module = ADAPTERS[reg["adapter"]]
         result = module.fetch({
@@ -97,6 +100,7 @@ def build_index(config: dict[str, Any]) -> Index:
         kind = entry.get("kind")
         module = ADAPTERS.get(kind)
         if module is None:
+            index.add_result(_unknown_adapter(entry.get("name", kind), kind))
             continue
         cfg = {**entry.get("config", {}), "_name": entry.get("name", kind)}
         index.add_result(module.fetch(cfg))
@@ -129,6 +133,27 @@ def build_index(config: dict[str, Any]) -> Index:
     # §9.4: run the standing question set against the index just built.
     index.set_answer_latency(measure_answer_latency(index))
     return index
+
+
+def _unknown_adapter(name: str, kind: Any) -> AdapterResult:
+    """A configured source naming an adapter this build does not have (§2.3).
+
+    It used to `continue` — the source vanished from the surface AND from
+    `build_info.adapters`, so nothing said a configured source was not being
+    read. That is the exact failure mode of a config applied ahead of the code
+    that implements its adapter: the console renders a smaller fleet, entirely
+    silently, and looks healthy doing it.
+
+    Not an exception, because one bad config entry must not empty a surface a
+    dozen working sources are rendering. It is a FAILED source with the reason
+    named, which is what §2.3 asks of every unreachable source.
+    """
+    return AdapterResult(
+        name=str(name),
+        status=AdapterStatus.FAILED,
+        fetched_at=now_iso(),
+        unavailable=(f"adapter:{kind}",),
+    )
 
 
 def _driver_context(config: dict[str, Any]) -> dict[str, Any]:

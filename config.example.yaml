@@ -96,6 +96,39 @@ adapters:
       key_pattern: "ops/checks/(?P<component_id>[^/]+)/latest\\.json"
       staleness_factor: 1.5          # multiplier on each envelope's cadence_minutes
 
+  # A metric namespace, enumerated. The dimension value IS the component id,
+  # so a registry declaration and this observation merge rather than rendering
+  # the same component twice. Generic: point a second instance at another
+  # namespace/dimension pair and it needs no code change.
+  #
+  # This is a DISCOVERY claim, which is what makes ABSENT computable — a
+  # registered component the namespace has never heard of renders ABSENT
+  # rather than staying an unexplained blank. `discovery_facet`/
+  # `discovery_value` scope that claim to the slice this namespace actually
+  # covers; omitting them claims the whole fleet, which for one namespace is
+  # almost never true.
+  #
+  # cadence_seconds is a COST control as well as a freshness declaration:
+  # GetMetricData bills per metric requested, so reading on the index's
+  # 60-second rebuild costs 15x what a 900-second cadence does for data that
+  # is summarised over a 1440-minute window either way.
+  - name: lambda-metrics
+    kind: cloudwatch-metrics
+    enabled: false
+    produces: [component]
+    config:
+      region: us-east-1
+      namespace: AWS/Lambda
+      dimension: FunctionName
+      invocations_metric: Invocations
+      errors_metric: Errors
+      window_minutes: 1440           # the trailing window state is read over
+      history_days: 14               # lookback that tells NEVER_RAN from idle
+      cadence_seconds: 900           # how often the source is actually read
+      discovery_facet: substrate     # the registry facet this pass enumerates
+      discovery_value: lambda
+      # id_pattern: "^acme-"         # optional; scope to one id namespace
+
   - name: repos
     kind: git-host                   # github / gitlab api
     enabled: false

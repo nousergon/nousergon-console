@@ -24,7 +24,10 @@ from .entity import Edge, Entity
 
 #: Bumped on any breaking change to the envelope shape. Consumers assert
 #: equality; a mismatch is a loud failure at ingest, not a mis-parsed entity.
-SCHEMA_VERSION = 3
+#:
+#: 4 — `discovery_scope` added, so a DISCOVERY adapter that enumerates ONE
+#:     slice of the fleet stops asserting absence over the whole of it.
+SCHEMA_VERSION = 4
 
 
 class AdapterStatus(enum.Enum):
@@ -94,6 +97,23 @@ class AdapterResult:
     # index. An adapter that cannot say declares None rather than guessing.
     fetched_at: str | None = None
     declared_cadence_seconds: float | None = None
+    # Which SLICE of the fleet this DISCOVERY pass enumerated exhaustively,
+    # as (facet, value) pairs — e.g. `(("substrate", "lambda"),)`.
+    #
+    # Why this field has to exist. `index/graph.py::_reconcile` computes
+    # `ABSENT` as "a registry declared it and a discovery adapter that ran
+    # fine did not find it". That is only sound when the discovery pass could
+    # have found it. A discovery adapter that enumerates one substrate —
+    # every Lambda function, every systemd unit on ONE host — has no opinion
+    # about a GitHub Actions workflow or a laptop launchd agent, and asserting
+    # `ABSENT` over them turns "I did not look there" into "it is not there",
+    # which is precisely the absence-of-evidence read §8.3 forbids.
+    #
+    # Empty (the default) means fleet-wide: the pass claims it enumerated
+    # everything a registry could declare. That is the honest declaration for
+    # a discovery adapter that really does cover the whole population, and it
+    # preserves the pre-existing behaviour for one that has not said.
+    discovery_scope: tuple[tuple[str, str], ...] = ()
     # Component descriptors this source declared (§2.6). Only a registry
     # adapter populates it. Carried on the result rather than read by the
     # adapter itself, because walking a descriptor's bindings means reaching

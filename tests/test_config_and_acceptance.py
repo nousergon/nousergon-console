@@ -94,3 +94,24 @@ def test_disabled_adapters_are_not_run(tmp_path):
     index = build_index(config)
     # Only the registry's one component; the disabled object-store ran nothing.
     assert {e.id for e in index.all()} == {"comp-one"}
+
+
+def test_a_config_naming_an_unknown_adapter_is_a_visible_failed_source():
+    """It used to `continue`: the configured source vanished from the surface
+    AND from `build_info.adapters`, so nothing anywhere said it was not being
+    read. That is exactly what happens when a config is applied ahead of the
+    release implementing its adapter — the console renders a smaller fleet,
+    silently, and looks healthy doing it (§2.3: a source that cannot be read is
+    a declared state, never a dropped row)."""
+    from console.config import build_index
+
+    index = build_index({
+        "adapters": [
+            {"name": "future-source", "kind": "not-implemented-yet",
+             "enabled": True, "config": {}},
+        ],
+    })
+    fetches = {a.name: a for a in index.build_info.adapters}
+    assert "future-source" in fetches
+    assert fetches["future-source"].status == "failed"
+    assert fetches["future-source"].unavailable == ("adapter:not-implemented-yet",)

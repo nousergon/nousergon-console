@@ -51,6 +51,12 @@ class Index:
         # empty default is what an un-stamped index honestly reports.
         self.build_info = BuildInfo(built_at="")
         self._saw_ok_discovery = False
+        # The union of every OK discovery pass's declared scope, as (facet,
+        # value) pairs. `_saw_fleetwide_discovery` is the separate flag for a
+        # pass that declared no scope at all — it claims the whole population,
+        # so it is not a member of this set and must not be modelled as one.
+        self._discovery_scope: set[tuple[str, str]] = set()
+        self._saw_fleetwide_discovery = False
         self._saw_ok_declaration = False
         self._finalized = False
         self._entities: dict[str, Entity] = {}
@@ -202,6 +208,10 @@ class Index:
         if result.status is AdapterStatus.OK:
             if result.claim_class is ClaimClass.DISCOVERY:
                 self._saw_ok_discovery = True
+                if result.discovery_scope:
+                    self._discovery_scope.update(result.discovery_scope)
+                else:
+                    self._saw_fleetwide_discovery = True
             elif result.claim_class is ClaimClass.DECLARATION:
                 self._saw_ok_declaration = True
         for ent in result.entities:
@@ -268,9 +278,31 @@ class Index:
         if not declared and self._saw_ok_declaration:
             return dataclasses.replace(ent, state=State.UNREGISTERED)
         if declared and not discovered and self._saw_ok_discovery:
-            if ent.state is State.UNREPORTED:
+            if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
                 return dataclasses.replace(ent, state=State.ABSENT)
         return ent
+
+    def _within_discovery_scope(self, ent: Entity) -> bool:
+        """Could any successful discovery pass have found this entity?
+
+        The third guard on `ABSENT`, alongside "a registry declared it" and "a
+        discovery adapter ran fine". A pass that enumerated one substrate
+        (`AdapterResult.discovery_scope`) speaks only for entities in that
+        substrate; everything else it simply did not look at, and "I did not
+        look" must not render as "it is not there". Without this, the FIRST
+        substrate-scoped discovery adapter flips every unobserved row in the
+        fleet — other substrates included — from `UNREPORTED` to `ABSENT`,
+        replacing a true transparency gap with a false absence claim.
+
+        A pass declaring no scope claims the whole population, which is the
+        behaviour every existing discovery adapter already has.
+        """
+        if self._saw_fleetwide_discovery:
+            return True
+        return any(
+            ent.facets.get(facet) == value
+            for facet, value in self._discovery_scope
+        )
 
     def conflicts(self) -> list[Entity]:
         """§9.9 — entities carrying an unresolved equal-rank disagreement.

@@ -24,7 +24,7 @@ under.
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
 | `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query` |
-| `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units` |
+| `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units`, `cloudwatch-metrics` |
 
 ## Before you write a new adapter: the boundary test
 
@@ -536,3 +536,52 @@ is a finding needs the registry, which an adapter must not read, so this
 adapter cannot place it and says so loudly rather than guessing. `masked` is
 the one inactive case carrying operator intent the source itself supplies, and
 it renders `DISABLED`.
+
+## `cloudwatch-metrics`
+
+| | |
+|---|---|
+| **Reads** | One CloudWatch metric namespace, enumerated by a dimension |
+| **Emits** | `component` |
+| **Cannot supply** | `cadence` (lives in the registry), `cost` |
+| **Config** | `region`, `namespace`, `dimension`, `invocations_metric`, `errors_metric`, `window_minutes`, `history_days`, `cadence_seconds`, `discovery_facet`, `discovery_value`, `id_pattern` |
+
+The dimension value **is** the component id, verbatim, so a registry
+declaration and this observation merge instead of double-rendering (§3.6).
+Generic: `AWS/Lambda`/`FunctionName` is one config entry, and a second
+instance pointed at another namespace/dimension pair needs no code.
+
+A `DISCOVERY` claim, not an `OBSERVATION`. Its primary statement is *the
+substrate has this thing* — it learns what exists by enumerating the
+namespace, not by anything reporting in — and that is also the only thing
+that makes `ABSENT` computable here: a registry row the namespace has never
+heard of is a finding, not a blank. Its state readings therefore rank below a
+real emitted envelope and above a bare declaration, which is correct for a
+reading taken from the substrate's counters rather than from the component.
+
+**Scope.** `discovery_scope` on the result (`discovery_facet`/
+`discovery_value` in config) names the facet slice this pass enumerated. Without
+it the index would read one namespace's successful pass as licence to assert
+`ABSENT` over every substrate in the registry — GitHub Actions workflows and
+launchd agents included — turning "I did not look there" into "it is not
+there". A pass declaring no scope claims the whole fleet, which is what every
+discovery adapter predating the field meant.
+
+**Zero is never green.** `errors > 0` is `FAILED`; `invocations > 0` with no
+errors is `HEALTHY`; zero invocations with no datapoint in the history lookback
+is `NEVER_RAN`. Zero invocations *with* history behind it is `UNREPORTED` with
+the reason on the row — idle-by-design and missed-its-trigger are `DISABLED` vs
+`MISSED`, and metrics alone cannot separate them. Only a declared cadence can,
+and §2.3 forbids reading the registry that would carry one. So the row stays a
+finding and stays counted in the transparency gap until a cadence is declared.
+Rendering it `HEALTHY` would lower that number by treating no-data as good
+news, which is the failure the number exists to detect.
+
+**Cost.** `GetMetricData` bills per metric requested. `cadence_seconds` is a
+cost control as much as a freshness declaration: the adapter serves its own TTL
+cache inside that interval and declares the cadence on the result, so §5.9
+bounds freshness by what was actually read rather than by when the index last
+rebuilt. Reading on the 60-second rebuild costs 15x a 900-second cadence for
+data summarised over a 1440-minute window either way. The history lookback is
+issued only for components that were silent in the window — anything that
+invoked has already answered the question that pass exists to ask.

@@ -35,9 +35,11 @@ def _comp(state, source, as_of=None, facets=None, cid="comp-alpha") -> Entity:
     )
 
 
-def _result(name, claim_class, *entities, status=AdapterStatus.OK) -> AdapterResult:
+def _result(name, claim_class, *entities, status=AdapterStatus.OK,
+            discovery_scope=()) -> AdapterResult:
     return AdapterResult(
-        name=name, status=status, claim_class=claim_class, entities=tuple(entities)
+        name=name, status=status, claim_class=claim_class, entities=tuple(entities),
+        discovery_scope=tuple(discovery_scope),
     )
 
 
@@ -181,6 +183,49 @@ def test_absent_needs_a_SUCCESSFUL_discovery_pass():
     ok = _result("systemd", ClaimClass.DISCOVERY,
                  _comp(State.HEALTHY, "systemd", cid="comp-other"))
     assert _index(declared, ok).entity("comp-alpha").state is State.ABSENT
+
+
+def test_a_scoped_discovery_pass_asserts_absence_only_inside_its_scope():
+    """A discovery adapter enumerating ONE substrate has no opinion about the
+    others, and "I did not look there" must not render as "it is not there".
+
+    The defect this guards: `_reconcile`'s ABSENT rule was gated on a single
+    global "some discovery pass succeeded" flag. The FIRST substrate-scoped
+    discovery adapter — a CloudWatch namespace covering the fleet's Lambdas —
+    would therefore have flipped every unobserved GitHub Actions, launchd and
+    spot row in the registry from UNREPORTED to ABSENT, replacing a true
+    transparency gap with a false absence claim across four substrates it
+    never read."""
+    lambda_row = _result(
+        "registry", ClaimClass.DECLARATION,
+        _comp(State.UNREPORTED, "registry", facets={"substrate": "lambda"},
+              cid="comp-lambda"))
+    gha_row = _result(
+        "registry", ClaimClass.DECLARATION,
+        _comp(State.UNREPORTED, "registry", facets={"substrate": "github-actions"},
+              cid="comp-gha"))
+    scoped = _result(
+        "cloudwatch", ClaimClass.DISCOVERY,
+        _comp(State.HEALTHY, "cloudwatch", facets={"substrate": "lambda"},
+              cid="comp-other"),
+        discovery_scope=(("substrate", "lambda"),))
+
+    idx = _index(lambda_row, gha_row, scoped)
+    assert idx.entity("comp-lambda").state is State.ABSENT
+    assert idx.entity("comp-gha").state is State.UNREPORTED
+
+
+def test_an_unscoped_discovery_pass_still_claims_the_whole_fleet():
+    """Scope is a narrowing an adapter opts into. A pass declaring none is
+    saying it enumerated everything, which is what every discovery adapter
+    predating the field meant — so the default must not silently disarm the
+    ABSENT computation those adapters exist to feed."""
+    declared = _result(
+        "registry", ClaimClass.DECLARATION,
+        _comp(State.UNREPORTED, "registry", facets={"substrate": "shared-box"}))
+    unscoped = _result("systemd", ClaimClass.DISCOVERY,
+                       _comp(State.HEALTHY, "systemd", cid="comp-other"))
+    assert _index(declared, unscoped).entity("comp-alpha").state is State.ABSENT
 
 
 # ------------------------------------------------------- conflict, §9.9 -----

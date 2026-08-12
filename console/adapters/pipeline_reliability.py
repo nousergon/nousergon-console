@@ -867,25 +867,11 @@ def _default_trading_day_checker() -> TradingDayChecker | None:
     """`pandas-market-calendars`-backed NYSE trading-day check, when the
     optional `calendar` extra is installed.
 
-    Deliberately NOT `krepis.trading_calendar` / `nousergon_lib`: this repo is
-    a standalone public tool with zero fleet-specific dependencies (README
-    "generic over sources"; the `aws` extra is the only precedent for an
-    optional dependency, and it names no vendor's business logic). A private
-    deployment that wants the fleet's own calendar injects its own
-    `trading_day_checker` callable instead of relying on this default.
+    Delegates to `console.trading_calendar` (alpha-engine-config-I7050,
+    `shared-code-policy.md`'s second-adoption trigger — `calendar_cadence.py`
+    is the second consumer of the same default). Kept as a private alias here
+    so this module's own call sites and tests need no edit.
     """
-    try:
-        import pandas_market_calendars as mcal  # type: ignore
-    except ImportError:
-        return None
+    from ..trading_calendar import default_trading_day_checker
 
-    calendar = mcal.get_calendar("XNYS")
-    _cache: dict[str, bool] = {}
-
-    def checker(date_str: str) -> bool:
-        if date_str not in _cache:
-            valid = calendar.valid_days(start_date=date_str, end_date=date_str)
-            _cache[date_str] = len(valid) > 0
-        return _cache[date_str]
-
-    return checker
+    return default_trading_day_checker()

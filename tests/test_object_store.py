@@ -116,3 +116,22 @@ def test_declared_question_renders_as_synthetic_text_field():
 def test_no_question_declared_leaves_fields_absent():
     result = object_store.fetch(_cfg(), lister=_lister, now=NOW)
     assert all("fields" not in e.detail for e in result.entities)
+
+
+# ------------------------------------------ staleness honesty (I7050) ------
+
+
+def test_a_declared_cadence_is_exposed_as_cadence_minutes():
+    """`_state()` already re-derives fresh/stale from the same cadence — this
+    is what lets `staleness_honesty()` ALSO independently re-derive it,
+    rather than trusting the adapter's own verdict (§9.6's whole point,
+    previously unreachable for every object-store-sourced artifact)."""
+    result = object_store.fetch(_cfg(), lister=_lister, now=NOW)
+    for ent in result.entities:
+        assert ent.detail["cadence_minutes"] == 60.0  # "1h"
+
+
+def test_no_declared_cadence_means_no_cadence_minutes():
+    cfg = {k: v for k, v in _cfg().items() if k != "cadence"}
+    result = object_store.fetch(cfg, lister=_lister, now=NOW)
+    assert all("cadence_minutes" not in e.detail for e in result.entities)

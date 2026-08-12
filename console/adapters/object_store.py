@@ -110,6 +110,14 @@ def fetch(
         groups = m.groupdict()
         state = _state(last_modified, cadence, staleness_factor, now)
         detail: dict[str, Any] = {k: v for k, v in groups.items()}
+        if cadence is not None:
+            # §9.6 (alpha-engine-config-I7050): this adapter already computes
+            # its OWN staleness verdict into `state` above. Also exposing the
+            # cadence as a plain minute count lets `staleness_honesty()`
+            # independently RE-DERIVE that verdict from `as_of` rather than
+            # trusting it — the entire point of an honesty check, and
+            # previously unreachable for every object-store-sourced artifact.
+            detail["cadence_minutes"] = cadence / 60.0
         if question:
             # Synthetic declared field (§5.8) — rendered by the existing
             # declared-fields table, matching `s3-records`'s own convention

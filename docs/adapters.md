@@ -134,6 +134,15 @@ answers `console-policy.md` §4.4. When the object is a **check-result
 envelope** whose body carries status, prefer `checks-envelope`; when the
 question needs the object's own numbers, prefer `s3-records`.
 
+A declared `cadence` is also exposed as a plain `detail["cadence_minutes"]`
+(alpha-engine-config-I7050), independent of the `state` this adapter already
+derives from the same cadence above — that duplication is deliberate: it is
+what lets `numbers.staleness_honesty()` independently RE-DERIVE the verdict
+from `as_of` rather than trusting the state this adapter already assigned,
+the entire point of an honesty check (§9.6). Previously unreachable for every
+object-store-sourced artifact, checks-envelope was the only source class
+`staleness_honesty` could ever audit.
+
 ## `checks-envelope`
 
 | | |
@@ -378,6 +387,24 @@ claim — when nothing observes it — reads correctly on the exception list.
 A target kind of Decision needs no merge at all: an observation registry's own
 gate value (gated-off / gated-on / always-on) *is* the fact nothing else
 observes, so the lone claim renders unmerged.
+
+**Calendar-aware cadence (`console/calendar_cadence.py`, alpha-engine-config-
+I7050).** A registry entry may declare `cadence: saturday_sf|weekday_sf|eod_sf|
+continuous|event_driven` instead of a literal `cadence_minutes` — the shape
+the fleet's own `ARTIFACT_REGISTRY.yaml` uses, one refresh symbol per row
+rather than a flat minute count that cannot tell a real gap from an ordinary
+weekend or holiday. When present (and no literal `cadence_minutes` already
+is), the adapter translates it into an effective, `now`-relative minute
+ceiling — trading-day symbols (`weekday_sf`/`eod_sf`) via an injectable
+`trading_day_checker` (same contract as `pipeline-reliability`'s, defaulting
+to `pandas-market-calendars` under the `calendar` extra), `saturday_sf` via
+plain calendar-week arithmetic, `continuous` from a declared
+`interval_minutes`. `event_driven` — and any symbol this module cannot
+resolve, including a trading-day symbol with no reachable calendar —
+deliberately gets **no** `cadence_minutes` at all: excluded from
+`staleness_honesty`'s denominator (§5.3), never faked into reading fresh.
+This is what makes a `declared-registry` + `object-store` merge (above)
+independently auditable by §9.6, not just able to answer "missing".
 
 ## `sql-source` (adapter)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from console.adapters import declared_registry
 from console.config import ADAPTERS
 from console.index.graph import Index
+from console.model.entity import Entity, Provenance
 from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
 
@@ -210,3 +211,109 @@ def test_missing_artifact_computed_from_declaration_alone_when_unobserved(tmp_pa
 
     assert idx.entity("reports/seen.json").state == "fresh"
     assert idx.entity("reports/never-landed.json").state == "absent"
+
+
+# --------------------------------------------- calendar cadence (I7050) ----
+
+
+def test_symbolic_cadence_becomes_a_numeric_cadence_minutes(tmp_path):
+    """ARTIFACT_REGISTRY.yaml's own shape: a `cadence` symbol, not a literal
+    minute count. `staleness_honesty()` can only audit the latter, so this is
+    the translation §9.6's denominator depends on."""
+    from datetime import datetime, timezone
+
+    path = _write(tmp_path, "artifacts.yaml", """
+- artifact_id: eod-thing
+  cadence: eod_sf
+  sla_minutes_after_cron: 30
+""")
+    result = declared_registry.fetch(
+        {"path": path, "kind": "artifact", "id_field": "artifact_id"},
+        now=datetime(2026, 8, 17, 9, 0, tzinfo=timezone.utc),  # a Monday
+        trading_day_checker=lambda d: __import__("datetime").date.fromisoformat(d).weekday() < 5,
+    )
+    entity = result.entities[0]
+    assert isinstance(entity.detail["cadence_minutes"], float)
+    assert entity.detail["cadence_minutes"] > 0
+
+
+def test_a_literal_cadence_minutes_is_never_overridden_by_a_symbol(tmp_path):
+    path = _write(tmp_path, "artifacts.yaml", """
+- artifact_id: both-declared
+  cadence: eod_sf
+  cadence_minutes: 42
+""")
+    result = declared_registry.fetch({"path": path, "kind": "artifact", "id_field": "artifact_id"})
+    assert result.entities[0].detail["cadence_minutes"] == 42
+
+
+def test_event_driven_rows_get_no_cadence_minutes_at_all(tmp_path):
+    """The four `config/*_params`-class artifacts must render as honestly
+    unauditable-by-cadence, never as a fabricated schedule
+    (`principles.md` §2.7; issue I7050's explicit instruction)."""
+    path = _write(tmp_path, "artifacts.yaml", """
+- artifact_id: promotion-only-thing
+  cadence: event_driven
+""")
+    result = declared_registry.fetch({"path": path, "kind": "artifact", "id_field": "artifact_id"})
+    assert "cadence_minutes" not in result.entities[0].detail
+
+
+def test_an_unresolvable_calendar_symbol_stays_unauditable(tmp_path):
+    """No trading calendar available (neither injected nor the optional
+    `pandas-market-calendars` extra installed) -> excluded, never guessed."""
+    from console import calendar_cadence as _cc
+
+    if _cc.default_trading_day_checker() is not None:
+        import pytest
+
+        pytest.skip("pandas-market-calendars is installed in this test env")
+
+    path = _write(tmp_path, "artifacts.yaml", """
+- artifact_id: weekday-thing
+  cadence: weekday_sf
+""")
+    result = declared_registry.fetch({"path": path, "kind": "artifact", "id_field": "artifact_id"})
+    assert "cadence_minutes" not in result.entities[0].detail
+
+
+def test_calendar_cadence_widens_staleness_honesty_past_checks_envelope(tmp_path):
+    """The acceptance shape for alpha-engine-config-I7050: a declared-registry
+    row (a source class distinct from `checks_envelope`) merged against a
+    real object-store observation becomes independently auditable by
+    `staleness_honesty()` — including catching a real violation."""
+    from datetime import datetime, timedelta, timezone
+
+    from console.adapters import object_store
+
+    path = _write(tmp_path, "artifacts.yaml", """
+- artifact_id: weekday-artifact
+  cadence: weekday_sf
+  sla_minutes_after_cron: 15
+""")
+    now = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)  # a Tuesday
+    checker = lambda d: __import__("datetime").date.fromisoformat(d).weekday() < 5  # noqa: E731
+
+    declared = declared_registry.fetch(
+        {"path": path, "kind": "artifact", "id_field": "artifact_id"},
+        now=now, trading_day_checker=checker,
+    )
+
+    stale_as_of = now - timedelta(days=10)  # a genuine multi-week-old miss
+    observed_entities = (
+        Entity(
+            kind=Kind.ARTIFACT, id="weekday-artifact", state="fresh",
+            provenance=Provenance("object-store", as_of=stale_as_of.isoformat()),
+        ),
+    )
+
+    idx = Index()
+    idx.add_result(AdapterResult(name="registry", status=AdapterStatus.OK,
+                                  claim_class=ClaimClass.DECLARATION, entities=declared.entities))
+    idx.add_result(AdapterResult(name="bucket", status=AdapterStatus.OK,
+                                  claim_class=ClaimClass.OBSERVATION, entities=observed_entities))
+
+    result = idx.staleness_honesty(now=now)
+    assert result["of"] == 1, "the declared-registry source class must now be audited at all"
+    assert result["count"] == 1, "the genuine miss must still be caught, not just widened"
+    assert result["violations"] == ["weekday-artifact"]

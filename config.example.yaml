@@ -329,6 +329,37 @@ adapters:
           pipeline_key: preopen
           measure_buffer: true
           degraded_state_names: []
+          # An execution whose top-level `error` is one of these is DEGRADED
+          # whatever its terminal status — the Option-A shape, where a degraded
+          # run FAILS on purpose so status-keyed watchers engage. Defaults to
+          # [DegradedRun]; set to [] for a pipeline that has no such terminal.
+          degraded_error_names: [DegradedRun]
+        # A pipeline whose cycle is not a trading day. `cadence` picks how the
+        # window's EXPECTED days are enumerated: trading-day (default, consults
+        # the calendar), weekday (fixed days of the week, Mon 0 .. Sun 6), or
+        # calendar-day. A Saturday-scheduled pipeline run through the trading
+        # calendar windows none of its own cycle days and renders every one of
+        # them HOLIDAY — the absence state collapsing into "not expected".
+        - arn: arn:aws:states:xx-example-1:000000000000:stateMachine:example-weekly
+          pipeline_key: weekly
+          cadence: weekday
+          cadence_weekdays: [5]
+          # A cadence execution that self-gated and terminated inside this many
+          # seconds did no work and is not an attempt. Declared per pipeline —
+          # a pipeline that omits it has every execution counted.
+          noop_max_duration_seconds: 60
+          # Ordered stage names from THIS pipeline's own definition. Renders how
+          # FAR a run got, so a run failing later than the last one reads as
+          # progress rather than as another red. Costs one GetExecutionHistory
+          # call per execution, same as degraded_state_names.
+          stage_states: []
+          # Dated changes to the pipeline itself, marked on the strip: a
+          # regression whose cause is a known cutover is a different fact from
+          # an unexplained one.
+          cutovers: []
+          # ">1 operator rerun to reach a complete, non-degraded terminal" — a
+          # revisit trigger that otherwise fires only when somebody notices.
+          rerun_alert_threshold: 1
       # Every SF execution's input carries this field (fleet convention:
       # "pipeline_role", Option-D taxonomy) — which values count as the
       # scheduled/cadence run vs an operator-initiated overlay that may

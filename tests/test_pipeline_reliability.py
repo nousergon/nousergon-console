@@ -319,3 +319,306 @@ def test_cycle_state_is_not_a_component_state_vocabulary_member():
     six-value string is legal without touching the closed twelve."""
     from console.model.kinds import COMPONENT_STATE_KINDS, Kind
     assert Kind.CYCLE not in COMPONENT_STATE_KINDS
+
+
+# ===================================================================== #
+# alpha-engine-config-I6919 — weekly cadence, attempts-to-success,      #
+# stage depth, Option-A DEGRADED, cutover markers, the rerun trigger.   #
+# ===================================================================== #
+
+WEEKLY_ARN = "arn:aws:states:xx-test-1:000000000000:stateMachine:fixture-weekly"
+
+
+def _wexec(name, status, start, stop, role=None, entered=None, error=None):
+    rec = {
+        "executionArn": f"arn:aws:states:xx-test-1:000000000000:execution:fixture-weekly:{name}",
+        "name": name,
+        "status": status,
+        "startDate": start,
+        "stopDate": stop,
+        "input": {"pipeline_role": role},
+    }
+    if entered is not None:
+        rec["entered_states"] = entered
+    if error is not None:
+        rec["error"] = error
+    return rec
+
+
+def _weekly_cfg(**machine_extra):
+    return {
+        "region": "xx-test-1",
+        "state_machines": [{
+            "arn": WEEKLY_ARN,
+            "pipeline_key": "weekly",
+            "cadence": pr.CADENCE_WEEKDAY,
+            "cadence_weekdays": [5],  # Saturday — no market calendar will ever say yes
+            **machine_extra,
+        }],
+        "role_field": "pipeline_role",
+        "cadence_roles": ["weekly"],
+        "recovery_roles": ["watch-rerun", "recovery"],
+        "window_trading_days": 3,
+    }
+
+
+def _weekly_reader(records):
+    def reader(region, arn):
+        assert arn == WEEKLY_ARN
+        return list(records)
+    return reader
+
+
+def _wcycles(result):
+    return {
+        e.detail["date"]: e
+        for e in result.entities
+        if e.kind is Kind.CYCLE and e.facets.get("pipeline") == "weekly"
+    }
+
+
+def _signal(result, suffix, pipeline="weekly"):
+    return next(
+        e for e in result.entities
+        if e.kind is Kind.SIGNAL and e.id.endswith(suffix)
+        and e.facets.get("pipeline") == pipeline
+    )
+
+
+# ------------------------------------------------------------- cadence days --
+
+
+def test_weekly_cadence_windows_saturdays_not_trading_days():
+    """The defect this closes: a Saturday-scheduled pipeline run through the
+    NYSE trading-day checker windows ZERO of its own cycle days, so every
+    weekly cycle renders HOLIDAY — the absence state collapsing into "not
+    expected", which is exactly what NEVER-FIRED exists to prevent."""
+    result = pr.fetch(
+        _weekly_cfg(),
+        reader=_weekly_reader([]),
+        trading_day_checker=lambda d: False,  # a market calendar: never a Saturday
+        now=_now(),
+    )
+    # _now() is Mon 2026-08-10; the last three Saturdays are 8/8, 8/1, 7/25.
+    assert set(_wcycles(result)) == {"2026-07-25", "2026-08-01", "2026-08-08"}
+    assert all(c.state == pr.NEVER_FIRED for c in _wcycles(result).values())
+
+
+def test_calendar_day_cadence_expects_every_day():
+    cfg = _weekly_cfg()
+    cfg["state_machines"][0]["cadence"] = pr.CADENCE_CALENDAR_DAY
+    result = pr.fetch(cfg, reader=_weekly_reader([]), trading_day_checker=lambda d: False, now=_now())
+    assert set(_wcycles(result)) == {"2026-08-08", "2026-08-09", "2026-08-10"}
+
+
+def test_missing_trading_calendar_is_not_fatal_for_a_non_trading_day_cadence():
+    """A weekly pipeline needs no market calendar. Refusing to render it for
+    want of one its window never consults is a false-unavailable."""
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader([]), trading_day_checker=None, now=_now())
+    # No calendar injected and none installed in the test env — still OK,
+    # because no configured pipeline declared a trading-day cadence.
+    assert result.status.value != "failed" or "trading_calendar" not in result.unavailable
+
+
+# ------------------------------------------------------- Option-A DEGRADED --
+
+
+def test_option_a_degraded_run_renders_degraded_not_failed():
+    """A degraded run under the Option-A ruling ends in a Fail state carrying
+    `Error: DegradedRun`. Deriving DEGRADED from `first_ok AND entered a
+    degraded state` is a conjunction no such run can satisfy, so the bucket was
+    unreachable for exactly the pipelines that degrade honestly."""
+    records = [_wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T11:00:00Z",
+                      role="weekly", error="DegradedRun")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _wcycles(result)["2026-08-08"].state == pr.DEGRADED
+
+
+def test_a_genuine_crash_is_still_failed():
+    records = [_wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:03:00Z",
+                      role="weekly", error="States.TaskFailed")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _wcycles(result)["2026-08-08"].state == pr.FAILED_UNRECOVERED
+
+
+def test_degraded_first_attempt_does_not_count_as_first_attempt_success():
+    records = [_wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T11:00:00Z",
+                      role="weekly", error="DegradedRun")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _signal(result, "first-attempt-success-rate").detail["numerator"] == 0
+
+
+# ------------------------------------------------------ attempts-to-success --
+
+
+def test_attempts_to_success_counts_the_rerun_that_worked():
+    records = [
+        _wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:13:00Z", role="weekly"),
+        _wexec("rr-1", "FAILED", "2026-08-08T10:00:00Z", "2026-08-08T10:20:00Z", role="watch-rerun"),
+        _wexec("rr-2", "SUCCEEDED", "2026-08-08T11:00:00Z", "2026-08-08T14:00:00Z", role="watch-rerun"),
+    ]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    cyc = _wcycles(result)["2026-08-08"]
+    assert cyc.detail["attempts"] == 3
+    assert cyc.detail["attempts_to_success"] == 3
+    assert cyc.state == pr.FAILED_RECOVERED
+    sig = _signal(result, "attempts-to-success")
+    assert sig.detail["fields"]["mean_attempts_to_success"]["value"] == 3.0
+    assert sig.detail["fields"]["mean_attempts_to_success"]["baseline"] == 1.0
+
+
+def test_attempts_to_success_is_none_when_no_attempt_succeeded():
+    records = [
+        _wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:13:00Z", role="weekly"),
+        _wexec("rr-1", "FAILED", "2026-08-08T10:00:00Z", "2026-08-08T10:20:00Z", role="watch-rerun"),
+    ]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _wcycles(result)["2026-08-08"].detail["attempts_to_success"] is None
+
+
+def test_roles_outside_cadence_and_recovery_are_not_attempts():
+    """The weekly pipeline's chained `exercise` runs are a different question
+    than "did the trigger path work" — counted in execution_count, never in
+    attempts."""
+    records = [
+        _wexec("run-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T12:00:00Z", role="weekly"),
+        _wexec("ex-1", "FAILED", "2026-08-08T22:00:00Z", "2026-08-08T22:10:00Z", role="exercise"),
+    ]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    cyc = _wcycles(result)["2026-08-08"]
+    assert cyc.detail["execution_count"] == 2
+    assert cyc.detail["attempts"] == 1
+    assert cyc.detail["attempts_to_success"] == 1
+
+
+# ------------------------------------------------------------ gate no-ops --
+
+
+def test_a_gate_skip_execution_is_not_a_cadence_attempt():
+    """The weekly trigger fires on more days than it runs; the run-day gate
+    skip-succeeds in seconds. Counting those as cadence successes inflates the
+    numerator with runs that did no work."""
+    records = [_wexec("skip-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T09:00:02Z",
+                      role="weekly")]
+    result = pr.fetch(
+        _weekly_cfg(noop_max_duration_seconds=30),
+        reader=_weekly_reader(records), trading_day_checker=lambda d: False, now=_now(),
+    )
+    cyc = _wcycles(result)["2026-08-08"]
+    assert cyc.state == pr.NEVER_FIRED
+    assert cyc.detail["gate_noop_count"] == 1
+    assert cyc.detail["attempts"] == 0
+    assert _signal(result, "first-attempt-success-rate").detail["denominator"] == 0
+
+
+def test_without_the_declared_noop_budget_every_execution_counts():
+    records = [_wexec("skip-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T09:00:02Z",
+                      role="weekly")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _wcycles(result)["2026-08-08"].state == pr.SUCCEEDED
+
+
+# ------------------------------------------------------------ stage depth --
+
+
+STAGES = ("MorningEnrich", "ResearchPredictorParallel", "PredictorTraining", "Evaluator")
+
+
+def test_stage_reached_renders_how_far_the_run_got():
+    records = [
+        _wexec("run-1", "FAILED", "2026-08-01T09:00:00Z", "2026-08-01T09:13:00Z", role="weekly",
+               entered=["MorningEnrich"]),
+        _wexec("run-2", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T12:34:00Z", role="weekly",
+               entered=["MorningEnrich", "ResearchPredictorParallel", "PredictorTraining"]),
+    ]
+    result = pr.fetch(_weekly_cfg(stage_states=list(STAGES)), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    cycles = _wcycles(result)
+    assert cycles["2026-08-01"].detail["stage_reached"] == "MorningEnrich"
+    assert cycles["2026-08-01"].detail["stage_depth"] == 1
+    # The same red, three stages further in — progress, not another red.
+    assert cycles["2026-08-08"].detail["stage_reached"] == "PredictorTraining"
+    assert cycles["2026-08-08"].detail["stage_depth"] == 3
+    assert cycles["2026-08-08"].detail["stage_count"] == 4
+
+
+def test_stage_fields_are_absent_when_no_stages_are_declared():
+    records = [_wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:13:00Z",
+                      role="weekly", entered=["MorningEnrich"])]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert "stage_reached" not in _wcycles(result)["2026-08-08"].detail
+
+
+# ---------------------------------------------------------------- cutovers --
+
+
+def test_cutover_is_marked_on_the_cycle_it_lands_on():
+    result = pr.fetch(
+        _weekly_cfg(cutovers=[{"date": "2026-08-08", "label": "per-stage spot repoint",
+                               "ref": "nousergon-data#1269"}]),
+        reader=_weekly_reader([]), trading_day_checker=lambda d: False, now=_now(),
+    )
+    cycles = _wcycles(result)
+    assert cycles["2026-08-08"].detail["cutover"]["label"] == "per-stage spot repoint"
+    assert cycles["2026-08-08"].detail["cutover"]["ref"] == "nousergon-data#1269"
+    assert "cutover" not in cycles["2026-08-01"].detail
+
+
+# ---------------------------------------------------------- revisit trigger --
+
+
+def test_rerun_revisit_trigger_fires_above_the_threshold():
+    """sf-pipeline-policy.md §1: >1 operator rerun to reach a complete
+    non-degraded terminal. A declared trigger with no detector fires only when
+    somebody notices."""
+    records = [
+        _wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:13:00Z", role="weekly"),
+        _wexec("rr-1", "FAILED", "2026-08-08T10:00:00Z", "2026-08-08T10:20:00Z", role="watch-rerun"),
+        _wexec("rr-2", "SUCCEEDED", "2026-08-08T11:00:00Z", "2026-08-08T14:00:00Z", role="watch-rerun"),
+    ]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    sig = _signal(result, "rerun-revisit-trigger")
+    assert sig.state == "firing"
+    assert sig.detail["breaches"][0]["date"] == "2026-08-08"
+    assert sig.detail["fields"]["cycles_over_rerun_threshold"]["value"] == 1
+
+
+def test_rerun_trigger_clear_on_a_first_attempt_success():
+    records = [_wexec("run-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T12:00:00Z",
+                      role="weekly")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _signal(result, "rerun-revisit-trigger").state == "clear"
+
+
+def test_a_cycle_that_never_succeeded_breaches_the_rerun_trigger():
+    """Zero reruns that worked is not evidence the threshold was respected."""
+    records = [_wexec("run-1", "FAILED", "2026-08-08T09:00:00Z", "2026-08-08T09:13:00Z",
+                      role="weekly")]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    assert _signal(result, "rerun-revisit-trigger").state == "firing"
+
+
+# ------------------------------------------------- weekday path is unchanged --
+
+
+def test_existing_weekday_config_is_unaffected_by_the_new_keys():
+    records = [
+        _exec("run-1", "SUCCEEDED", "2026-08-03T13:00:00Z", "2026-08-03T13:12:00Z", role="daily"),
+    ]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert set(cycles) == {"2026-08-03", "2026-08-04", "2026-08-05", "2026-08-07", "2026-08-10"}
+    assert cycles["2026-08-03"].state == pr.SUCCEEDED
+    assert cycles["2026-08-03"].detail["attempts"] == 1
+    assert cycles["2026-08-03"].detail["attempts_to_success"] == 1

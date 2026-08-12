@@ -202,9 +202,9 @@ rather than silently zero rows.
 | | |
 |---|---|
 | **Reads** | The same state-machine ARNs as `state-machine`, plus an injected trading calendar |
-| **Emits** | `cycle` (one per trading day, six-value reliability classification), `signal` (first-attempt success rate, market-open buffer trend) |
-| **Cannot supply** | `DEGRADED` for a pipeline that declares no `degraded_state_names`; buffer trend for a pipeline with no `open_time`/`open_timezone` |
-| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
+| **Emits** | `cycle` (one per cycle day, six-value reliability classification), `signal` (first-attempt success rate, attempts-to-success, rerun revisit trigger, market-open buffer trend) |
+| **Cannot supply** | `DEGRADED` for a pipeline that declares neither `degraded_state_names` nor a degraded terminal error; stage depth for a pipeline that declares no `stage_states`; buffer trend for a pipeline with no `open_time`/`open_timezone` |
+| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`, `degraded_error_names`, `cadence`, `cadence_weekdays`, `noop_max_duration_seconds`, `stage_states`, `cutovers`, `rerun_alert_threshold`), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
 
 Same source shape as `state-machine`, a different projection: one Cycle per
 trading day (id `pipeline-reliability:<pipeline_key>:<date>`), classified
@@ -218,21 +218,66 @@ it ran end-to-end or was skipped for a market holiday, so the split needs the
 calendar. `NEVER-FIRED` is a trading day with zero cadence-role executions —
 the schedule should have fired and did not.
 
-`DEGRADED` needs a richer read of the SAME source (`GetExecutionHistory`,
-opt-in per pipeline via `degraded_state_names` — costs one extra API call per
-execution, never fetched by default) and is honestly absent when a pipeline
-declares no degraded state names.
+`DEGRADED` arrives on either of two axes, and both are the same fact. A
+pipeline that degrades under the **Option-A** shape ends in a `Fail` state
+carrying `Error: DegradedRun` on purpose, so status-keyed watchers engage —
+`degraded_error_names` (default `[DegradedRun]`) matches it from the execution
+summary alone, no extra API call. A pipeline that instead signals degradation
+by *succeeding* having entered a marker state declares `degraded_state_names`,
+which needs a richer read of the SAME source (`GetExecutionHistory`, one extra
+call per execution, fetched only when declared). `DEGRADED` is honestly absent
+when a pipeline declares neither.
 
-First-attempt success rate and the buffer trend render via the self-describing
-`fields` mechanism (`model/fields.py` §5.8) — no bespoke rendering code.
+> Deriving `DEGRADED` as *first attempt succeeded AND entered a degraded state*
+> — the pre-`alpha-engine-config-I6919` rule — is a conjunction no Option-A
+> pipeline can satisfy, because Option-A makes the degraded run FAIL. The
+> bucket was unreachable for exactly the pipelines that degrade honestly, and
+> every one of their degraded runs rendered as an ordinary red.
+
+**Cycle days are the pipeline's own cadence, not the market's.** `cadence`
+picks how the window's *expected* days are enumerated: `trading-day` (default,
+consults the calendar), `weekday` with `cadence_weekdays` (Mon 0 .. Sun 6), or
+`calendar-day`. A Saturday-scheduled weekly pipeline run through the NYSE
+calendar windows none of its own cycle days and renders every one of them
+`HOLIDAY` — the absence state collapsing into "not expected", which is what
+`NEVER-FIRED` exists to prevent.
+
+**Attempts-to-success is the headline, not success rate.** A cycle that
+succeeds on rerun 6 and one that succeeds first time both read as "succeeded"
+without it, and the difference between them is the whole question. `attempts`
+counts the scheduled run plus every operator overlay against the same cycle;
+roles outside `cadence_roles ∪ recovery_roles` land in `execution_count` only.
+`noop_max_duration_seconds` excludes a cadence execution that self-gated and
+terminated immediately — counting a run that did no work as a success inflates
+the numerator the same way counting operator reruns does.
+
+**Stage depth renders how far a run got.** `stage_states` is an ordered list of
+state names from that pipeline's own definition; each cycle carries
+`stage_reached` / `stage_depth` / `stage_count`, so a run failing later than the
+last one reads as progress rather than as another red. `cutovers`
+(`{date, label, ref}`) marks dated changes to the pipeline on the strip, because
+a regression whose cause is a known cutover is a different fact from an
+unexplained one.
+
+The `rerun-revisit-trigger` Signal implements `sf-pipeline-policy.md` §1's
+*">1 operator rerun to reach a complete, non-degraded terminal"* revisit
+trigger, which was otherwise a declared trigger with no detector. A cycle that
+never reached success breaches it too: zero reruns that worked is not evidence
+the threshold was respected.
+
+First-attempt success rate, attempts-to-success, the rerun trigger and the
+buffer trend all render via the self-describing `fields` mechanism
+(`model/fields.py` §5.8) — no bespoke rendering code.
 
 Ships no default trading-calendar implementation in the base install: the
 `calendar` extra (`pandas-market-calendars`) is a generic, unaffiliated OSS
 NYSE calendar, never a fleet-specific one, so a standalone deployment of this
 console never inherits an alpha-engine dependency by installing it. Without
 the extra or an injected `trading_day_checker`, the adapter returns `FAILED`
-/ `unavailable=("trading_calendar",)` rather than treating every day as a
-trading day, which would make `NEVER-FIRED` and `HOLIDAY` indistinguishable.
+/ `unavailable=("trading_calendar",)` — but **only when some configured
+pipeline actually declares a `trading-day` cadence**. A weekly pipeline needs no
+market calendar, and refusing to render it for want of one its window never
+consults is the same false-unavailable in the other direction.
 
 ## `git-host`
 

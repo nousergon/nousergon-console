@@ -45,14 +45,17 @@ anything else renders `UNREPORTED`, the honest "declared, unobserved" answer.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 import yaml
 
+from .. import calendar_cadence
 from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, DECLARED_LIFECYCLE_STATES, Kind, State
+from ..trading_calendar import TradingDayChecker
 
 #: A registry document is a DECLARATION (§2.5): it says what is EXPECTED to
 #: exist, never how it is doing. Precedence — and the merge that computes
@@ -84,7 +87,11 @@ _FACET_FIELDS: tuple[tuple[str, str], ...] = (
 _STRUCTURAL_KEYS = frozenset({"facets", "produces", "consumes"})
 
 
-def fetch(config: dict[str, Any]) -> AdapterResult:
+def fetch(
+    config: dict[str, Any],
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> AdapterResult:
     path = config.get("path")
     kind_name = config.get("kind")
     kind = Kind.from_route(str(kind_name)) if kind_name else None
@@ -117,13 +124,15 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
             skipped += 1
             continue
         state = _entry_state(entry, kind, state_field, default_state)
+        detail = _detail(entry, id_field, state_field)
+        _apply_calendar_cadence(detail, entry, now=now, trading_day_checker=trading_day_checker)
         entities.append(Entity(
             kind=kind,
             id=eid,
             state=state,
             provenance=Provenance(source=path, as_of=None, evidence=f"file://{path}"),
             facets=_facets(entry),
-            detail=_detail(entry, id_field, state_field),
+            detail=detail,
         ))
         for key in _string_list(entry.get("produces")):
             edges.append(Edge(source=eid, rel="produces", target=key))
@@ -229,6 +238,42 @@ def _detail(entry: Mapping[str, Any], id_field: str, state_field: str | None) ->
     # `fields` (§5.8's self-describing block) passes through verbatim like
     # every other adapter's detail — this function does not interpret it.
     return {k: v for k, v in entry.items() if k not in reserved}
+
+
+def _apply_calendar_cadence(
+    detail: dict[str, Any],
+    entry: Mapping[str, Any],
+    *,
+    now: datetime | None,
+    trading_day_checker: TradingDayChecker | None,
+) -> None:
+    """Symbolic `cadence` -> a numeric `cadence_minutes` §9.6 can audit
+    (alpha-engine-config-I7050).
+
+    A row that already declares a plain numeric `cadence_minutes` keeps it
+    verbatim (§5.1's declaration-wins-its-own-field rule) — this only fills
+    the gap for a row whose cadence is a calendar symbol
+    (`ARTIFACT_REGISTRY.yaml`'s `saturday_sf`/`weekday_sf`/`eod_sf`/
+    `continuous`/`event_driven`), never overriding an explicit value. When the
+    symbol cannot be honestly translated (`event_driven`, an unknown symbol,
+    a trading-day symbol with no reachable calendar) nothing is added — the
+    row stays excluded from `staleness_honesty`'s denominator (§5.3), never
+    faked into looking fresh.
+    """
+    if detail.get("cadence_minutes"):
+        return
+    cadence = entry.get("cadence")
+    if not cadence:
+        return
+    minutes = calendar_cadence.effective_cadence_minutes(
+        cadence,
+        now=now,
+        trading_day_checker=trading_day_checker,
+        sla_minutes_after_cron=entry.get("sla_minutes_after_cron"),
+        interval_minutes=entry.get("interval_minutes"),
+    )
+    if minutes is not None:
+        detail["cadence_minutes"] = minutes
 
 
 def _string_list(value: Any) -> tuple[str, ...]:

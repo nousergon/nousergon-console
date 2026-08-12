@@ -75,6 +75,11 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
         detail={
             "declared_by": binding.component_id,
             "cadence_seconds": cadence,
+            # §9.6 (alpha-engine-config-I7050): `staleness_honesty()` reads
+            # `cadence_minutes` specifically — it previously had no way to
+            # audit a driver-bound artifact at all, even though this driver
+            # already computes `state` from the same cadence above.
+            "cadence_minutes": cadence / 60.0 if cadence is not None else None,
         },
     )
     # The component declared this artifact, so the produces edge is a fact the

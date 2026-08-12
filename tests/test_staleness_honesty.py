@@ -85,3 +85,39 @@ def test_an_artifact_disclosing_stale_as_its_own_raw_value_is_not_a_violation():
 def test_index_delegates_to_the_numbers_module():
     idx = Index()
     assert idx.staleness_honesty(now=NOW) == staleness_honesty(idx, now=NOW)
+
+
+def test_a_declared_disabled_row_is_not_a_violation():
+    """`lifecycle: disabled` is the STRONGEST disclosure of staleness the
+    twelve-state vocabulary carries — the registry saying the component was
+    not expected to report at all (`observability-policy.md` §8.3).
+
+    Counting it as dishonest inverts the number: it becomes unclearable by
+    honesty, since the only way to drop the count is to switch the component
+    back on. `render/html.py::EXCEPTION_STATES` already excludes exactly these
+    three declared states for the same reason.
+    """
+    for state in (State.DISABLED, State.DEPRECATED, State.RETIRED):
+        declared_off = Entity(
+            kind=Kind.COMPONENT, id=f"comp-{state.value.lower()}", state=state,
+            provenance=Provenance("registry",
+                                  as_of=(NOW - timedelta(days=8)).isoformat()),
+            detail={"cadence_minutes": 60},
+        )
+        result = staleness_honesty(_index_with(declared_off), now=NOW)
+        assert result["count"] == 0, state
+        assert result["of"] == 1, state  # audited, and it passed
+
+
+def test_a_stale_row_that_is_not_an_exception_state_is_still_caught():
+    """The guard on the row above: widening the disclosed set must not blind
+    §9.6 to DEGRADED/FAILED/HEALTHY, none of which say anything about age."""
+    for state in (State.HEALTHY, State.DEGRADED, State.FAILED, State.NEVER_RAN):
+        silent = Entity(
+            kind=Kind.COMPONENT, id=f"comp-{state.value.lower()}", state=state,
+            provenance=Provenance("checks",
+                                  as_of=(NOW - timedelta(days=8)).isoformat()),
+            detail={"cadence_minutes": 60},
+        )
+        result = staleness_honesty(_index_with(silent), now=NOW)
+        assert result["count"] == 1, state

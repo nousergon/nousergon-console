@@ -24,8 +24,8 @@ from datetime import datetime, timezone
 from ..index.graph import Index
 from ..model.entity import Entity
 from ..model.fields import Field, format_value, parse as parse_fields
-from ..model.kinds import EXCEPTION_VALUES, Kind, State
-from ..server.router import path_for_entity
+from ..model.kinds import EXCEPTION_VALUES, STATE_FILTER, Kind, State
+from ..server.router import path_for_entity, path_for_list
 
 #: Component states that mean "look at me" on the exception-first landing view
 #: (§4.3). The three DECLARED states are deliberately absent: DISABLED,
@@ -234,9 +234,14 @@ def history_page(index: Index, ent: Entity, window_hours: int) -> str:
 
 def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1) -> str:
     """A filtered list — the facets are in the URL, so this reproduces cold (§3.4)."""
-    entities = index.of_kind(kind)
-    for fkey, fval in facets.items():
-        entities = [e for e in entities if e.facets.get(fkey) == fval]
+    # One filter implementation, shared with the JSON representation (§3.8:
+    # the same query, both renderings). The hand-rolled loop this replaces
+    # matched `e.facets` ONLY, so the two representations of the same URL
+    # already disagreed on baseline-comparison filters — and would have
+    # disagreed again on `state=` (alpha-engine-config-I7107).
+    from .json import filter_entities
+
+    entities = filter_entities(index.of_kind(kind), facets)
     total = len(index.of_kind(kind))
     start = (page - 1) * 50
     visible = entities[start:start + 50]
@@ -313,6 +318,13 @@ def landing_page(index: Index) -> str:
         else "unknown — no registry configured, or a declared registry could "
              "not be read (§9.1)"
     )
+    # The members, LINKED — §3.1's structure path. `_format_number` can only
+    # emit names (its output is escaped by `_number_row`), so the one place a
+    # reader can click through from §9.1's count to the rows behind it is here
+    # (alpha-engine-config-I7107).
+    unregistered_links = _member_links(
+        Kind.COMPONENT, State.UNREGISTERED.value,
+        completeness.get("unregistered_ids") or ())
     gap = index.transparency_gap()
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
@@ -324,9 +336,29 @@ def landing_page(index: Index) -> str:
 {_table(exceptions)}
 <h2>waiting on Brian</h2>
 {_table(queue)}
-<p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1)</p>
+<p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
 {numbers_section(index, exceptions, conflicts, gap)}
 </body></html>"""
+
+
+def _member_links(kind: Kind, state: str, member_ids) -> str:
+    """The rows behind a §9 count, as links — the count's evidence field (§5.1).
+
+    Renders the filtered list URL (`/<kind>?state=<STATE>`) alongside each
+    member's own entity page, so the members are navigable by structure and not
+    merely enumerable in prose. Empty string when there are none: a zero count
+    has nothing to link to, and an empty "see:" is noise on a healthy surface.
+    """
+    members = list(member_ids)
+    if not members:
+        return ""
+    listing = path_for_list(kind, {STATE_FILTER: state})
+    links = " · ".join(
+        f'<a href="{esc(path_for_entity(kind, mid))}">{esc(mid)}</a>'
+        for mid in members
+    )
+    return (f' — <a href="{esc(listing)}">all {esc(state)} {esc(kind.value)}s</a>'
+            f': {links}')
 
 
 def numbers_section(index: Index, exceptions: list[Entity], conflicts: list[Entity],
@@ -397,6 +429,16 @@ def _format_number(value: object) -> str:
         rendered = value.get("rendered", 0)
         unreg = value.get("unregistered")
         tail = f' · {unreg} unregistered' if unreg is not None else ''
+        # §9.1 names its members for the same reason §9.6 does: an
+        # UNREGISTERED row is one line in an exception table 100+ rows long,
+        # so the count moving 0 -> 1 was unattributable from this surface
+        # (alpha-engine-config-I7107). Same escaping contract as §9.6 above.
+        for key, label in (("unregistered_ids", "unregistered"),
+                           ("unrendered_ids", "declared but not rendered")):
+            members = value.get(key)
+            if members:
+                tail += (f' · {label}: '
+                         f'{", ".join(str(m) for m in members)}')
         if of is None:
             return f'unknown — no registry configured or unreadable (§9.1){tail}'
         return f'{rendered} / {of}{tail}'

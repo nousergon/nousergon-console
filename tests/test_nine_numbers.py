@@ -200,3 +200,91 @@ def test_9_6_names_the_rows_it_counted_in_both_representations():
 
     page = render_html.landing_page(index)
     assert "silently-stale-component" in page
+
+
+#: Every §9 number that counts a POPULATION OF NAMED ROWS, mapped to the key
+#: carrying its count and the key carrying its members. The invariant below is
+#: the general form of the two defects fixed one number at a time
+#: (alpha-engine-config-I6970/I7107 for §9.1, I7019/nousergon-console-PR86 for
+#: §9.6): a count without its members reports a finding nobody can locate, and
+#: it is discovered only when someone has to rebuild the index by hand on the
+#: box to answer "which row?".
+#:
+#: Adding a member-naming number here is deliberately cheap. Adding a counting
+#: number and NOT listing it here is the thing this table exists to make
+#: visible in review.
+MEMBER_NAMING = (
+    ("population_completeness", "unregistered", "unregistered_ids"),
+    ("population_completeness", "rendered_gap", "unrendered_ids"),
+    ("staleness_honesty", "count", "violations"),
+)
+
+
+def _count_for(number: dict, count_key: str) -> int:
+    """`rendered_gap` is `of - rendered`: §9.1 publishes the PASSING count, so
+    the population needing members is the complement."""
+    if count_key == "rendered_gap":
+        of = number.get("of")
+        return 0 if of is None else of - number["rendered"]
+    return number[count_key]
+
+
+def test_a_nonzero_count_always_carries_a_nonempty_member_list():
+    """§5.1's evidence field, applied to a number rather than a row.
+
+    Asserted over a REAL index carrying a genuine violation of each kind, not a
+    hand-built dict — the defect being guarded lives at the render boundary,
+    where the members were computed and then dropped.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from console.model.entity import Entity, Provenance
+    from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
+    from console.model.kinds import Kind, State
+
+    now = datetime.now(timezone.utc)
+    index = _built_example_index()
+    # One UNREGISTERED component (§9.1) and one silently-stale row (§9.6).
+    index.add_result(AdapterResult(
+        name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="wild-component", state=State.UNREPORTED,
+                   provenance=Provenance("discovery")),
+            Entity(kind=Kind.COMPONENT, id="silently-stale-component",
+                   state=State.HEALTHY,
+                   provenance=Provenance("checks",
+                                         as_of=(now - timedelta(days=8)).isoformat()),
+                   detail={"cadence_minutes": 60}),
+        ),
+    ))
+    numbers = render_json.payload(index, resolve("/"))["numbers"]
+    assert numbers["population_completeness"]["unregistered"] >= 1
+    assert numbers["staleness_honesty"]["count"] >= 1
+
+    for key, count_key, members_key in MEMBER_NAMING:
+        number = numbers[key]
+        assert members_key in number, f"{key}.{members_key} missing entirely"
+        members = number[members_key]
+        count = _count_for(number, count_key)
+        assert len(members) == count, (
+            f"{key}: {count_key}={count} but {members_key} names {len(members)}")
+        if count:
+            assert all(isinstance(m, str) and m for m in members), key
+
+
+def test_the_members_appear_in_the_html_representation_too():
+    """§3.8 — the same URL, both renderings, the same facts. A member list
+    published only on the wire leaves the human reader where the agent was."""
+    from console.model.entity import Entity, Provenance
+    from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
+    from console.model.kinds import Kind, State
+
+    index = _built_example_index()
+    index.add_result(AdapterResult(
+        name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(Entity(kind=Kind.COMPONENT, id="wild-component",
+                         state=State.UNREPORTED, provenance=Provenance("discovery")),),
+    ))
+    page = render_html.landing_page(index)
+    assert "wild-component" in page
+    assert "/component?state=UNREGISTERED" in page

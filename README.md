@@ -40,6 +40,8 @@ Everything rendered is a fact about exactly one of seven kinds:
 
 Every entity is reachable **by name** (search), **by structure** (navigation), and **by relation** (a link from anything adjacent). Three paths, independently sufficient — because a fact reachable only one way is reachable only by someone who already knows it exists, and that is a forensic tool rather than a measurement.
 
+Every list is filterable by facet **and by state** — `/component?state=UNREGISTERED` — in both representations of the same URL. That is what makes a number's members navigable rather than merely enumerable: a count published without a way to reach the rows behind it reports a defect nobody can locate, which is how one newly-unregistered component hid inside a hundred-row exception table for two hours.
+
 The relation direction that matters most is the reverse one. *What did this produce* is usually written down somewhere. *Who breaks if this is stale* exists nowhere unless the index derives it — and it is the only question an incident actually asks.
 
 ## Getting a process or module onto it

@@ -309,3 +309,52 @@ def test_history_is_read_only_for_the_components_that_were_silent():
 
 def _raise(*args, **kwargs):
     raise RuntimeError("cloudwatch unreachable")
+
+
+# ── §5.1's as-of: "when was this last true" (alpha-engine-config-I7060) ──────
+
+
+def test_the_window_is_read_in_buckets_not_as_one_datapoint():
+    """Read as a single 1440-minute bucket, the only timestamp CloudWatch
+    returns is the START of the window — so every HEALTHY row carried an as-of
+    a full day stale while its state was current. The row contract asks for
+    "when was this last true"; a window boundary cannot answer it."""
+    captured = {}
+
+    def reader(queries, start, end):
+        for q in queries:
+            captured.setdefault(q.metric_name, q.period_seconds)
+        return {q.query_id: [] for q in queries}
+
+    cw.fetch(_config(), enumerator=lambda *a: ["fn"], reader=reader,
+             now=NOW, clock=lambda: 0.0)
+    assert captured["Invocations"] == 300, captured
+
+
+def test_as_of_is_the_last_bucket_that_carried_an_invocation():
+    stamps = [
+        ((NOW - timedelta(minutes=m)).isoformat(), v)
+        for m, v in ((1400, 3.0), (700, 2.0), (35, 1.0), (10, 0.0))
+    ]
+    result = _fetch(["fn"], {("fn", "Invocations"): stamps, ("fn", "Errors"): []})
+    entity = result.entities[0]
+    assert entity.state is State.HEALTHY
+    assert entity.detail["invocations"] == 6.0, "buckets must still be summed"
+    # The 10-minutes-ago bucket is a ZERO — dating the row to it would claim
+    # freshness from a moment nothing happened.
+    assert entity.provenance.as_of == (NOW - timedelta(minutes=35)).isoformat()
+
+
+def test_the_resolution_is_configurable_and_clamped_to_the_window():
+    """A bucket larger than the window collapses back to the defect above."""
+    captured = {}
+
+    def reader(queries, start, end):
+        for q in queries:
+            # setdefault: the history pass that follows uses 86400 by design.
+            captured.setdefault(q.metric_name, q.period_seconds)
+        return {}
+
+    cw.fetch(_config(window_minutes=2, resolution_seconds=8000),
+             enumerator=lambda *a: ["fn"], reader=reader, now=NOW, clock=lambda: 0.0)
+    assert captured["Invocations"] == 120

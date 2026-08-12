@@ -70,6 +70,12 @@ def build_index(config: dict[str, Any]) -> Index:
     source, never empties (§2.3).
     """
     index = Index()
+    # One tolerance, set before any claim arrives: the merge's DISABLED/MISSED
+    # comparison and §9.6's staleness audit both read it, and they must not be
+    # able to disagree about one row (`index/cadence_state.py`).
+    index.set_staleness_factor(
+        float((config.get("console") or {}).get("staleness_factor", 1.5))
+    )
     descriptors: list = []
     # The registry adapter is configured under its own `registry:` block.
     registry_entries = ([config["registry"]] if config.get("registry") else [])

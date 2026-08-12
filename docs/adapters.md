@@ -113,6 +113,17 @@ The registry adapter. Without a registry the console still runs: it indexes
 whatever the other adapters return and reports population completeness as
 unknown rather than as 1.0.
 
+A row's optional **`cadence_minutes`** is carried onto the entity's `detail`.
+It is the one field in §2.5's declaration column that changes another
+source's verdict: a counter-reading adapter can say when something last ran
+and never when it was *supposed* to, so a silent component is `UNREPORTED`
+until a declaration says how often it should fire. With a cadence present the
+merge resolves it to `MISSED` or `HEALTHY` — see
+[`console/index/cadence_state.py`](../console/index/cadence_state.py). The
+same field is what gives §9.6 `staleness_honesty` a row it can audit; a
+non-positive or unparseable value is dropped rather than passed through, so a
+declared-but-unusable cadence never reads as declared.
+
 ## `object-store`
 
 | | |

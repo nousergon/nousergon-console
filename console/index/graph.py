@@ -23,6 +23,7 @@ from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
 from .build import AdapterFetch, BuildInfo
+from .cadence_state import resolve_cadence_state
 from .merge import Claim, NamespaceCollision, merge
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
@@ -58,6 +59,11 @@ class Index:
         self._discovery_scope: set[tuple[str, str]] = set()
         self._saw_fleetwide_discovery = False
         self._saw_ok_declaration = False
+        # §8.3's DISABLED/MISSED separation is a comparison between a declared
+        # cadence and an observed silence, so it needs the same tolerance
+        # `staleness_honesty` uses — one factor, set from configuration, never
+        # two that can disagree. See `index/cadence_state.py`.
+        self._staleness_factor = 1.5
         self._finalized = False
         self._entities: dict[str, Entity] = {}
         self._liveness_watcher: str | None = None
@@ -86,6 +92,17 @@ class Index:
             "reason": "not computed for this build — built directly via Index() "
                       "rather than console.config.build_index",
         }
+
+    def set_staleness_factor(self, factor: float) -> None:
+        """The multiplier on a declared cadence before silence is a defect.
+
+        Set by `config.build_index` from `console.staleness_factor`, the same
+        value `staleness_honesty()` is called with — a merge that placed a row
+        `HEALTHY` on one tolerance while §9.6 called it a violation on another
+        would be two numbers disagreeing about one row.
+        """
+        self._staleness_factor = float(factor)
+        self._finalized = False
 
     def declare_registry(self, name: str) -> None:
         """Record a configured registry even when its adapter cannot build it."""
@@ -280,7 +297,13 @@ class Index:
         if declared and not discovered and self._saw_ok_discovery:
             if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
                 return dataclasses.replace(ent, state=State.ABSENT)
-        return ent
+        # The third state that exists only as a comparison between claims:
+        # `MISSED` (and the `HEALTHY` on its other side) for a component a
+        # counter-reading source found SILENT and a registry row declares a
+        # cadence for. Disjoint from the ABSENT branch above by construction —
+        # that one requires no discovery claim, this one requires a claim that
+        # actually read a window. See `index/cadence_state.py`.
+        return resolve_cadence_state(ent, staleness_factor=self._staleness_factor)
 
     def _within_discovery_scope(self, ent: Entity) -> bool:
         """Could any successful discovery pass have found this entity?

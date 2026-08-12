@@ -85,11 +85,7 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
                     evidence=f"file://{fpath}",
                 ),
                 facets=_facets(row),
-                detail={
-                    "registry_file": fname,
-                    "produces": list(row.get("produces") or []),
-                    "consumes": list(row.get("consumes") or []),
-                },
+                detail=_detail(row, fname),
             )
         )
         if row.get(id_field):
@@ -124,6 +120,37 @@ def _lineage_edges(descriptors: list[Descriptor]) -> list[Edge]:
         for key in d.consumes:
             edges.append(Edge(source=key, rel="consumed-by", target=d.component_id))
     return edges
+
+
+def _detail(row: dict[str, Any], fname: str) -> dict[str, Any]:
+    """What the declaration supplies beyond identity and lifecycle.
+
+    `cadence_minutes` is here because §2.5's table names **cadence** as a thing
+    a DECLARATION supplies and an observation does not — a substrate counter
+    can say when something last ran, never when it was supposed to. Carrying it
+    on the entity is what lets `index/cadence_state.py` separate `DISABLED`
+    from `MISSED` at the merge, and what gives §9.6 a row it can audit at all:
+    before this, `staleness_honesty`'s denominator could only ever contain
+    entities from sources that happened to carry their own cadence, so a
+    registry row's declared expectation was written down and never read.
+
+    Absent, blank or non-positive values are omitted rather than passed
+    through as `None`/`0` — a key present with an unusable value reads as
+    declared and is not (§2.2's blank-required-field rule, one level down).
+    """
+    detail: dict[str, Any] = {
+        "registry_file": fname,
+        "produces": list(row.get("produces") or []),
+        "consumes": list(row.get("consumes") or []),
+    }
+    cadence = row.get("cadence_minutes")
+    try:
+        minutes = float(cadence)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes > 0:
+        detail["cadence_minutes"] = minutes
+    return detail
 
 
 def _facets(row: dict[str, Any]) -> dict[str, str]:

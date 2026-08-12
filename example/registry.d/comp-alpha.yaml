@@ -5,4 +5,9 @@ substrate: lambda
 origin: aws:lambda:comp-alpha
 owner: example-owner
 lifecycle: in-service
+# How often this is expected to run. Optional, and the one declaration field
+# that changes another source's verdict: without it a component observed
+# silent stays UNREPORTED, because idle-by-design and missed-its-trigger are
+# indistinguishable from counters alone (observability-policy.md §8.3).
+cadence_minutes: 1440
 authority_tier: unknown

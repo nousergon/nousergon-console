@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 from ..index.graph import Index
 from ..model.entity import Edge, Entity
-from ..model.kinds import State
+from ..model.kinds import STATE_FILTER, State
 from ..model.fields import parse as parse_fields
 from ..search.resolve import search
 from ..server.router import Resolved
@@ -158,6 +158,14 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
     the same shape via `render.html.landing_numbers`)."""
     entities = index.all()
     return {
+        # §9.1 already NAMES its members at the index (`unregistered_ids` /
+        # `unrendered_ids`, alpha-engine-config-I7107), so it needs no
+        # `_named_members` wrapper here — and cannot take one: that helper
+        # routes through `aggregate()`, which raises on a `None` denominator,
+        # and `of: None` is precisely how §9.1 signals uncomputable (see the
+        # `_landing` comment above). The invariant both paths owe — a nonzero
+        # count always carries a nonempty member list — is asserted over every
+        # §9 number in `tests/test_nine_numbers.py`, not per-number here.
         "population_completeness": index.population_completeness(),   # §9.1
         "transparency_gap": aggregate(gap["count"], gap["of"]),        # §9.2
         "index_reachability": index.reachability(),                    # §9.3
@@ -226,6 +234,12 @@ def filter_entities(entities: list[Entity], facets: dict[str, str]) -> list[Enti
 def _matches(entity: Entity, key: str, value: str) -> bool:
     if key in entity.facets:
         return entity.facets[key] == value
+    if key == STATE_FILTER:
+        # Case-insensitive: §8.3's vocabulary is upper-case, an Artifact's raw
+        # value is whatever its source said, and a filter that only matched one
+        # casing would render an empty list — which reads as "nothing in this
+        # state" rather than "you typed it wrong" (§5.4: no data is never green).
+        return entity.state_value.strip().lower() == value.strip().lower()
     for field in parse_fields(entity.detail.get("fields")):
         if field.name != key or not field.comparable or not isinstance(field.value, (int, float)):
             continue

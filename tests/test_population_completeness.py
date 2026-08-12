@@ -178,3 +178,113 @@ def test_transparency_gap_is_zero_when_nothing_is_unreported():
                          provenance=Provenance("registry")),),
     ))
     assert idx.transparency_gap() == {"count": 0, "of": 1}
+
+
+# ---- §9.1 names the rows it counted (alpha-engine-config-I7107) -----------
+#
+# The count moved 0 -> 1 on the live surface between 19:45Z and 21:45Z on
+# 2026-08-12 and could not be attributed: `population_completeness` published
+# `{of, ratio, rendered, unregistered}` and nothing else, and an UNREGISTERED
+# component is one line in a 100+ row exception table. Four probes over SSM
+# failed to name it. Same defect `nousergon-console-PR86` fixed for §9.6.
+
+
+def _index_with_one_unregistered(tmp_path):
+    reg = tmp_path / "registry.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-one": {}})
+    index = build_index({"registry": {"adapter": "yaml-directory", "path": str(reg),
+                                      "id_field": "component_id"}})
+    index.add_result(AdapterResult(
+        name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(Entity(kind=Kind.COMPONENT, id="recovery_path_staleness",
+                         state=State.UNREPORTED, provenance=Provenance("discovery")),),
+    ))
+    return index
+
+
+def test_population_completeness_names_its_unregistered_members(tmp_path):
+    result = _index_with_one_unregistered(tmp_path).population_completeness()
+    assert result["unregistered"] == 1
+    assert result["unregistered_ids"] == ["recovery_path_staleness"]
+
+
+def test_population_completeness_member_lists_are_present_when_empty(tmp_path):
+    """Always-present keys, empty when the count is 0. A key that appears only
+    on failure makes every consumer write the absent-key branch, and one that
+    skips it reads a healthy surface as a schema error."""
+    reg = tmp_path / "registry.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-one": {}})
+    result = build_index({"registry": {"adapter": "yaml-directory", "path": str(reg),
+                                       "id_field": "component_id"}}).population_completeness()
+    assert result["unregistered"] == 0
+    assert result["unregistered_ids"] == []
+    assert result["unrendered_ids"] == []
+
+
+def test_population_completeness_names_members_on_the_uncomputable_branch():
+    """`of`/`ratio` None is the uncomputable SIGNAL, not permission to drop the
+    other count's evidence: an unreadable second registry is exactly when
+    knowing WHICH rows are unregistered matters most."""
+    idx = Index()
+    idx.declare_registry("registry-a")
+    idx.declare_registry("registry-b")  # declared, never reported -> unread
+    idx.add_result(AdapterResult(
+        name="registry-a", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="comp-one", state=State.UNREPORTED,
+                         provenance=Provenance("registry-a")),),
+    ))
+    idx.record_registry_rows("registry-a", count=1, ok=True)
+    idx.add_result(AdapterResult(
+        name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(Entity(kind=Kind.COMPONENT, id="comp-wild", state=State.UNREPORTED,
+                         provenance=Provenance("discovery")),),
+    ))
+    result = idx.population_completeness()
+    assert result["of"] is None and result["ratio"] is None
+    assert result["unregistered"] == 1
+    assert result["unregistered_ids"] == ["comp-wild"]
+
+
+def test_the_unregistered_members_are_navigable_by_state_url(tmp_path):
+    """§3.1's structure path: enumerable is not navigable. `/component?state=
+    UNREGISTERED` reaches the rows behind the count, in BOTH representations
+    of the same URL (§3.8)."""
+    from console.render import html as render_html
+    from console.render import json as render_json
+    from console.server.router import path_for_list, resolve
+
+    index = _index_with_one_unregistered(tmp_path)
+    url = path_for_list(Kind.COMPONENT, {"state": "UNREGISTERED"})
+    assert url == "/component?state=UNREGISTERED"
+
+    path, _, qs = url.partition("?")
+    req = resolve(path, qs)
+    doc = render_json.payload(index, req)
+    assert [e["id"] for e in doc["entities"]] == ["recovery_path_staleness"]
+    assert doc["filtered"] == 1
+
+    page = render_html.list_page(index, req.kind, req.facets, req.page)
+    assert "recovery_path_staleness" in page
+    assert "comp-one" not in page  # the filter is applied, not decorative
+
+
+def test_the_state_filter_is_case_insensitive(tmp_path):
+    """An empty list reads as "nothing in this state", never as "you typed it
+    wrong" (§5.4) — so casing must not be load-bearing."""
+    from console.render import json as render_json
+    from console.server.router import resolve
+
+    index = _index_with_one_unregistered(tmp_path)
+    doc = render_json.payload(index, resolve("/component", "state=unregistered"))
+    assert [e["id"] for e in doc["entities"]] == ["recovery_path_staleness"]
+
+
+def test_the_landing_page_links_the_unregistered_members(tmp_path):
+    """§5.1's evidence field on a NUMBER: the count links to the rows."""
+    from console.render import html as render_html
+
+    page = render_html.landing_page(_index_with_one_unregistered(tmp_path))
+    assert "/component?state=UNREGISTERED" in page
+    assert '<a href="/component/recovery_path_staleness">' in page

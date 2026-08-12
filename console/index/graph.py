@@ -352,6 +352,15 @@ class Index:
         goes true the moment ONE of several configured registries succeeds,
         which would otherwise report a ratio as if a second, failed registry
         did not exist.
+
+        Both counts publish their members — `unregistered_ids` beside
+        `unregistered`, `unrendered_ids` beside `rendered`/`of` — so the number
+        is actionable from the surface rather than re-derived by hand on the
+        box (alpha-engine-config-I7107; the same treatment §9.6's `violations`
+        received in `nousergon-console-PR86`). The lists are always present,
+        empty when the count is 0: a key that appears only on failure makes
+        every consumer write the absent-key branch, and a consumer that skips
+        it reads a healthy surface as a schema error.
         """
         self.finalize()
         # §2.4 / alpha-engine-config-I6970: the registry declares COMPONENT
@@ -362,16 +371,29 @@ class Index:
         # ever. Comparing every RUN-kind entity against the registry inflated
         # this count 8.5x (15 of 17) against the live fleet registry: the 15
         # were runs of already-declared components, not registry gaps.
-        unregistered = sum(
-            1 for e in self._entities.values()
+        # Both counts NAME their members (§5.1's evidence field, §3.1's three
+        # reachability paths), for the reason `render/json.py::_named_members`
+        # gives for §9.6: a count whose population cannot be enumerated reports
+        # a defect nobody can locate. Measured cost of not doing it here:
+        # `unregistered` moved 0 -> 1 on the live surface between 19:45Z and
+        # 21:45Z on 2026-08-12 and four separate probes over SSM could not name
+        # the row (alpha-engine-config-I7107). `unrendered` is the same defect
+        # on the other count — a declared id the merge dropped is by
+        # construction absent from every view, so the ratio would be the only
+        # trace it ever existed.
+        unregistered_ids = sorted(
+            e.id for e in self._entities.values()
             if e.state is State.UNREGISTERED and e.kind is Kind.COMPONENT
         )
+        unregistered = len(unregistered_ids)
         unread = sorted(self._declared_registries - set(self._registry_rows))
         failed = sorted(n for n, info in self._registry_rows.items() if not info["ok"])
         broken = sorted(set(unread) | set(failed))
         if not self._saw_ok_declaration or broken:
             return {"rendered": 0, "of": None, "ratio": None,
-                    "unregistered": unregistered}
+                    "unregistered": unregistered,
+                    "unregistered_ids": unregistered_ids,
+                    "unrendered_ids": []}
         declared_ids = {
             entity_id for entity_id, claims in self._claims.items()
             if any(
@@ -380,12 +402,15 @@ class Index:
                 for c in claims
             )
         }
-        rendered = sum(1 for eid in declared_ids if eid in self._entities)
+        unrendered_ids = sorted(eid for eid in declared_ids if eid not in self._entities)
+        rendered = len(declared_ids) - len(unrendered_ids)
         of = len(declared_ids)
         return {
             "rendered": rendered, "of": of,
             "ratio": round(rendered / of, 4) if of else None,
             "unregistered": unregistered,
+            "unregistered_ids": unregistered_ids,
+            "unrendered_ids": unrendered_ids,
         }
 
     def transparency_gap(self) -> dict[str, object]:

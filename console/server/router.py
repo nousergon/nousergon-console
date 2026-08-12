@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl
 
-from ..model.kinds import FACETS, Kind
+from ..model.kinds import FACETS, STATE_FILTER, Kind
 
 
 @dataclass(frozen=True)
@@ -96,8 +96,13 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         raise UnknownRoute(f"no view named by segment {segments[0]!r}")
 
     if len(segments) == 1:
-        # A list view: /<kind>?facet=value&...
-        facets = {k: v for k, v in params.items() if k in FACETS or v in {"below-baseline", "above-baseline", "at-baseline"}}
+        # A list view: /<kind>?facet=value&... — plus `state=<§8.3 state>`,
+        # which is not a facet but is filtered by the same one code path
+        # (`render/json.py::_matches`), so a §9 number's members are reachable
+        # as a URL rather than only enumerable (alpha-engine-config-I7107).
+        facets = {k: v for k, v in params.items()
+                  if k in FACETS or k == STATE_FILTER
+                  or v in {"below-baseline", "above-baseline", "at-baseline"}}
         try:
             page = max(1, int(params.get("page", "1")))
         except ValueError:

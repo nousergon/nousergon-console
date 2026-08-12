@@ -97,6 +97,10 @@ def test_population_completeness_all_registry_rows_render():
     idx.add_result(_registry_result("comp-alpha", "comp-beta"))
     assert idx.population_completeness() == {
         "rendered": 2, "of": 2, "ratio": 1.0, "unregistered": 0,
+        # Always present, empty when the count is 0 (alpha-engine-config-I7107):
+        # a key that appears only on failure makes every consumer write the
+        # absent-key branch.
+        "unregistered_ids": [], "unrendered_ids": [],
     }
 
 
@@ -165,4 +169,5 @@ def test_json_landing_carries_the_same_decision_queue_and_completeness():
     assert {e["id"] for e in doc["decision_queue"]} == {"repo-I1"}
     assert doc["numbers"]["population_completeness"] == {
         "rendered": 1, "of": 1, "ratio": 1.0, "unregistered": 0,
+        "unregistered_ids": [], "unrendered_ids": [],
     }

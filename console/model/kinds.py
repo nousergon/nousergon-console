@@ -57,6 +57,21 @@ FACETS: tuple[str, ...] = (
 )
 
 
+#: The one list filter that is NOT a facet (§2.2 facets are fields carried on
+#: an entity; a state is the row's own §5.1 verdict). It is admitted alongside
+#: `FACETS` by the router so every §8.3 state is navigable as a URL —
+#: `/component?state=UNREGISTERED` is the view that reaches §9.1's
+#: `unregistered_ids`, and the same URL shape reaches any other state a §9
+#: number counts (alpha-engine-config-I7107). Without it the only way to see
+#: the rows behind a count was the undifferentiated exception table, which is
+#: where a single UNREGISTERED component hid among 96 unreported ones.
+#:
+#: Deliberately not added to `FACETS`: an adapter emitting a facet literally
+#: named `state` would then silently shadow the row's real state, and the
+#: facet vocabulary is declared in `config.example.yaml` too.
+STATE_FILTER: str = "state"
+
+
 #: The twelve-state closed vocabulary is NORMATIVE in observability-policy.md
 #: §8.3. This console renders it and does not define one: console-policy.md's
 #: superordinate note says §8.3's vocabulary "is the only state vocabulary this

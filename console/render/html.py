@@ -378,7 +378,17 @@ def _format_number(value: object) -> str:
     if value.get("computable") is False:
         return f'not computable — {value.get("reason", "no reason given")}'
     if "count" in value and "of" in value:
-        return f'{value["count"]} / {value["of"]}'
+        base = f'{value["count"]} / {value["of"]}'
+        # A number that NAMES its members renders them (§5.1's evidence field).
+        # §9.6's members appear on no other view by construction — a staleness
+        # violation is a row whose state is not in EXCEPTION_STATES — so the
+        # count alone is a finding nobody can act on.
+        members = value.get("violations")
+        if members:
+            # Not escaped here: every caller passes this through `esc` (see
+            # `_number_row`), and escaping twice renders the entities literally.
+            return f'{base} — {", ".join(str(m) for m in members)}'
+        return base
     if {"pane_orphans", "kind_orphans"} <= value.keys():
         po, ko = value["pane_orphans"], value["kind_orphans"]
         return f'panes {po["count"]}/{po["of"]} · kinds {ko["count"]}/{ko["of"]}'

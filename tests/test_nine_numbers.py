@@ -164,3 +164,39 @@ def test_json_and_html_numbers_agree_on_the_transparency_gap_count():
     gap = doc["numbers"]["transparency_gap"]
     html = render_html.landing_page(index)
     assert f'{gap["count"]} / {gap["of"]}' in html or f'{gap["count"]}/{gap["of"]}' in html
+
+
+def test_9_6_names_the_rows_it_counted_in_both_representations():
+    """§5.1 evidence field / §3.1 reachability.
+
+    §9.6's members are reachable NOWHERE else on the surface: a staleness
+    violation is by definition a row whose state is not in
+    `render/html.py::EXCEPTION_STATES`, so it never lands on the
+    exception-first view. `count / of` alone is a defect nobody can locate.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from console.model.entity import Entity, Provenance
+    from console.model.envelope import AdapterResult, AdapterStatus
+    from console.model.kinds import Kind, State
+
+    now = datetime.now(timezone.utc)
+    index = _built_example_index()
+    index.add_result(AdapterResult(
+        name="fixture", status=AdapterStatus.OK,
+        entities=(Entity(
+            kind=Kind.COMPONENT, id="silently-stale-component",
+            state=State.HEALTHY,
+            provenance=Provenance("checks",
+                                  as_of=(now - timedelta(days=8)).isoformat()),
+            detail={"cadence_minutes": 60},
+        ),),
+    ))
+
+    numbers = render_json.payload(index, resolve("/"))["numbers"]
+    assert numbers["staleness_honesty"]["count"] == 1
+    assert numbers["staleness_honesty"]["violations"] == [
+        "silently-stale-component"]
+
+    page = render_html.landing_page(index)
+    assert "silently-stale-component" in page

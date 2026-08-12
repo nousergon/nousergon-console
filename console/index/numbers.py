@@ -18,9 +18,26 @@ from ..render.panes import orphan_counts as _pane_orphan_counts
 #: Rendered values that ALREADY say "this is stale" — a row carrying one of
 #: these has disclosed its own age (§5.2 doing its job), so it is not a
 #: staleness-HONESTY finding even though it is, in fact, stale.
+#:
+#: The four OBSERVED states say "it should have reported and did not". The
+#: three DECLARED states (`observability-policy.md` §8.3: declared in the
+#: registry, never inferred) say "it was not expected to report at all", which
+#: is a STRONGER disclosure of the same age, not a weaker one — a row stating
+#: `lifecycle: disabled` is the most explicit account of its own staleness the
+#: twelve-state vocabulary can carry. `render/html.py::EXCEPTION_STATES`
+#: already excludes exactly these three for exactly this reason ("a decision
+#: already taken"), and §9.6 disagreeing with it made a deliberately-off
+#: component read as a surface that is lying about freshness. That inversion
+#: is not just cosmetic: it is UNCLEARABLE by honesty — the only way to drop
+#: the count would be to switch the component back on (alpha-engine-config
+#: I6970/I6971, where registering two disabled components as `disabled` cleared
+#: §9.1's `unregistered` while leaving §9.6 pinned at the same two rows).
+_DECLARED_LIFECYCLE_STATES = frozenset(
+    {State.DISABLED, State.DEPRECATED, State.RETIRED}
+)
 _DISCLOSED_COMPONENT_STATES = frozenset(
     {State.MISSED, State.STALLED, State.UNREPORTED, State.ABSENT}
-)
+) | _DECLARED_LIFECYCLE_STATES
 _DISCLOSED_VALUES = frozenset(
     {"stale", "no-freshness-stamp", "no-cadence-declared", "unreadable"}
 )

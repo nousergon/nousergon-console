@@ -163,7 +163,8 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
         "index_reachability": index.reachability(),                    # §9.3
         "answer_latency": index.answer_latency(),                      # §9.4
         "orphan_count": index.orphan_counts(),                         # §9.5
-        "staleness_honesty": aggregate(*_count_of(index.staleness_honesty())),  # §9.6
+        "staleness_honesty": _named_members(                            # §9.6
+            index.staleness_honesty(), "violations"),
         "surface_liveness": index.surface_liveness(),                   # §9.7
         "onboarding_cost": index.onboarding_cost(),                    # §9.8
         "claim_conflicts": aggregate(len(conflicts), len(entities)),   # §9.9
@@ -175,6 +176,27 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
 
 def _count_of(d: dict[str, Any]) -> tuple[int, int]:
     return d["count"], d["of"]
+
+
+def _named_members(d: dict[str, Any], key: str) -> dict[str, Any]:
+    """An `aggregate` that also NAMES the rows it counted (§5.1, §3.1).
+
+    §9.6 is the one §9 number whose members are reachable NOWHERE else on the
+    surface. A staleness violation is by construction a row whose rendered
+    state is NOT in `render/html.py::EXCEPTION_STATES` — that is the entire
+    definition of the finding — so it never appears on the exception-first
+    landing view, in any facet, or in `doctor`. Publishing only `count / of`
+    therefore reports a defect that no reader of the console can locate:
+    establishing WHICH two rows the fleet's live `2 / 15` referred to required
+    rebuilding the index by hand on the box. §5.1's evidence-link field and
+    §3.1's three reachability paths both forbid that.
+
+    Still routed through `aggregate` so §5.3's "a count without its population
+    is invalid" guard applies here exactly as to every other number.
+    """
+    out = dict(aggregate(*_count_of(d)))
+    out[key] = sorted(d.get(key) or ())
+    return out
 
 
 def _list(index: Index, req: Resolved) -> dict[str, Any]:

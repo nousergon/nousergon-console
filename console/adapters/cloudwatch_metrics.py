@@ -125,6 +125,17 @@ _DEFAULT_DIMENSION = "FunctionName"
 _DEFAULT_INVOCATIONS = "Invocations"
 _DEFAULT_ERRORS = "Errors"
 _DEFAULT_WINDOW_MINUTES = 1440
+#: Bucket size for the window read. NOT a second window — the totals are summed
+#: across buckets either way, so this changes nothing about the state mapping.
+#: What it changes is the row's AS-OF: read as one 1440-minute bucket, the only
+#: timestamp CloudWatch returns is the START of the window, so every HEALTHY row
+#: this adapter emitted carried an as-of a full day stale while its state was
+#: current. §5.1 wants "when was this last true", and a 24-hour-old stamp cannot
+#: answer it — it also made every component declaring a sub-daily cadence read
+#: as a §9.6 staleness violation the moment cadences existed to audit against
+#: (measured 2026-08-12: 3 of them, alpha-engine-config-I7060).
+#: Free: `GetMetricData` bills per METRIC requested, never per datapoint.
+_DEFAULT_RESOLUTION_SECONDS = 300
 _DEFAULT_HISTORY_DAYS = 14
 _DEFAULT_CADENCE_SECONDS = 900
 
@@ -154,6 +165,9 @@ def fetch(
     invocations_metric = config.get("invocations_metric") or _DEFAULT_INVOCATIONS
     errors_metric = config.get("errors_metric") or _DEFAULT_ERRORS
     window_minutes = int(config.get("window_minutes") or _DEFAULT_WINDOW_MINUTES)
+    resolution_seconds = int(
+        config.get("resolution_seconds") or _DEFAULT_RESOLUTION_SECONDS
+    )
     history_days = int(config.get("history_days") or _DEFAULT_HISTORY_DAYS)
     cadence_seconds = float(config.get("cadence_seconds") or _DEFAULT_CADENCE_SECONDS)
     region = config.get("region")
@@ -208,7 +222,9 @@ def fetch(
     ids = sorted(set(ids))
 
     window_start = now - timedelta(minutes=window_minutes)
-    window_seconds = max(60, window_minutes * 60)
+    # Clamped both ways: CloudWatch's floor is 60s, and a bucket larger than the
+    # window would collapse back to the single-datapoint read this replaced.
+    window_seconds = max(60, min(resolution_seconds, window_minutes * 60))
     queries: list[MetricQuery] = []
     for ordinal, entity_id in enumerate(ids):
         for suffix, metric in (("i", invocations_metric), ("e", errors_metric)):
@@ -275,7 +291,10 @@ def fetch(
             has_history_read=(f"h{ordinal}i" in history_data),
             last_invocation=last_invocation,
         )
-        as_of = _latest_stamp(window_data.get(f"w{ordinal}i")) or last_invocation
+        # The last bucket that actually CARRIED an invocation — not the last
+        # bucket returned, which for a silent stretch is a zero and would date
+        # the row to a moment nothing happened.
+        as_of = _last_nonzero(window_data.get(f"w{ordinal}i") or []) or last_invocation
         detail: dict[str, Any] = {
             "invocations": invocations,
             "errors": errors,
@@ -365,11 +384,6 @@ def _state(
 
 def _total(points: list[tuple[str, float]] | None) -> float:
     return float(sum(v for _, v in points or []))
-
-
-def _latest_stamp(points: list[tuple[str, float]] | None) -> str | None:
-    stamps = [t for t, _ in points or [] if t]
-    return max(stamps) if stamps else None
 
 
 def _last_nonzero(points: list[tuple[str, float]]) -> str | None:

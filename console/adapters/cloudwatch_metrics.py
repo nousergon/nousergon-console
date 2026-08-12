@@ -295,12 +295,19 @@ def fetch(
         # bucket returned, which for a silent stretch is a zero and would date
         # the row to a moment nothing happened.
         as_of = _last_nonzero(window_data.get(f"w{ordinal}i") or []) or last_invocation
+        # WHICH namespace and dimension this reading came from is a property of
+        # the CLAIM, not of the component — `provenance.source` already carries
+        # `cloudwatch:<namespace>` and the evidence link carries both. Putting
+        # them in `detail` made them contested fields at the merge: where a rule
+        # and the function it triggers share one name (four of them do), two
+        # instances of this adapter legitimately reported `AWS/Events` and
+        # `AWS/Lambda`, the merge recorded an equal-rank disagreement, and §2.5
+        # rendered the row DEGRADED — overriding even a declared `DISABLED`.
+        # Adapter metadata must never be able to do that (config-I7061).
         detail: dict[str, Any] = {
             "invocations": invocations,
             "errors": errors,
             "window_minutes": window_minutes,
-            "namespace": namespace,
-            "dimension": dimension,
         }
         if last_invocation:
             detail["last_invocation"] = last_invocation

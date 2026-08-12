@@ -134,10 +134,22 @@ def merge(claims: list[Claim]) -> Entity:
     freshest = _freshest(ordered)
     field_sources.setdefault("as_of", freshest)
 
-    if conflicts and isinstance(state, State):
+    if conflicts and isinstance(state, State) and state not in DECLARED_ONLY:
         # §2.5: an unresolved equal-rank disagreement renders DEGRADED with the
         # field named. It is not FAILED — nothing is broken; two sources
         # disagree, which is itself a fact about the fleet worth showing.
+        #
+        # EXCEPT over a declared lifecycle. §8.3 makes `DISABLED`/`DEPRECATED`/
+        # `RETIRED` declared and never inferred, and `_state_rank` already gives
+        # a declaration carrying one absolute precedence — but this line ran
+        # afterwards and overrode it whenever any OTHER field disagreed.
+        # Measured 2026-08-12 (alpha-engine-config-I7061): four components whose
+        # EventBridge rule and target Lambda share one name rendered DEGRADED on
+        # a `detail` disagreement between two observations, while their registry
+        # rows declared them deliberately off under a named ruling. A decision
+        # was overridden by a field neither source disagreed about the meaning
+        # of. The conflict is still recorded and still rendered on the entity —
+        # it just no longer replaces the disposition.
         state = State.DEGRADED
 
     return dataclasses.replace(

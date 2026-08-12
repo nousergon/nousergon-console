@@ -308,3 +308,52 @@ def test_every_adapter_declares_a_claim_class():
     for name, module in ADAPTERS.items():
         assert hasattr(module, "CLAIM_CLASS"), f"{name} declares no claim class"
         assert isinstance(module.CLAIM_CLASS, ClaimClass)
+
+
+# ── §8.3 over §2.5: a decision survives a disagreement (config-I7061) ───────
+
+
+def _detail_comp(state, source, note, cid="comp-alpha"):
+    e = _comp(state, source, cid=cid)
+    return Entity(kind=e.kind, id=e.id, state=e.state, provenance=e.provenance,
+                  facets=e.facets, detail={"note": note})
+
+
+def test_a_detail_conflict_does_not_override_a_declared_lifecycle():
+    """Measured 2026-08-12: four components whose EventBridge rule and target
+    Lambda share one name rendered DEGRADED because two observations reported
+    different `detail` values, while their registry rows declared them
+    deliberately off under a named ruling. `_state_rank` gives a declared
+    lifecycle absolute precedence and the DEGRADED line ran after it, so a
+    decision was overridden by a field disagreement — the DISABLED/MISSED
+    collapse §8.3 exists to prevent, arriving through the back door.
+    """
+    idx = _index(
+        # The registry declares no `note` of its own — exactly like the real
+        # yaml-directory row, which carries no namespace or dimension — so the
+        # two observations contest the field with each other.
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.DISABLED, "registry")),
+        _result("lambda-metrics", ClaimClass.DISCOVERY,
+                _detail_comp(State.UNREPORTED, "cloudwatch:AWS/Lambda", "a")),
+        _result("events-metrics", ClaimClass.DISCOVERY,
+                _detail_comp(State.UNREPORTED, "cloudwatch:AWS/Events", "b")),
+    )
+    ent = idx.finalize().entity("comp-alpha")
+    assert ent.state is State.DISABLED
+    # The disagreement is still published — suppressed nowhere, just no longer
+    # allowed to replace the disposition.
+    assert "detail.note" in ent.conflicts
+
+
+def test_a_conflict_still_degrades_an_undeclared_row():
+    """The other half: with no declared lifecycle the DEGRADED rendering is
+    unchanged, so this narrows the rule rather than removing it."""
+    idx = _index(
+        _result("lambda-metrics", ClaimClass.DISCOVERY,
+                _detail_comp(State.UNREPORTED, "cloudwatch:AWS/Lambda", "a")),
+        _result("events-metrics", ClaimClass.DISCOVERY,
+                _detail_comp(State.HEALTHY, "cloudwatch:AWS/Events", "b")),
+    )
+    ent = idx.finalize().entity("comp-alpha")
+    assert ent.state is State.DEGRADED

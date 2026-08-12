@@ -322,8 +322,17 @@ class Index:
         did not exist.
         """
         self.finalize()
+        # §2.4 / alpha-engine-config-I6970: the registry declares COMPONENT
+        # rows only, never RUN rows — a checks-envelope adapter mints a run's
+        # id as `f"{check_id}@{ran_at}"` (console/adapters/checks_envelope.py),
+        # which never matches its own component's registry row and would
+        # otherwise be counted UNREGISTERED once per run instead of zero times
+        # ever. Comparing every RUN-kind entity against the registry inflated
+        # this count 8.5x (15 of 17) against the live fleet registry: the 15
+        # were runs of already-declared components, not registry gaps.
         unregistered = sum(
-            1 for e in self._entities.values() if e.state is State.UNREGISTERED
+            1 for e in self._entities.values()
+            if e.state is State.UNREGISTERED and e.kind is Kind.COMPONENT
         )
         unread = sorted(self._declared_registries - set(self._registry_rows))
         failed = sorted(n for n, info in self._registry_rows.items() if not info["ok"])

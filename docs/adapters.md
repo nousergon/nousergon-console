@@ -81,7 +81,20 @@ Every adapter:
 - treats source failure as `status=FAILED` with entities `UNREPORTED` — never
   an exception that empties the surface
 - declares what it cannot supply in `unavailable`
+- **declares `declared_cadence_seconds` — how often it is itself re-read**
 - is hermetic in tests: the network/host call is one injectable function
+
+`declared_cadence_seconds` is not just §5.9's whole-surface as-of. The index
+stamps it onto every one of the adapter's entities as
+`Provenance.cadence_seconds`, and §9.6 adds it to the threshold it compares
+each row's `as_of` against — because an `as_of` is when the SOURCE last looked,
+so a component polled every 900s cannot be observed fresher than 900s old
+however healthy it is. **An adapter that omits it makes its rows unauditable**:
+§9.6 excludes them from the denominator and names them in `unauditable` rather
+than assuming an instantaneous observer (`alpha-engine-config-I7126`, where two
+healthy 15-minute EventBridge probes flapped in and out of the violation set on
+the phase offset alone). A TTL-cached adapter declares its TTL; an
+uncached one declares the interval it is called on.
 
 Adding a **source** is adding an adapter module and one line in
 `console/config.py::ADAPTERS`. No other wiring changes.

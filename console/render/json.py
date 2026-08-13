@@ -200,10 +200,22 @@ def _named_members(d: dict[str, Any], key: str) -> dict[str, Any]:
     §3.1's three reachability paths both forbid that.
 
     Still routed through `aggregate` so §5.3's "a count without its population
-    is invalid" guard applies here exactly as to every other number.
+    is invalid" guard applies here exactly as to every other number — EXCEPT
+    where the number has already refused to render. `computable: False` is
+    §5.3 being obeyed at the source rather than violated (the number declined
+    to state a count over an unestablished population), so passing its `None`
+    denominator to `aggregate` would turn an honest refusal into a 500. The
+    refusal travels to the wire whole, reason included, exactly as
+    `onboarding_cost` and `answer_latency` already do
+    (alpha-engine-config-I7126).
     """
+    if d.get("computable") is False:
+        return dict(d)
     out = dict(aggregate(*_count_of(d)))
     out[key] = sorted(d.get(key) or ())
+    for extra in ("computable", "unauditable"):
+        if extra in d:
+            out[extra] = d[extra]
     return out
 
 

@@ -74,6 +74,9 @@ def _silent_observation(component_id: str, *, last_invocation, invocations=0.0):
         fetched_at=_now().isoformat(),
         name="lambda-metrics",
         status=AdapterStatus.OK,
+        # The live instance polls every 900s (I7126): `last_invocation` is
+        # when the SOURCE last saw a fire, not when the fire happened.
+        declared_cadence_seconds=900.0,
         discovery_scope=(("substrate", "lambda"),),
         entities=(Entity(
             kind=Kind.COMPONENT,

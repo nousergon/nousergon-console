@@ -184,6 +184,11 @@ def test_9_6_names_the_rows_it_counted_in_both_representations():
     index = _built_example_index()
     index.add_result(AdapterResult(
         name="fixture", status=AdapterStatus.OK,
+        # A source that declares its own poll cadence. Since
+        # alpha-engine-config-I7126 a row whose as-of source cannot say how
+        # often it looks is EXCLUDED from §9.6's denominator rather than
+        # audited against an assumed-zero observation lag.
+        declared_cadence_seconds=60.0,
         entities=(Entity(
             kind=Kind.COMPONENT, id="silently-stale-component",
             state=State.HEALTHY,
@@ -247,6 +252,7 @@ def test_a_nonzero_count_always_carries_a_nonempty_member_list():
     # One UNREGISTERED component (§9.1) and one silently-stale row (§9.6).
     index.add_result(AdapterResult(
         name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        declared_cadence_seconds=60.0,  # see the I7126 note above
         entities=(
             Entity(kind=Kind.COMPONENT, id="wild-component", state=State.UNREPORTED,
                    provenance=Provenance("discovery")),

@@ -99,6 +99,9 @@ def test_monday_morning_is_not_stale_for_a_friday_eod_sf_artifact():
     idx = Index()
     idx.add_result(AdapterResult(
         name="artifact-registry", status=AdapterStatus.OK,
+        # I7126: a source that declares its own poll cadence — §9.6 excludes a
+        # row whose as-of source cannot say how often it looks.
+        declared_cadence_seconds=60.0,
         entities=(Entity(
             kind=Kind.ARTIFACT, id="s3://bucket/eod-artifact.json", state="fresh",
             provenance=Provenance("object-store", as_of=FRIDAY.isoformat()),
@@ -120,6 +123,9 @@ def test_a_genuine_multi_day_miss_is_still_caught():
     idx = Index()
     idx.add_result(AdapterResult(
         name="artifact-registry", status=AdapterStatus.OK,
+        # I7126: a source that declares its own poll cadence — §9.6 excludes a
+        # row whose as-of source cannot say how often it looks.
+        declared_cadence_seconds=60.0,
         entities=(Entity(
             kind=Kind.ARTIFACT, id="s3://bucket/missed-artifact.json", state="fresh",
             provenance=Provenance("object-store", as_of=stale_as_of.isoformat()),
@@ -159,6 +165,9 @@ def test_tuesday_after_a_holiday_monday_still_resolves_via_the_checker():
     idx = Index()
     idx.add_result(AdapterResult(
         name="artifact-registry", status=AdapterStatus.OK,
+        # I7126: a source that declares its own poll cadence — §9.6 excludes a
+        # row whose as-of source cannot say how often it looks.
+        declared_cadence_seconds=60.0,
         entities=(Entity(
             kind=Kind.ARTIFACT, id="s3://bucket/x.json", state="fresh",
             provenance=Provenance("object-store", as_of=FRIDAY.isoformat()),

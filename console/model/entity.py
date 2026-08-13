@@ -31,11 +31,31 @@ class Provenance:
     - ``evidence``  — a deep link to the thing behind it: the run, log,
                       artifact, issue or PR. May be None only when the source
                       has nothing linkable, which the adapter declares.
+    - ``cadence_seconds``
+                    — how often the source that supplied this fact is RE-READ.
+                      Not part of §5.1's four-field contract; it is the
+                      qualifier without which `as_of` cannot be interpreted.
+                      An `as_of` is a claim about when the underlying fact was
+                      last *seen*, and an observer polling every 900s cannot
+                      produce one fresher than 900s old however healthy the
+                      thing it watches is. Any consumer comparing `as_of`
+                      against a declared expectation therefore needs BOTH
+                      numbers, or it measures the phase offset between two
+                      schedules and calls the result health
+                      (alpha-engine-config-I7126).
+
+                      Stamped by the index at ingest from the adapter's own
+                      ``AdapterResult.declared_cadence_seconds`` — never by
+                      the adapter at each call site, so it cannot drift from
+                      the cadence the same result declares to §5.9. ``None``
+                      means the source did not say, which is a declared
+                      absence and never a licence to assume zero.
     """
 
     source: str
     as_of: str | None = None
     evidence: str | None = None
+    cadence_seconds: float | None = None
 
 
 @dataclass(frozen=True)

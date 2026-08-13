@@ -201,6 +201,20 @@ class Index:
     def registry_names(self) -> list[str]:
         return sorted(self._rendered_registries)
 
+    def broken_registries(self) -> list[str]:
+        """Declared registries this pass could not read, or never reached.
+
+        Shared by §9.1 and §9.6 because both are aggregates over a population
+        the registry defines: a declared registry that failed removes rows from
+        the denominator invisibly, and §5.3 forbids an aggregate over
+        incomplete input. §9.6 grew this guard after a live tick reported
+        `{count: 0, of: 0}` — a count over an empty population, rendered
+        indistinguishably from "all clear" (alpha-engine-config-I7126).
+        """
+        unread = self._declared_registries - set(self._registry_rows)
+        failed = {n for n, info in self._registry_rows.items() if not info["ok"]}
+        return sorted(unread | failed)
+
     # ---- ingest -----------------------------------------------------------
 
     def add_result(self, result: AdapterResult) -> None:
@@ -232,6 +246,7 @@ class Index:
             elif result.claim_class is ClaimClass.DECLARATION:
                 self._saw_ok_declaration = True
         for ent in result.entities:
+            ent = _stamp_source_cadence(ent, result.declared_cadence_seconds)
             ent = ent if result.status is AdapterStatus.OK else _as_unreported(ent)
             self._claims.setdefault(ent.id, []).append(
                 Claim(
@@ -409,9 +424,7 @@ class Index:
             if e.state is State.UNREGISTERED and e.kind is Kind.COMPONENT
         )
         unregistered = len(unregistered_ids)
-        unread = sorted(self._declared_registries - set(self._registry_rows))
-        failed = sorted(n for n, info in self._registry_rows.items() if not info["ok"])
-        broken = sorted(set(unread) | set(failed))
+        broken = self.broken_registries()
         if not self._saw_ok_declaration or broken:
             return {"rendered": 0, "of": None, "ratio": None,
                     "unregistered": unregistered,
@@ -527,6 +540,33 @@ class Index:
         from .reachability import measure
 
         return measure(self)
+
+
+def _stamp_source_cadence(ent: Entity, cadence_seconds: float | None) -> Entity:
+    """Carry the SOURCE's own poll cadence onto the claim's provenance.
+
+    Done here, once, for every adapter, rather than at each adapter's call
+    site: `AdapterResult.declared_cadence_seconds` is already the one place a
+    source states how often it is re-read (§5.9 uses it for the whole
+    surface's as-of), and a second per-entity spelling of the same number is a
+    second thing to keep in step.
+
+    Why any consumer needs it: an `as_of` is when the source last SAW the
+    fact, so its age carries the observer's polling lag as well as the
+    subject's own. Comparing that age against a declared cadence without the
+    observer's term measures the phase offset between two schedules — which is
+    exactly what made §9.6 flap 0<->2 on the live surface with nothing
+    changing (alpha-engine-config-I7126).
+
+    An adapter that already stated a cadence on its own provenance keeps it —
+    nothing here overwrites a more specific claim.
+    """
+    if cadence_seconds is None or ent.provenance.cadence_seconds is not None:
+        return ent
+    return dataclasses.replace(
+        ent, provenance=dataclasses.replace(
+            ent.provenance, cadence_seconds=float(cadence_seconds)),
+    )
 
 
 def _as_unreported(ent: Entity) -> Entity:

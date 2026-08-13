@@ -207,6 +207,7 @@ def test_missing_artifact_computed_from_declaration_alone_when_unobserved(tmp_pa
     idx.add_result(AdapterResult(name="registry", status=AdapterStatus.OK,
                                   claim_class=ClaimClass.DECLARATION, entities=declared.entities))
     idx.add_result(AdapterResult(name="bucket", status=AdapterStatus.OK,
+                                  declared_cadence_seconds=60.0,  # I7126
                                   claim_class=ClaimClass.OBSERVATION, entities=observed.entities))
 
     assert idx.entity("reports/seen.json").state == "fresh"
@@ -311,6 +312,7 @@ def test_calendar_cadence_widens_staleness_honesty_past_checks_envelope(tmp_path
     idx.add_result(AdapterResult(name="registry", status=AdapterStatus.OK,
                                   claim_class=ClaimClass.DECLARATION, entities=declared.entities))
     idx.add_result(AdapterResult(name="bucket", status=AdapterStatus.OK,
+                                  declared_cadence_seconds=60.0,  # I7126
                                   claim_class=ClaimClass.OBSERVATION, entities=observed_entities))
 
     result = idx.staleness_honesty(now=now)

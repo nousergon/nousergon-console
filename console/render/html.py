@@ -419,7 +419,15 @@ def _format_number(value: object) -> str:
         if members:
             # Not escaped here: every caller passes this through `esc` (see
             # `_number_row`), and escaping twice renders the entities literally.
-            return f'{base} — {", ".join(str(m) for m in members)}'
+            base = f'{base} — {", ".join(str(m) for m in members)}'
+        # A row EXCLUDED from the denominator is invisible in `count / of` by
+        # construction, and an unexplained shrinking denominator is the defect
+        # this number exists to catch happening to the number itself
+        # (alpha-engine-config-I7126). Named, not silently dropped.
+        excluded = value.get("unauditable")
+        if excluded:
+            base += (f' · {len(excluded)} unauditable: '
+                     + ", ".join(sorted(str(k) for k in excluded)))
         return base
     if {"pane_orphans", "kind_orphans"} <= value.keys():
         po, ko = value["pane_orphans"], value["kind_orphans"]

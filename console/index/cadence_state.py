@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 
 from ..model.entity import Entity
 from ..model.kinds import COMPONENT_STATE_KINDS, State
+from .numbers import staleness_threshold_seconds
 
 #: Detail keys a silent substrate-counter claim leaves behind. `invocations`
 #: is the discriminator (zero, over a window the adapter also names); the rest
@@ -84,9 +85,38 @@ def resolve_cadence_state(
     silence = _silence_minutes(ent.detail.get(_LAST), now)
     if silence is None:
         return ent
-    if silence > cadence * staleness_factor:
+    threshold = staleness_threshold_seconds(
+        cadence * 60.0, _observer_cadence_seconds(ent), staleness_factor
+    ) / 60.0
+    if silence > threshold:
         return dataclasses.replace(ent, state=State.MISSED)
     return dataclasses.replace(ent, state=State.HEALTHY)
+
+
+def _observer_cadence_seconds(ent: Entity) -> float:
+    """How long the counter-reading source may itself have lagged.
+
+    The second instance of the class alpha-engine-config-I7126 fixed in §9.6:
+    `last_invocation` is not "when it last ran", it is "when the source that
+    polls every N seconds last SAW it run". Comparing that against a declared
+    cadence with no term for N decides the verdict on the phase offset between
+    two schedules. Shares one helper with `numbers.py` so the two cannot drift
+    — the same reason `Index._staleness_factor` is one value, not two.
+
+    Where the source declares no cadence this returns 0, which is the previous
+    behaviour exactly. §9.6 EXCLUDES such a row instead, and the asymmetry is
+    deliberate: §9.6 is an audit, where declining to grade an unbounded
+    reading is the honest answer, while this function ASSIGNS a state, where
+    declining means falling back to `UNREPORTED` — discarding a real
+    substrate reading and inflating the transparency gap. Widening on a
+    declared number and not widening on an absent one is strictly the safer
+    half of that trade in both directions.
+    """
+    provenance = ent.source_of(f"detail.{_LAST}")
+    cadence = provenance.cadence_seconds
+    if cadence is None:
+        cadence = ent.provenance.cadence_seconds
+    return float(cadence) if cadence else 0.0
 
 
 def _is_observed_silent(detail: dict) -> bool:

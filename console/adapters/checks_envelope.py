@@ -40,6 +40,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+from ..aws import client as _aws_client
 
 #: A check-result envelope is an OBSERVATION (§2.5): it says what actually ran
 #: and when. It may never produce DISABLED/DEPRECATED/RETIRED — telemetry
@@ -392,7 +393,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
         return None, None
 
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         out: list[StoredObject] = []
         token: str | None = None
         while True:
@@ -414,7 +415,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
         return out
 
     def reader(bucket: str, key: str) -> dict[str, Any]:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         try:
             resp = client.get_object(Bucket=bucket, Key=key)
             body = resp["Body"].read()

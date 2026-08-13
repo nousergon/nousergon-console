@@ -86,6 +86,7 @@ from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+from ..aws import client as _aws_client
 
 #: Enumerating a metric namespace establishes that a thing is THERE — §2.5's
 #: DISCOVERY. See the module docstring for why this is not OBSERVATION.
@@ -437,8 +438,8 @@ def _default_cloudwatch(
         return None, None
 
     def _client():
-        return boto3.client("cloudwatch", region_name=region) if region \
-            else boto3.client("cloudwatch")
+        return _aws_client("cloudwatch", region) if region \
+            else _aws_client("cloudwatch")
 
     def enumerator(namespace: str, metric: str, dimension: str) -> list[str]:
         client = _client()

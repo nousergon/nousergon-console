@@ -34,6 +34,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+from ..aws import client as _aws_client
 
 #: Execution history is an OBSERVATION (§2.5) — what ran, when, and how it ended.
 CLAIM_CLASS = ClaimClass.OBSERVATION
@@ -404,7 +405,7 @@ def _default_reader() -> ExecutionReader | None:
         return None
 
     def reader(region: str, arn: str) -> list[ExecutionRecord]:
-        client = boto3.client("stepfunctions", region_name=region)
+        client = _aws_client("stepfunctions", region)
         records: list[ExecutionRecord] = []
         token: str | None = None
         while True:

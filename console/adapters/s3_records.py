@@ -77,6 +77,7 @@ from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
 from .object_store import _parse_cadence  # second adoption, one repo — see below
+from ..aws import client as _aws_client
 
 #: A dashboard's own read of its S3 artifacts is an OBSERVATION (§2.5): it
 #: says what the artifact currently contains, never a decision about it.
@@ -441,7 +442,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
         return None, None
 
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         out: list[StoredObject] = []
         token: str | None = None
         while True:
@@ -460,7 +461,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
         return out
 
     def reader(bucket: str, key: str) -> Any:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         try:
             resp = client.get_object(Bucket=bucket, Key=key)
             raw = resp["Body"].read()

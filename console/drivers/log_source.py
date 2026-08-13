@@ -9,6 +9,7 @@ from ..model.descriptor import Binding
 from ..model.entity import Entity, Provenance
 from ..model.kinds import Kind, State
 from .base import Cost, DriverResult
+from ..aws import client as _aws_client
 
 name = "log-source"
 kinds = ("component",)
@@ -57,7 +58,7 @@ def _default_reader(mechanism: str) -> Callable[[str, int], list[str]] | None:
     except ImportError:
         return None
     if mechanism in ("lambda_cloudwatch", "cloudwatch"):
-        client = boto3.client("logs")
+        client = _aws_client("logs")
         def cloudwatch(group: str, window: int) -> list[str]:
             import time
             end = int(time.time() * 1000)
@@ -65,7 +66,7 @@ def _default_reader(mechanism: str) -> Callable[[str, int], list[str]] | None:
             return [event["message"] for event in page.get("events", [])]
         return cloudwatch
     if mechanism in ("krepis.ssm_log_capture", "s3"):
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         def s3(uri: str, _window: int) -> list[str]:
             bucket, _, prefix = uri.removeprefix("s3://").partition("/")
             listed = client.list_objects_v2(Bucket=bucket, Prefix=prefix)

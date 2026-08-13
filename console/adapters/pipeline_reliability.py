@@ -107,6 +107,7 @@ from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from .state_machine import ExecutionRecord, _as_of
 from .state_machine import _default_reader as _sm_default_reader
+from ..aws import client as _aws_client
 
 #: Execution history + a trading calendar are OBSERVATIONS (§2.5) — what ran,
 #: when, on which days the schedule should have run at all.
@@ -836,7 +837,7 @@ def history_reader_for(
         return None
 
     def attach(region: str, records: list[ExecutionRecord]) -> None:
-        client = boto3.client("stepfunctions", region_name=region)
+        client = _aws_client("stepfunctions", region)
         for rec in records:
             arn = rec.get("executionArn")
             if not arn:

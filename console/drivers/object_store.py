@@ -25,6 +25,7 @@ from ..model.descriptor import Binding
 from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
 from .base import Cost, DriverResult
+from ..aws import client as _aws_client
 
 name = "object-store"
 kinds = ("artifact",)
@@ -130,7 +131,7 @@ def _default_stat() -> Callable[[str], str | None] | None:
     except ImportError:
         return None
 
-    client = boto3.client("s3")
+    client = _aws_client("s3")
 
     def stat(uri: str) -> str | None:
         if not uri.startswith("s3://"):

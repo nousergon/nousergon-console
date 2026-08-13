@@ -43,6 +43,7 @@ from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
+from ..aws import client as _aws_client
 
 #: Object listings are an OBSERVATION (§2.5) — what is there and how fresh.
 CLAIM_CLASS = ClaimClass.OBSERVATION
@@ -202,7 +203,7 @@ def _default_lister() -> StoreLister | None:
         return None
 
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         out: list[StoredObject] = []
         token: str | None = None
         while True:

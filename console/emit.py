@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Callable, Iterable, Mapping
+from .aws import client as _aws_client
 
 #: The envelope version. Bumped only on a change a consumer must react to;
 #: adding an optional field is not one (§12). The previous version stays
@@ -184,7 +185,7 @@ def _default_putter() -> Callable[[str, str, bytes], None]:
             "'nousergon-console[aws]'), or pass your own putter"
         ) from exc
 
-    client = boto3.client("s3")
+    client = _aws_client("s3")
 
     def _put(bucket: str, key: str, payload: bytes) -> None:
         client.put_object(

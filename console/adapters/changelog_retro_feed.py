@@ -47,6 +47,7 @@ from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
+from ..aws import client as _aws_client
 
 #: The aggregate is an OBSERVATION (§2.5) — a computed rollup of what the
 #: event lake already recorded, not a declaration of intent.
@@ -194,7 +195,7 @@ def _default_reader() -> BodyReader | None:
         return None
 
     def reader(bucket: str, key: str) -> dict[str, Any]:
-        client = boto3.client("s3")
+        client = _aws_client("s3")
         try:
             resp = client.get_object(Bucket=bucket, Key=key)
             body = resp["Body"].read()

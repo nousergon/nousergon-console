@@ -27,6 +27,7 @@ from console.model.envelope import AdapterResult, AdapterStatus
 from console.model.kinds import Kind, State
 from console.render.html import index_freshness as html_freshness
 from console.render.json import index_freshness as json_freshness
+from dataclasses import replace
 
 T0 = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
 
@@ -117,6 +118,36 @@ def test_an_unstamped_index_says_it_cannot_say():
 
 
 # ----------------------------------------------------- the refresh loop -----
+
+def test_a_build_records_how_long_it_took():
+    """`refresh_seconds` alone cannot tell a reader whether the cadence is a
+    promise the builder keeps. Measured 2026-08-12: a full pass was 93.5s
+    against a declared 60s, so the surface claimed 60-second freshness while
+    its data was up to ~153s old (alpha-engine-config-I7124)."""
+    sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
+                     clock=_clock([0]))
+    assert sup.current.build_info.build_seconds is not None
+    assert sup.current.build_info.build_seconds >= 0
+
+
+def test_a_build_slower_than_its_cadence_is_flagged_as_an_overrun():
+    """Not a failure — passes do not overlap, so the index is correct. It is an
+    honesty defect, because refresh_seconds is rendered as the freshness
+    promise."""
+    sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
+                     clock=_clock([0]))
+    info = replace(sup.current.build_info, build_seconds=93.5, refresh_seconds=60)
+    assert info.cadence_overrun is True
+    assert replace(info, build_seconds=12.0).cadence_overrun is False
+
+
+def test_an_unmeasured_build_is_not_an_overrun():
+    """Fails toward silence: `None` means not measured, never 'too slow'."""
+    sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
+                     clock=_clock([0]))
+    info = replace(sup.current.build_info, build_seconds=None)
+    assert info.cadence_overrun is False
+
 
 def test_deferring_the_first_build_does_not_call_the_builder_in_init():
     """The port has to bind before the index exists.

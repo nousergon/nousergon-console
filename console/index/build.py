@@ -26,6 +26,7 @@ absence is a specific way of lying:
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable
@@ -67,6 +68,28 @@ class BuildInfo:
     #: one, still served, and saying so. Never silently retained.
     stale_since: str | None = None
     last_error: str | None = None
+    #: How long the pass that produced this index actually took.
+    #:
+    #: Declared next to `refresh_seconds` on purpose: the two together are the
+    #: only way a reader can tell whether the cadence is a promise the builder
+    #: can keep. Measured 2026-08-12 on the live box, a full pass was 93.5s
+    #: against a declared 60s refresh — so the surface reported a 60-second
+    #: freshness while its data was up to ~153s old, and nothing said so
+    #: (alpha-engine-config-I7124).
+    build_seconds: float | None = None
+
+    @property
+    def cadence_overrun(self) -> bool:
+        """The build takes longer than the cadence it claims to keep.
+
+        Not a failure — the loop does not overlap passes, so the index is
+        correct. It is a HONESTY defect: `refresh_seconds` is rendered to every
+        consumer as the freshness promise, and while this is true that number
+        is not the interval anyone is actually getting.
+        """
+        if self.build_seconds is None or self.refresh_seconds is None:
+            return False
+        return self.build_seconds > self.refresh_seconds
 
     @property
     def shortest_cadence_seconds(self) -> float | None:
@@ -177,6 +200,7 @@ class Supervisor:
                 RuntimeError("first index build has not completed yet")
             )
             return
+        started = time.monotonic()
         try:
             self._current = builder()
         except Exception as exc:  # noqa: BLE001 - symmetric with refresh_once
@@ -192,7 +216,8 @@ class Supervisor:
             # BuildInfo), so a module-level import here would be circular.
             self._current = self._blank_stale(exc)
             return
-        _stamp(self._current, self._clock, refresh_seconds)
+        _stamp(self._current, self._clock, refresh_seconds,
+               build_seconds=time.monotonic() - started)
         self._built_once = True
 
     def _blank_stale(self, exc: BaseException):
@@ -228,13 +253,15 @@ class Supervisor:
         goes on the marker rather than to a log nobody reads — the person who
         needs it is looking at the page.
         """
+        started = time.monotonic()
         try:
             fresh = self._builder()
         except Exception as exc:  # noqa: BLE001 - the marker IS the handling
             with self._lock:
                 _mark_stale(self._current, self._clock, exc)
             return False
-        _stamp(fresh, self._clock, self._refresh_seconds)
+        _stamp(fresh, self._clock, self._refresh_seconds,
+               build_seconds=time.monotonic() - started)
         with self._lock:
             self._current = fresh
             self._built_once = True
@@ -264,11 +291,13 @@ class Supervisor:
             self.refresh_once()
 
 
-def _stamp(index, clock, refresh_seconds: float) -> None:
+def _stamp(index, clock, refresh_seconds: float,
+           build_seconds: float | None = None) -> None:
     index.build_info = replace(
         index.build_info,
         built_at=now_iso(clock),
         refresh_seconds=refresh_seconds,
+        build_seconds=build_seconds,
         stale_since=None,
         last_error=None,
     )

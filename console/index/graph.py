@@ -215,10 +215,6 @@ class Index:
         failed = {n for n, info in self._registry_rows.items() if not info["ok"]}
         return sorted(unread | failed)
 
-    def saw_ok_declaration(self) -> bool:
-        """Whether any registry adapter read successfully this pass."""
-        return self._saw_ok_declaration
-
     # ---- ingest -----------------------------------------------------------
 
     def add_result(self, result: AdapterResult) -> None:

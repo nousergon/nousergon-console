@@ -130,7 +130,7 @@ def staleness_honesty(
     that silently removes rows from the denominator.
     """
     now = now or datetime.now(timezone.utc)
-    broken = index.broken_registries() if hasattr(index, "broken_registries") else []
+    broken = index.broken_registries()
     if broken:
         return _refused(
             "declared registries unreadable this pass: " + ", ".join(broken)

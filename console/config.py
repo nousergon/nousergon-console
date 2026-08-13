@@ -196,4 +196,9 @@ def supervised_index(config: dict[str, Any]) -> Supervisor:
         (config.get("console") or {}).get("refresh_seconds")
         or DEFAULT_REFRESH_SECONDS
     )
-    return Supervisor(lambda: build_index(config), refresh_seconds=refresh)
+    # defer_first_build: the caller binds a port right after this returns, and
+    # a full pass takes 93.5s on the live box. See Supervisor.__init__.
+    return Supervisor(
+        lambda: build_index(config), refresh_seconds=refresh,
+        defer_first_build=True,
+    )

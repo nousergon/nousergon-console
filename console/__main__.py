@@ -96,14 +96,17 @@ def main(argv: list[str] | None = None) -> int:
     # §5.9: the index rebuilds on a declared cadence and swaps atomically. A
     # surface built once at start and served indefinitely renders every row's
     # as-of frozen at boot while looking exactly like a live one.
+    # Order matters and is the point: supervised_index defers the first build,
+    # so this binds in milliseconds and the first index arrives on the
+    # supervisor thread. Until it does, the surface serves an empty index
+    # marked stale with "first index build has not completed yet" — visibly
+    # not-yet-built rather than a refused connection.
     supervisor = supervised_index(config)
-    supervisor.start()
-    index = supervisor.current
     server = serve(supervisor, host=host, port=port)
-    reach = index.reachability()
+    supervisor.start()
     print(f"nousergon-console serving on http://{host}:{port} — "
-          f"{reach['total']} entities indexed, "
-          f"reachability {reach['reachable_all_three']}/{reach['total']}")
+          f"first index build in flight; the surface reports itself stale "
+          f"until it lands", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

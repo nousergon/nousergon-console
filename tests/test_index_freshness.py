@@ -118,6 +118,62 @@ def test_an_unstamped_index_says_it_cannot_say():
 
 # ----------------------------------------------------- the refresh loop -----
 
+def test_deferring_the_first_build_does_not_call_the_builder_in_init():
+    """The port has to bind before the index exists.
+
+    On the live box a full pass takes 93.5 seconds over 315 entities, and
+    __main__ constructed the supervisor BEFORE binding — so port 5180 was not
+    listening for a minute and a half after every restart, which box_health
+    confirms over four samples and pages CRITICAL for. Three crucible-dashboard
+    deploys produced exactly that on 2026-08-12.
+    """
+    calls = []
+
+    def builder():
+        calls.append(1)
+        return _index(cadence=60)
+
+    sup = Supervisor(builder, refresh_seconds=60, clock=_clock([0, 30]),
+                     defer_first_build=True)
+    assert calls == []            # nothing ran; the caller can bind now
+    assert sup.current is not None  # and there is something to serve
+
+
+def test_a_deferred_supervisor_serves_a_surface_that_says_it_is_not_built_yet():
+    """Not-yet-built must be visible, never mistaken for an empty fleet — the
+    same reasoning the failed-first-build path already makes, applied to a slow
+    one instead of a broken one."""
+    sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
+                     clock=_clock([0]), defer_first_build=True)
+    served = sup.current
+    assert served.entity("anything") is None
+    info = served.build_info
+    assert info.stale_since is not None
+    assert "has not completed yet" in info.last_error
+
+
+def test_the_deferred_build_lands_on_the_first_refresh():
+    sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
+                     clock=_clock([0, 30]), defer_first_build=True)
+    assert sup.current.build_info.stale_since is not None
+    assert sup.refresh_once() is True
+    assert sup.current.build_info.stale_since is None
+    assert sup.current.build_info.last_error is None
+
+
+def test_the_default_still_builds_eagerly():
+    """Every other caller — `dump`, `doctor`, the tests above — wants the index
+    to exist when the constructor returns. Only the serving path binds a port."""
+    calls = []
+
+    def builder():
+        calls.append(1)
+        return _index(cadence=60)
+
+    Supervisor(builder, refresh_seconds=60, clock=_clock([0]))
+    assert calls == [1]
+
+
 def test_a_rebuild_swaps_atomically_and_restamps():
     builds = []
 

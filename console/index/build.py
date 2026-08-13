@@ -145,6 +145,8 @@ class Supervisor:
         builder: Callable[[], object],
         refresh_seconds: float,
         clock: Callable[[], datetime] | None = None,
+        *,
+        defer_first_build: bool = False,
     ) -> None:
         self._builder = builder
         self._refresh_seconds = refresh_seconds
@@ -152,6 +154,29 @@ class Supervisor:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._built_once = False
+        if defer_first_build:
+            # The first build is the caller's LATENCY, not just its data. On the
+            # live box a full pass over six adapters takes 93.5 seconds
+            # (measured 2026-08-12, 315 entities), and __main__ constructs the
+            # supervisor BEFORE it binds the port — so for a minute and a half
+            # after every restart, port 5180 was not listening at all. box_health
+            # confirms a problem over four samples (~30s) and pages CRITICAL
+            # "port not listening", which is what three crucible-dashboard
+            # deploys produced in forty minutes on 2026-08-12.
+            #
+            # A monitoring surface that is DOWN while it works out what to say
+            # is the failure it exists to detect, one layer up. So: seed the
+            # same empty, marked-stale Index the build-failure path below
+            # already seeds, let the caller bind immediately, and let the
+            # supervisor thread do the first build. The surface comes up saying
+            # "not built yet" rather than refusing connections — the identical
+            # argument that comment makes about a FAILED first build, applied to
+            # a SLOW one.
+            self._current = self._blank_stale(
+                RuntimeError("first index build has not completed yet")
+            )
+            return
         try:
             self._current = builder()
         except Exception as exc:  # noqa: BLE001 - symmetric with refresh_once
@@ -165,17 +190,30 @@ class Supervisor:
             # deploy just failing silently from the outside.
             # Local import: graph.py imports FROM this module (AdapterFetch,
             # BuildInfo), so a module-level import here would be circular.
-            from .graph import Index
-
-            self._current = Index()
-            self._current.build_info = replace(
-                self._current.build_info,
-                built_at=now_iso(self._clock),
-                refresh_seconds=refresh_seconds,
-            )
-            _mark_stale(self._current, self._clock, exc)
+            self._current = self._blank_stale(exc)
             return
         _stamp(self._current, self._clock, refresh_seconds)
+        self._built_once = True
+
+    def _blank_stale(self, exc: BaseException):
+        """An empty index carrying the reason it is empty.
+
+        Shared by the two cases that have no index to serve yet — the first
+        build FAILED, and the first build has not FINISHED. Both want the same
+        thing: a surface that comes up and says what is wrong.
+        """
+        # Local import: graph.py imports FROM this module (AdapterFetch,
+        # BuildInfo), so a module-level import here would be circular.
+        from .graph import Index
+
+        index = Index()
+        index.build_info = replace(
+            index.build_info,
+            built_at=now_iso(self._clock),
+            refresh_seconds=self._refresh_seconds,
+        )
+        _mark_stale(index, self._clock, exc)
+        return index
 
     @property
     def current(self):
@@ -199,6 +237,7 @@ class Supervisor:
         _stamp(fresh, self._clock, self._refresh_seconds)
         with self._lock:
             self._current = fresh
+            self._built_once = True
         return True
 
     def start(self) -> None:
@@ -214,6 +253,13 @@ class Supervisor:
             self._thread = None
 
     def _loop(self) -> None:  # pragma: no cover - exercised via refresh_once
+        # Build IMMEDIATELY when __init__ deferred it, rather than after the
+        # first cadence wait. Waiting would leave the surface blank for
+        # refresh_seconds on top of the build itself, which trades a port that
+        # does not answer for a page that says nothing — a worse deal, because
+        # the second one looks healthy.
+        if not self._built_once:
+            self.refresh_once()
         while not self._stop.wait(self._refresh_seconds):
             self.refresh_once()
 

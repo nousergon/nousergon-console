@@ -83,3 +83,43 @@ def test_history_route_is_addressable_with_its_requested_window():
     assert (r.view, r.kind, r.entity_id, r.window_hours) == (
         "history", Kind.COMPONENT, "comp-alpha", 48,
     )
+
+
+# ------------------------------------------------------- CN-4.1 depth budget
+
+#: The views the resolver may produce. Adding one is adding a level unless it
+#: is an entity tab (today: history). Enumerated here so a new view fails
+#: this file rather than silently widening §4.1 (alpha-engine-config-I7422).
+_ALLOWED_VIEWS = {
+    "landing", "list", "entity", "search", "doctor", "registry", "history",
+}
+
+
+def test_every_resolved_view_is_inside_the_three_tier_budget():
+    """Enumerate, do not hand-list routes. A fourth-level view is a new
+    `view=` that is not an entity page or its own tab."""
+    routes = ["/", "/search", "/doctor/x", "/registry/fleet"]
+    routes += [f"/{k.route}" for k in Kind]
+    routes += [f"/{k.route}/some-id" for k in Kind]
+    routes += [f"/history/{k.route}/some-id" for k in Kind]
+    seen = set()
+    for route in routes:
+        req = resolve(route)
+        seen.add(req.view)
+        assert req.view in _ALLOWED_VIEWS, f"{route} resolved to {req.view!r}"
+    assert "landing" in seen and "list" in seen and "entity" in seen
+
+
+def test_extra_segments_after_a_kind_are_the_entity_id_never_another_view():
+    """The load-bearing half of §4.1: /<kind>/<a>/<b> is still the entity
+    page, with id a/b. A fourth-level view would steal that path."""
+    for kind in Kind:
+        req = resolve(f"/{kind.route}/a/b/c")
+        assert req.view == "entity", kind
+        assert req.entity_id == "a/b/c", kind
+
+
+def test_history_extra_segments_stay_the_entity_tab():
+    req = resolve("/history/component/a/b")
+    assert req.view == "history"
+    assert req.entity_id == "a/b"

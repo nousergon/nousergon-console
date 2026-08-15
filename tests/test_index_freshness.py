@@ -141,6 +141,23 @@ def test_a_build_slower_than_its_cadence_is_flagged_as_an_overrun():
     assert replace(info, build_seconds=12.0).cadence_overrun is False
 
 
+def test_build_seconds_and_overrun_reach_both_representations():
+    """PR93 recorded the duration on BuildInfo and never put it on the wire,
+    so an agent reading GET / still could not tell the cadence was a lie
+    (alpha-engine-config-I7124)."""
+    idx = _index(cadence=60)
+    idx.build_info = replace(
+        idx.build_info, built_at=T0.isoformat(),
+        build_seconds=93.5, refresh_seconds=60,
+    )
+    doc = json_freshness(idx, T0)
+    assert doc["build_seconds"] == 93.5
+    assert doc["cadence_overrun"] is True
+    html = html_freshness(idx, T0)
+    assert "last build 93.5s" in html
+    assert "exceeds cadence" in html
+
+
 def test_an_unmeasured_build_is_not_an_overrun():
     """Fails toward silence: `None` means not measured, never 'too slow'."""
     sup = Supervisor(lambda: _index(cadence=60), refresh_seconds=60,
@@ -364,6 +381,9 @@ def test_every_source_read_is_recorded_including_the_failed_ones():
     assert doc["sources"][1]["unavailable"] == ["source"]
 
 
-@pytest.mark.parametrize("field", ["built_at", "stale", "staleness_basis", "sources"])
+@pytest.mark.parametrize("field", [
+    "built_at", "stale", "staleness_basis", "sources",
+    "build_seconds", "cadence_overrun",
+])
 def test_the_json_freshness_block_is_complete(field):
     assert field in json_freshness(_index(cadence=60), T0)

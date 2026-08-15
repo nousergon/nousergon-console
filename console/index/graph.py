@@ -217,7 +217,11 @@ class Index:
 
     # ---- ingest -----------------------------------------------------------
 
-    def add_result(self, result: AdapterResult) -> None:
+    def add_result(
+        self,
+        result: AdapterResult,
+        elapsed_seconds: float | None = None,
+    ) -> None:
         """Record one adapter's claims (§2.5). Resolution happens in finalize().
 
         A FAILED adapter still contributes its entities, rendered UNREPORTED —
@@ -234,7 +238,9 @@ class Index:
         # dropping it here would make the failure invisible on the page.
         self.build_info = dataclasses.replace(
             self.build_info,
-            adapters=self.build_info.adapters + (AdapterFetch.of(result),),
+            adapters=self.build_info.adapters + (
+                AdapterFetch.of(result, elapsed_seconds=elapsed_seconds),
+            ),
         )
         if result.status is AdapterStatus.OK:
             if result.claim_class is ClaimClass.DISCOVERY:

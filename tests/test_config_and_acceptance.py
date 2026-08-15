@@ -31,6 +31,26 @@ def test_build_index_from_registry_config(tmp_path):
     assert {e.id for e in index.of_kind(Kind.COMPONENT)} == {"comp-one", "comp-two"}
 
 
+def test_each_adapter_fetch_records_its_own_elapsed(tmp_path):
+    """I7124 deliverable 1: the 93.5s was one number. A cadence decision
+    that cannot name the dominant source is a guess."""
+    first, second = tmp_path / "first.d", tmp_path / "second.d"
+    first.mkdir(); second.mkdir()
+    _write_registry(str(first), {"comp-one": {}})
+    _write_registry(str(second), {"comp-two": {}})
+    index = build_index({"registries": [
+        {"name": "first", "adapter": "yaml-directory", "path": str(first),
+         "id_field": "component_id"},
+        {"name": "second", "adapter": "yaml-directory", "path": str(second),
+         "id_field": "component_id"},
+    ]})
+    by_name = {a.name: a for a in index.build_info.adapters}
+    assert by_name["first"].elapsed_seconds is not None
+    assert by_name["second"].elapsed_seconds is not None
+    assert by_name["first"].elapsed_seconds >= 0
+    assert by_name["second"].elapsed_seconds >= 0
+
+
 def test_multiple_declared_registries_are_discovered_without_console_wiring(tmp_path):
     first, second = tmp_path / "first.d", tmp_path / "second.d"
     first.mkdir(); second.mkdir()

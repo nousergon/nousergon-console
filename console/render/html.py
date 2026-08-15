@@ -276,6 +276,10 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
         f"rebuilds every {info.refresh_seconds:g}s"
         if info.refresh_seconds else "no rebuild cadence declared"
     )
+    if info.build_seconds is not None:
+        cadence = f"{cadence}; last build {info.build_seconds:.1f}s"
+        if info.cadence_overrun:
+            cadence = f"{cadence} (exceeds cadence)"
     if info.is_stale(now):
         # The whole surface, not row by row. Every row below is at most as
         # current as this, and rows that look internally consistent with each

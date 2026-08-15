@@ -43,15 +43,24 @@ class AdapterFetch:
     fetched_at: str | None
     cadence_seconds: float | None
     unavailable: tuple[str, ...] = ()
+    #: Wall time of this source's fetch on the pass that produced the index.
+    #: None means not measured — never 0.0, which would claim a free read
+    #: (alpha-engine-config-I7124 deliverable 1).
+    elapsed_seconds: float | None = None
 
     @classmethod
-    def of(cls, result: AdapterResult) -> "AdapterFetch":
+    def of(
+        cls,
+        result: AdapterResult,
+        elapsed_seconds: float | None = None,
+    ) -> "AdapterFetch":
         return cls(
             name=result.name,
             status=result.status.value,
             fetched_at=result.fetched_at,
             cadence_seconds=result.declared_cadence_seconds,
             unavailable=result.unavailable,
+            elapsed_seconds=elapsed_seconds,
         )
 
 

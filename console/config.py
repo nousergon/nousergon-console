@@ -10,7 +10,8 @@ holds no topology of its own.
 from __future__ import annotations
 
 import os
-from typing import Any
+import time
+from typing import Any, Callable
 
 import yaml
 
@@ -87,11 +88,11 @@ def build_index(config: dict[str, Any]) -> Index:
             index.add_result(_unknown_adapter(name, reg.get("adapter")))
             continue
         module = ADAPTERS[reg["adapter"]]
-        result = module.fetch({
+        result, elapsed = _timed_fetch(module.fetch, {
             **reg, "_name": name,
             "known_drivers": KNOWN_DRIVERS,
         })
-        index.add_result(result)
+        index.add_result(result, elapsed_seconds=elapsed)
         index.render_registry(name)
         # §9.1's per-registry denominator: how many rows this registry
         # offered THIS pass, and whether its adapter could even read it.
@@ -109,7 +110,8 @@ def build_index(config: dict[str, Any]) -> Index:
             index.add_result(_unknown_adapter(entry.get("name", kind), kind))
             continue
         cfg = {**entry.get("config", {}), "_name": entry.get("name", kind)}
-        index.add_result(module.fetch(cfg))
+        result, elapsed = _timed_fetch(module.fetch, cfg)
+        index.add_result(result, elapsed_seconds=elapsed)
 
     # §2.6: every component's own descriptor said where its facts live. Walking
     # those bindings is what makes onboarding cost ONE FILE — a component whose
@@ -139,6 +141,17 @@ def build_index(config: dict[str, Any]) -> Index:
     # §9.4: run the standing question set against the index just built.
     index.set_answer_latency(measure_answer_latency(index))
     return index
+
+
+def _timed_fetch(fetch: Callable[..., Any], config: dict[str, Any]) -> tuple[Any, float]:
+    """Wall-clock one adapter fetch. I7124 deliverable 1: the 93.5s split.
+
+    Measured on the box as one number; without a per-source elapsed the
+    cadence decision (deliverable 3) is a guess, and raising refresh_seconds
+    to fit a slow build would hide whichever source actually dominates.
+    """
+    started = time.monotonic()
+    return fetch(config), time.monotonic() - started
 
 
 def _unknown_adapter(name: str, kind: Any) -> AdapterResult:

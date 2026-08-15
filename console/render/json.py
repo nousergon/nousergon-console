@@ -95,6 +95,8 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
     return {
         "built_at": info.built_at or None,
         "refresh_seconds": info.refresh_seconds,
+        "build_seconds": info.build_seconds,
+        "cadence_overrun": info.cadence_overrun,
         "stale": info.is_stale(now),
         "staleness_basis": info.staleness_basis(),
         "age_seconds": info.age_seconds(now),
@@ -104,6 +106,7 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
             {
                 "name": a.name, "status": a.status, "fetched_at": a.fetched_at,
                 "cadence_seconds": a.cadence_seconds,
+                "elapsed_seconds": a.elapsed_seconds,
                 "unavailable": list(a.unavailable),
             }
             for a in info.adapters

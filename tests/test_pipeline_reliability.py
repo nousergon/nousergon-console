@@ -557,6 +557,53 @@ def test_stage_fields_are_absent_when_no_stages_are_declared():
     assert "stage_reached" not in _wcycles(result)["2026-08-08"].detail
 
 
+def test_history_attach_is_bounded_by_cycle_days_not_listed_executions(monkeypatch):
+    """config-I7067: GetExecutionHistory is O(cycle days), not O(list_executions).
+
+    Measured defect: 120 listed executions → 255s of history for a strip that
+    renders depth for six. The attach subset must be the first cadence attempt
+    per windowed cycle day.
+    """
+    calls: list[str] = []
+
+    def fake_history_reader(_names):
+        def attach(_region, records):
+            for r in records:
+                calls.append(r["name"])
+                r.setdefault("entered_states", ["MorningEnrich"])
+        return attach
+
+    monkeypatch.setattr(pr, "history_reader_for", fake_history_reader)
+
+    records = []
+    for day in ("2026-07-25", "2026-08-01", "2026-08-08"):
+        for i in range(10):
+            records.append(_wexec(
+                f"{day}-run-{i}", "FAILED",
+                f"{day}T{9 + i:02d}:00:00Z", f"{day}T{9 + i:02d}:13:00Z",
+                role="weekly",
+            ))
+    for i in range(10):
+        records.append(_wexec(
+            f"out-{i}", "FAILED",
+            f"2026-07-18T{9 + i:02d}:00:00Z", f"2026-07-18T{9 + i:02d}:13:00Z",
+            role="weekly",
+        ))
+
+    result = pr.fetch(
+        _weekly_cfg(stage_states=list(STAGES)),
+        reader=_weekly_reader(records),
+        trading_day_checker=lambda d: False,
+        now=_now(),
+    )
+    assert len(calls) <= 3
+    assert set(calls) == {
+        "2026-07-25-run-0", "2026-08-01-run-0", "2026-08-08-run-0",
+    }
+    assert _wcycles(result)["2026-08-08"].detail["stage_reached"] == "MorningEnrich"
+    assert _wcycles(result)["2026-08-08"].detail["stage_depth"] == 1
+
+
 # ---------------------------------------------------------------- cutovers --
 
 

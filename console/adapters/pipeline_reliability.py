@@ -232,14 +232,6 @@ def fetch(
 
         try:
             records = reader(region, arn)
-            if want_history and not any(r.get("entered_states") for r in records):
-                attach = history_reader_for(degraded_state_names | frozenset(stage_states))
-                if attach is not None:
-                    attach(region, records)
-                else:
-                    # Declared, never guessed: without history there is no
-                    # stage depth and no state-name-derived DEGRADED.
-                    unavailable.append(f"{pipeline_key}:execution-history")
         except Exception:
             failed = True
             continue
@@ -249,6 +241,31 @@ def fetch(
         cycle_days = _window_cycle_days(
             now.date(), window, trading_day_checker, _cadence_rule(entry),
         )
+
+        # History is O(cycle days), not O(list_executions) — stage depth and
+        # state-name DEGRADED only read entered_states on the first cadence
+        # attempt per day plus the `_ok` attempts `_is_degraded` short-circuits
+        # into (config-I7067). Attaching before the window made a 6-day weekly
+        # strip cost 255s and fail the deploy health check.
+        if want_history:
+            subset = _records_needing_history(
+                by_date=by_date,
+                trading_days=cycle_days,
+                role_field=role_field,
+                cadence_roles=cadence_roles,
+                recovery_roles=recovery_roles,
+                noop_max_seconds=noop_max_seconds,
+                want_degraded_states=bool(degraded_state_names),
+                want_stages=bool(stage_states),
+            )
+            if subset:
+                attach = history_reader_for(degraded_state_names | frozenset(stage_states))
+                if attach is not None:
+                    attach(region, subset)
+                else:
+                    # Declared, never guessed: without history there is no
+                    # stage depth and no state-name-derived DEGRADED.
+                    unavailable.append(f"{pipeline_key}:execution-history")
 
         cycles, fired_days, buffer_points, attempt_points = _classify_window(
             pipeline_key=pipeline_key,
@@ -309,6 +326,71 @@ def _default_pipeline_key(arn: str) -> str:
 
 
 # ── classification ──────────────────────────────────────────────────────
+
+
+def _records_needing_history(
+    *,
+    by_date: dict[str, list[ExecutionRecord]],
+    trading_days: list[str],
+    role_field: str,
+    cadence_roles: frozenset[str],
+    recovery_roles: frozenset[str],
+    noop_max_seconds: float | None,
+    want_degraded_states: bool,
+    want_stages: bool,
+) -> list[ExecutionRecord]:
+    """Executions whose `entered_states` the classifier will actually read.
+
+    Known before `attach()`: `_group_by_date` and `_window_cycle_days` have
+    already fixed the cycle window. Stage depth reads only the first cadence
+    attempt per day; the state-name DEGRADED axis is consulted for that first
+    and for every `_ok` attempt / later recovery `_is_degraded` short-circuits
+    into. Everything else `list_executions` returned stays unfetched
+    (config-I7067).
+    """
+    if not want_degraded_states and not want_stages:
+        return []
+
+    need: list[ExecutionRecord] = []
+    seen: set[str] = set()
+
+    def add(rec: ExecutionRecord) -> None:
+        if rec.get("entered_states") is not None:
+            return
+        key = str(rec.get("executionArn") or rec.get("name") or id(rec))
+        if key in seen:
+            return
+        seen.add(key)
+        need.append(rec)
+
+    for d in trading_days:
+        day_records = by_date.get(d, [])
+        cadence_today = [
+            r for r in day_records
+            if _role_of(r, role_field) in cadence_roles
+            and not _is_noop(r, noop_max_seconds)
+        ]
+        if cadence_today and (want_stages or want_degraded_states):
+            add(cadence_today[0])
+        if not want_degraded_states:
+            continue
+        attempts_records = [
+            r for r in day_records
+            if _role_of(r, role_field) in (cadence_roles | recovery_roles)
+            and not _is_noop(r, noop_max_seconds)
+        ]
+        for r in attempts_records:
+            if _ok(r):
+                add(r)
+        if cadence_today:
+            first = cadence_today[0]
+            first_start = _as_of(first.get("startDate")) or ""
+            for r in day_records:
+                if r is first:
+                    continue
+                if (_as_of(r.get("startDate")) or "") > first_start and _ok(r):
+                    add(r)
+    return need
 
 
 def _group_by_date(
@@ -826,7 +908,9 @@ def history_reader_for(
 ) -> Callable[[str, list[ExecutionRecord]], None] | None:
     """Mutates `records` in place, attaching `entered_states` via
     `GetExecutionHistory`. Only called when a pipeline declared
-    `degraded_state_names` — most deployments never pay this API cost.
+    `degraded_state_names` and/or `stage_states`, and only for the subset
+    `_records_needing_history` selected (config-I7067) — never for every
+    execution `list_executions` returned.
     """
     if not degraded_state_names:
         return None

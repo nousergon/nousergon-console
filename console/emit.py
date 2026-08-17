@@ -45,6 +45,7 @@ import json
 import os
 from typing import Any, Callable, Iterable, Mapping
 from .aws import client as _aws_client
+from .render.json import dumps as _wire_dumps
 
 #: The envelope version. Bumped only on a change a consumer must react to;
 #: adding an optional field is not one (§12). The previous version stays
@@ -152,7 +153,7 @@ def write_json(doc: Mapping[str, Any], path: str) -> str:
     os.makedirs(directory, exist_ok=True)
     tmp = f"{path}.tmp"
     with open(tmp, "w") as fh:
-        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.write(_wire_dumps(doc))
     os.replace(tmp, path)
     return path
 
@@ -169,7 +170,7 @@ def write_object(
     network — the same hermeticity rule every adapter follows (`docs/adapters.md`).
     The default uses boto3 from the optional ``aws`` extra.
     """
-    payload = json.dumps(doc, indent=2, sort_keys=True).encode("utf-8")
+    payload = _wire_dumps(doc).encode("utf-8")
     if putter is None:
         putter = _default_putter()
     putter(bucket, key, payload)

@@ -14,14 +14,13 @@ Commands:
 from __future__ import annotations
 
 import argparse
-import json
 from typing import Any
 
 from .config import build_index, load_config, supervised_index
 from .diagnose import doctor, render_text
 from .index.graph import Index
 from .index.namespace import check as check_namespace
-from .render.json import index_dump
+from .render.json import dumps as wire_dumps, index_dump
 from .server.app import serve
 
 
@@ -125,7 +124,7 @@ def _dump(index: Index) -> str:
     format, and the two would answer the same question differently the first
     time either changed.
     """
-    return json.dumps(index_dump(index), indent=2, sort_keys=True)
+    return wire_dumps(index_dump(index))
 
 
 if __name__ == "__main__":

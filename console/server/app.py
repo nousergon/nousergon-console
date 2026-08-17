@@ -15,7 +15,6 @@ of its own.
 """
 from __future__ import annotations
 
-import json as jsonlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -61,12 +60,23 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
 
         if as_json:
-            self._send(
-                200,
-                jsonlib.dumps(render_json.payload(index, req), indent=2,
-                              sort_keys=True),
-                "application/json; charset=utf-8",
-            )
+            try:
+                body = render_json.dumps(render_json.payload(index, req))
+            except (TypeError, ValueError) as exc:
+                # A value the wire cannot spell is a defect in the source or
+                # the serializer — answered as a 500 IN JSON so the reader
+                # (and the deploy prove) sees the failure named, instead of a
+                # dropped connection that reads as an empty index.
+                self.log_error("json render failed for %s: %s", path, exc)
+                self._send(
+                    500,
+                    render_json.dumps({"schema_version": render_json.SCHEMA_VERSION,
+                                       "error": "render_failed",
+                                       "detail": f"{exc.__class__.__name__}: {exc}"}),
+                    "application/json; charset=utf-8",
+                )
+                return
+            self._send(200, body, "application/json; charset=utf-8")
             return
         self._send(200, _html(index, req), "text/html; charset=utf-8")
 
@@ -78,10 +88,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         an unhandled exception three layers up.
         """
         if as_json:
-            body = jsonlib.dumps(
+            body = render_json.dumps(
                 {"schema_version": render_json.SCHEMA_VERSION,
                  "error": "not_found", "detail": message},
-                indent=2, sort_keys=True,
             )
             self._send(status, body, "application/json; charset=utf-8")
             return

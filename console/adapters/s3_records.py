@@ -66,8 +66,6 @@ over recorded fixtures with no live bucket (groom-sweep §8.1).
 """
 from __future__ import annotations
 
-import csv
-import io
 import json
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -75,7 +73,10 @@ from typing import Any, Callable
 from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
-from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from ..model.kinds import Kind
+from ..records_shape import (
+    build_fields, flat_context, get_path, project, resolve_id, resolve_state,
+)
 from .object_store import _parse_cadence  # second adoption, one repo — see below
 from ..aws import client as _aws_client
 
@@ -202,87 +203,12 @@ def _resolve_kind(raw: Any) -> Kind | None:
 
 def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], dict]:
     """Turn one key's body into (records, body_root) per the declared shape.
-
-    ``body_root`` is what field paths resolve against for whole-body /
-    body-level fields; each record is merged on top of it per-entity (record
-    wins on key collision) so a per-ticker field and a per-day field are both
-    reachable through the same ``path`` syntax.
+    Thin wrapper over the shared grammar (`console/records_shape.py`) — this
+    adapter's only job is picking the config keys off ITS config dict; the
+    grammar itself is shared with the `s3-records` driver (§2.3).
     """
-    if fmt == "csv":
-        text = body if isinstance(body, str) else body.decode("utf-8")
-        rows = list(csv.DictReader(io.StringIO(text)))
-        return rows, {}
-
-    parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
-    if not isinstance(parsed, dict):
-        raise TypeError("s3-records JSON body must be an object")
-
-    records_path = config.get("records_path")
-    array_fields = config.get("array_fields")
-    if records_path:
-        parts = str(records_path).split(".")
-        if "*" in parts:
-            return _explode_grouped(parsed, parts, config.get("group_field")), parsed
-        raw_list = _get_path(parsed, records_path)
-        if not isinstance(raw_list, list):
-            raise TypeError(f"records_path {records_path!r} is not a list")
-        return [r for r in raw_list if isinstance(r, dict)], parsed
-    if array_fields:
-        arrays = [parsed.get(f) for f in array_fields]
-        if any(not isinstance(a, list) for a in arrays):
-            raise TypeError("array_fields must all name JSON arrays")
-        rows = [
-            {field: values[i] for field, values in zip(array_fields, arrays)}
-            for i in range(min(len(a) for a in arrays))
-        ]
-        return rows, parsed
-    # Whole-body mode: the object IS the one record.
-    return [{}], parsed
-
-
-def _explode_grouped(cur: Any, parts: list[str], group_field: str | None) -> list[dict]:
-    """Resolve a `records_path` containing a `*` segment (module docstring's
-    "Grouped" shape). `*` iterates a dict's keys — rather than indexing a
-    named key like every other segment — injecting each key under
-    `group_field` into every record reached beneath it. The terminal value
-    may be a list (each dict item becomes one record) or a dict (a
-    dict-of-records: each VALUE becomes one record, its key injected the
-    same way `*` injects one mid-path) — both are "a dict names several
-    records" at different depths, so one walk covers both."""
-    out: list[dict] = []
-    _walk_grouped(cur, parts, group_field, out)
-    return out
-
-
-def _walk_grouped(cur: Any, parts: list[str], group_field: str | None, out: list[dict]) -> None:
-    if not parts:
-        if isinstance(cur, dict):
-            out.append(cur)
-        elif isinstance(cur, list):
-            out.extend(item for item in cur if isinstance(item, dict))
-        return
-    part, rest = parts[0], parts[1:]
-    if part == "*":
-        if not isinstance(cur, dict):
-            return
-        for key, value in cur.items():
-            before = len(out)
-            _walk_grouped(value, rest, group_field, out)
-            for rec in out[before:]:
-                rec.setdefault(group_field or "group", key)
-        return
-    if isinstance(cur, dict) and part in cur:
-        _walk_grouped(cur[part], rest, group_field, out)
-
-
-def _get_path(obj: Any, path: str) -> Any:
-    cur = obj
-    for part in path.split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        else:
-            return None
-    return cur
+    return project(body, fmt, config.get("records_path"), config.get("array_fields"),
+                    config.get("group_field"))
 
 
 def _one_entity(
@@ -300,49 +226,27 @@ def _one_entity(
     config: dict[str, Any],
 ) -> Entity | None:
     path_root = {**body_root, **record}
-    flat_context = {
-        **groups,
-        **{k: v for k, v in body_root.items() if not isinstance(v, (dict, list))},
-        **{k: v for k, v in record.items() if not isinstance(v, (dict, list))},
-    }
+    context = flat_context(groups, body_root, record)
 
     id_template = config.get("id_template", "{" + "}{".join(groups) + "}" if groups else "")
-    try:
-        entity_id = str(id_template).format(**flat_context)
-    except (KeyError, IndexError):
-        return None
-    if not entity_id:
+    entity_id = resolve_id(id_template, context)
+    if entity_id is None:
         return None
 
     as_of_field = config.get("as_of_field")
-    as_of = str(_get_path(path_root, as_of_field)) if as_of_field and _get_path(path_root, as_of_field) is not None else last_modified
+    as_of = str(get_path(path_root, as_of_field)) if as_of_field and get_path(path_root, as_of_field) is not None else last_modified
 
     evidence_template = config.get("evidence_template")
     evidence = (
-        str(evidence_template).format(**flat_context) if evidence_template
+        str(evidence_template).format(**context) if evidence_template
         else f"s3://{bucket}/{key}"
     )
 
-    state = _resolve_state(kind, config, path_root, as_of, cadence_seconds, staleness_factor, now)
+    state = resolve_state(kind, config.get("state_field"), config.get("state_default"),
+                           config.get("state_map"), path_root, as_of, cadence_seconds,
+                           staleness_factor, now)
 
-    fields_out: dict[str, dict[str, Any]] = {}
-    question = config.get("question")
-    if question:
-        fields_out["question"] = {"value": str(question), "render": "text"}
-    for fname, spec in (config.get("fields") or {}).items():
-        # `path` defaults to the field's own name — folded in from
-        # `dated-snapshot` during the I79 consolidation. The overwhelmingly
-        # common case is a field named after the key it reads, and requiring
-        # `{path: x}` for a field called `x` is config noise that invites
-        # copy-paste errors. An explicit `path` still wins, so no existing
-        # configuration changes meaning.
-        val = _get_path(path_root, spec.get("path", fname))
-        entry: dict[str, Any] = {"value": val, "render": spec.get("render", "value")}
-        if spec.get("unit") is not None:
-            entry["unit"] = spec["unit"]
-        if "baseline" in spec:
-            entry["baseline"] = spec["baseline"]
-        fields_out[fname] = entry
+    fields_out = build_fields(path_root, config.get("fields"), config.get("question"))
 
     # Facets are what §2.2 filters on uniformly across the whole index, so they
     # are a different thing from declared `fields` (§5.8), which are rendered.
@@ -353,7 +257,7 @@ def _one_entity(
     # filter differently, and inventing the second is a fabricated fact.
     facets: dict[str, str] = {}
     for facet_name, facet_path in (config.get("facets") or {}).items():
-        value = _get_path(path_root, str(facet_path))
+        value = get_path(path_root, str(facet_path))
         if value is not None:
             facets[str(facet_name)] = str(value)
 
@@ -366,71 +270,6 @@ def _one_entity(
         detail={"fields": fields_out, "key": key},
     )
 
-
-def _resolve_state(
-    kind: Kind,
-    config: dict[str, Any],
-    path_root: dict,
-    as_of: str | None,
-    cadence_seconds: float | None,
-    staleness_factor: float,
-    now: datetime,
-) -> State | str:
-    state_field = config.get("state_field")
-    raw = _get_path(path_root, state_field) if state_field else None
-    if raw is None:
-        raw = config.get("state_default")
-
-    if kind in COMPONENT_STATE_KINDS:
-        # §5.1: Component/Run MUST carry one of the twelve — never a raw
-        # passthrough (Entity.__post_init__ enforces this structurally).
-        if raw is None:
-            # Nothing said anything. UNREPORTED is the honest answer, and it is
-            # a DIFFERENT fact from "said something I cannot interpret" below.
-            return State.UNREPORTED
-        # `state_map` translates a source's own vocabulary (passed/failed,
-        # green/red) into the twelve. Folded in from `dated-snapshot` when the
-        # four record-shaped adapters were consolidated (I79, Brian ruling
-        # 2026-08-11): it was that adapter's one genuine capability, and
-        # without it this adapter can only read sources that already emit the
-        # twelve state names verbatim.
-        state_map = config.get("state_map") or {}
-        mapped = state_map.get(str(raw))
-        if mapped is not None:
-            try:
-                return State[str(mapped).upper()]
-            except KeyError:
-                # The MAP is wrong, not the source. Loud rather than silently
-                # green: a typo'd target state must not read as healthy.
-                return State.DEGRADED
-        try:
-            return State[str(raw).upper()]
-        except KeyError:
-            # A value arrived and nothing could interpret it. `dated-snapshot`
-            # resolved this to DEGRADED and this adapter to UNREPORTED; DEGRADED
-            # is the one kept, because the two cases are not the same fact
-            # (§5.5) and "reported something uninterpretable" is a finding,
-            # while UNREPORTED means nothing reported at all. The raw value
-            # stays on the entity so the reason is visible, not just the verdict.
-            return State.DEGRADED
-
-    if raw is not None:
-        return str(raw)
-
-    # No domain state declared — fall back to the object_store convention:
-    # freshness relative to a declared cadence renders the value itself
-    # (§5.1's second half), and the three not-computable cases stay three
-    # facts (§5.5) rather than collapsing into one token.
-    if as_of is None:
-        return "no-freshness-stamp"
-    if cadence_seconds is None:
-        return "no-cadence-declared"
-    try:
-        ts = datetime.fromisoformat(str(as_of).replace("Z", "+00:00"))
-    except ValueError:
-        return "unreadable"
-    age = (now - ts).total_seconds()
-    return "fresh" if age <= cadence_seconds * staleness_factor else "stale"
 
 
 def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:

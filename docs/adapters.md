@@ -309,21 +309,49 @@ none, so a binding without a reader returns a failed `DriverResult` /
 | | |
 |---|---|
 | **Reads** | The same state-machine ARNs as `state-machine`, plus an injected trading calendar |
-| **Emits** | `cycle` (one per cycle day, six-value reliability classification), `signal` (first-attempt success rate, attempts-to-success, rerun revisit trigger, market-open buffer trend) |
-| **Cannot supply** | `DEGRADED` for a pipeline that declares neither `degraded_state_names` nor a degraded terminal error; stage depth for a pipeline that declares no `stage_states`; buffer trend for a pipeline with no `open_time`/`open_timezone` |
-| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`, `degraded_error_names`, `cadence`, `cadence_weekdays`, `noop_max_duration_seconds`, `stage_states`, `cutovers`, `rerun_alert_threshold`), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
+| **Emits** | `cycle` (one per cycle day, seven-value reliability classification), `signal` (window coverage, first-attempt success rate, attempts-to-success, rerun revisit trigger, market-open buffer trend) |
+| **Cannot supply** | `DEGRADED` for a pipeline that declares neither `degraded_state_names` nor a degraded terminal error; stage depth for a pipeline that declares no `stage_states`; buffer trend for a pipeline with no `open_time`/`open_timezone`; a cycle day older than the oldest execution the source returned (dropped, not rendered) |
+| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`, `degraded_error_names`, `cadence`, `cadence_weekdays`, `noop_max_duration_seconds`, `stage_states`, `cutovers`, `rerun_alert_threshold`, `window_trading_days` — overrides the adapter-level default per entry), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
 
 Same source shape as `state-machine`, a different projection: one Cycle per
 trading day (id `pipeline-reliability:<pipeline_key>:<date>`), classified
 `SUCCEEDED` / `FAILED-recovered` / `FAILED-unrecovered` / `DEGRADED` /
-`HOLIDAY` / `NEVER-FIRED` — a domain vocabulary for a trading day, not a
-member of §8.3's twelve component states (Cycle is outside
+`HOLIDAY` / `NEVER-FIRED` / `PENDING` — a domain vocabulary for a trading day,
+not a member of §8.3's twelve component states (Cycle is outside
 `COMPONENT_STATE_KINDS`, so it carries this value verbatim per §5.1's second
 half). `HOLIDAY` comes from the injected `TradingDayChecker`, never from
 execution history: a Step Function's own terminal status is identical whether
 it ran end-to-end or was skipped for a market holiday, so the split needs the
-calendar. `NEVER-FIRED` is a trading day with zero cadence-role executions —
-the schedule should have fired and did not.
+calendar. `NEVER-FIRED` is a CLOSED trading day with zero cadence-role
+executions — the schedule should have fired and did not.
+
+**`PENDING` (alpha-engine-config-I6758) is the current cycle day before it
+closes.** Zero cadence executions on a day still in progress is not evidence
+the schedule failed — it may not have been triggered yet, and rendering it
+`NEVER-FIRED` was a nightly false-outage signal between UTC midnight and the
+morning trigger. "Closed" is calendar-day-complete in the exchange timezone
+(`open_timezone` when configured, `America/New_York` otherwise). A day that
+already has a cadence execution classifies on its actual outcome regardless of
+whether its calendar day has closed — `PENDING` only replaces what would
+otherwise be a bare zero-execution `NEVER-FIRED`, and is deliberately distinct
+from both `NEVER-FIRED` (closed, zero executions — a real absence) and
+`HOLIDAY` (never expected at all).
+
+**The window has a floor and a ceiling from the execution history the source
+actually returned (alpha-engine-config-I7068).** No cycle day earlier than the
+oldest execution the reader returned is asserted about — a cycle day the state
+machine could not possibly have run on used to render `NEVER-FIRED`, a false
+outage rather than "the pipeline did not exist yet" (measured: 15 of 20
+weekly cells on first render). The floor is derived from the same
+`list_executions` read this adapter already performs, not a second config
+value; an empty read applies no floor (no evidence is not evidence of
+absence). Because Step Functions' own execution-history retention (90 days)
+already bounds what the reader can return, the floor doubles as the ceiling —
+no cadence can evidence more cycles than retention serves, and no hand-picked
+number like the old `window_trading_days: 6` is needed to enforce it. Each
+pipeline emits a `window-coverage` Signal (`window_days_requested` versus
+`window_days_rendered`, plus `floor_date`) so the rendered window states what
+it actually covers.
 
 `DEGRADED` arrives on either of two axes, and both are the same fact. A
 pipeline that degrades under the **Option-A** shape ends in a `Fail` state

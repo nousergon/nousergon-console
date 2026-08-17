@@ -95,6 +95,47 @@ whichever component's registry row declares it under `consumes` (the
 belongs, because only the consumer side ever knows what it consumes (§2.3).
 Declaring a `consumed-by` edge here would mean inventing a consumer id this
 adapter's own reads never supplied, which is exactly the forbidden shape.
+
+**The window has a floor and a ceiling from available history
+(alpha-engine-config-I7068).** `window_trading_days` alone told the window how
+FAR to reach; it never consulted what execution history actually exists, so a
+cycle day older than the state machine's oldest surviving execution rendered
+NEVER-FIRED — a false red asserting a run was expected and missed when the
+pipeline simply did not exist yet (measured: 15 of 20 weekly cells on first
+render). The floor is derived from the very `list_executions` read this
+adapter already performs — the oldest date across the returned records — and
+`_window_cycle_days` stops there rather than manufacturing NEVER-FIRED on
+undocumented history. Dropped, not `UNKNOWN`: `console-policy.md` §2.3 reads
+absence as absent, and `observability-policy.md` §8.3 forbids an `UNKNOWN`
+fall-through by name. The ceiling — SF retains standard-workflow execution
+history for 90 days, so no cadence can ever evidence more than what that
+retention serves — is the SAME mechanism: the reader can never return
+executions retention has already dropped, so the floor derived from its
+output is already capped by it. No second, hand-picked number is introduced.
+What IS new is transparency: each pipeline emits a `window-coverage` Signal
+stating the requested window length against what actually rendered, so a
+6-cell strip that claims to be 20 is now a 6-cell strip that SAYS it is 6.
+`window_trading_days` is also overridable per `state_machines` entry now
+(falling back to the adapter-level default), so a weekly cadence sharing this
+adapter with weekday pipelines no longer needs a hand-maintained number raised
+every week — deliverable 3's window half. `cadence_roles`/`recovery_roles`
+stay adapter-level for now (see `pipeline-reliability-weekly.yaml` for why:
+folding the weekly pipeline into a third `state_machines` entry needs those
+per-entry too, tracked separately).
+
+**The current cycle day is PENDING before it closes, not NEVER-FIRED
+(alpha-engine-config-I6758).** Zero cadence executions on the calendar day
+still in progress is not evidence the schedule failed to fire — it may not
+have been triggered yet. `PENDING` is a seventh vocabulary member, deliberately
+distinct from both NEVER-FIRED (a closed day, still zero executions — a real
+absence) and HOLIDAY (never expected at all) per `principles.md` §2.7: absence,
+non-expectation and not-yet-due are three different facts and must render as
+three different values. "Closed" is calendar-day-complete in the exchange
+timezone (`open_timezone` when configured, `America/New_York` otherwise) —
+the simplest rule that needs no per-pipeline trigger-time config. A day that
+already fired (cadence execution present) classifies on its actual outcome
+regardless of whether the calendar day has closed; PENDING only replaces what
+would otherwise be a bare NEVER-FIRED.
 """
 from __future__ import annotations
 
@@ -116,17 +157,30 @@ CLAIM_CLASS = ClaimClass.OBSERVATION
 name = "pipeline-reliability"
 produces = ("cycle", "signal")
 
-#: The six-value trading-day reliability vocabulary (issue #6695). Deliberately
-#: NOT a member of observability-policy.md §8.3 — see module docstring.
+#: The trading-day reliability vocabulary (issue #6695, PENDING added by
+#: alpha-engine-config-I6758). Deliberately NOT a member of
+#: observability-policy.md §8.3 — see module docstring.
 SUCCEEDED = "SUCCEEDED"
 FAILED_RECOVERED = "FAILED-recovered"
 FAILED_UNRECOVERED = "FAILED-unrecovered"
 DEGRADED = "DEGRADED"
 HOLIDAY = "HOLIDAY"
 NEVER_FIRED = "NEVER-FIRED"
+#: A cycle day still open (calendar-day not yet complete in the exchange
+#: timezone) with zero cadence executions so far. Distinct from NEVER-FIRED
+#: (a CLOSED day with zero executions — a real absence) and from HOLIDAY (never
+#: expected at all) — alpha-engine-config-I6758, principles.md §2.7.
+PENDING = "PENDING"
 RELIABILITY_STATES: tuple[str, ...] = (
-    SUCCEEDED, FAILED_RECOVERED, FAILED_UNRECOVERED, DEGRADED, HOLIDAY, NEVER_FIRED,
+    SUCCEEDED, FAILED_RECOVERED, FAILED_UNRECOVERED, DEGRADED, HOLIDAY, NEVER_FIRED, PENDING,
 )
+
+#: Default exchange timezone used to decide whether "today" has closed, when
+#: no `open_timezone` is configured (alpha-engine-config-I6758). NYSE's own
+#: zone — chosen because it is the calendar every `trading-day` cadence
+#: pipeline in this fleet already keys off, not a fleet-specific default the
+#: way `window_trading_days: 6` was.
+_DEFAULT_EXCHANGE_TZ = "America/New_York"
 
 #: How a pipeline's *expected* cycle days are enumerated. `trading-day` is the
 #: weekday-pipeline default and consults the injected calendar; `weekday` names
@@ -200,10 +254,12 @@ def fetch(
     if not cadence_roles:
         return _failed(config, "cadence_roles")
 
-    window = int(config.get("window_trading_days", 20))
+    default_window = int(config.get("window_trading_days", 20))
     open_time_s = config.get("open_time")
     open_tz = config.get("open_timezone")
+    exchange_tz = open_tz or _DEFAULT_EXCHANGE_TZ
     now = now or datetime.now(timezone.utc)
+    today_local = _today_local(now, exchange_tz)
 
     entities: list[Entity] = []
     unavailable: list[str] = []
@@ -227,6 +283,11 @@ def fetch(
         }
         noop_max_seconds = entry.get("noop_max_duration_seconds")
         rerun_threshold = int(entry.get("rerun_alert_threshold", 1))
+        # Per-entry override, defaulting to the adapter-level value
+        # (alpha-engine-config-I7068 deliverable 3, window half) — a weekly
+        # cadence sharing this adapter no longer needs a second config
+        # instance just to carry its own window length.
+        window = int(entry.get("window_trading_days", default_window))
 
         want_history = bool(degraded_state_names or stage_states)
 
@@ -238,8 +299,14 @@ def fetch(
         machines_read += 1
 
         by_date = _group_by_date(records, role_field)
+        # Floor: no cycle day earlier than the oldest execution this read
+        # returned can be asserted about (I7068 deliverable 1). Ceiling: SF's
+        # own execution-history retention already bounds what `records` can
+        # contain, so the floor derived from it is the ceiling too — no
+        # second, hand-picked number (I7068 deliverable 2).
+        floor = min(by_date) if by_date else None
         cycle_days = _window_cycle_days(
-            now.date(), window, trading_day_checker, _cadence_rule(entry),
+            now.date(), window, trading_day_checker, _cadence_rule(entry), floor=floor,
         )
 
         # History is O(cycle days), not O(list_executions) — stage depth and
@@ -280,10 +347,14 @@ def fetch(
             stage_states=stage_states,
             cutovers=cutovers,
             noop_max_seconds=noop_max_seconds,
+            today_local=today_local,
             source=f"pipeline-reliability:{region}:{arn}",
         )
         entities.extend(cycles)
 
+        entities.append(_window_coverage_signal(
+            pipeline_key, arn, window, len(cycle_days), floor, region,
+        ))
         entities.append(_first_attempt_signal(pipeline_key, arn, fired_days, region))
         entities.append(_attempts_to_success_signal(pipeline_key, arn, attempt_points, region))
         entities.append(_rerun_trigger_signal(
@@ -429,15 +500,24 @@ def _window_cycle_days(
     window: int,
     checker: TradingDayChecker | None,
     rule: tuple[str, frozenset[int]],
+    floor: str | None = None,
 ) -> list[str]:
     """The last `window` *expected cycle days* up to and including today,
-    oldest first.
+    oldest first, never reaching earlier than `floor` (alpha-engine-config-
+    I7068 — the oldest date the execution-history read actually evidenced).
 
     Walks back over calendar days rather than assuming a fixed stride, so a
     holiday run (trading-day cadence) or a moved schedule (weekday cadence)
     shortens nothing. A cycle day is a day the pipeline's declared cadence says
     a run should exist — which is the denominator every state below is measured
     against, and the reason NEVER-FIRED can be stated at all.
+
+    `floor=None` means "no evidence at all" (an empty execution-history read)
+    and applies NO bound — dropping every cycle day would be a worse false
+    reading than the one this closes. When `floor` is set the loop terminates
+    on it directly rather than continuing to scan to `limit`: a floor a few
+    calendar days behind the window start would otherwise still walk the full
+    lookback bound finding nothing on every iteration.
     """
     cadence, weekdays = rule
     if cadence == CADENCE_CALENDAR_DAY:
@@ -454,12 +534,23 @@ def _window_cycle_days(
     limit = window * 10 + 10
     scanned = 0
     while len(days) < window and scanned < limit:
+        if floor is not None and cursor.isoformat() < floor:
+            break
         if expected(cursor, checker):
             days.append(cursor.isoformat())
         cursor -= timedelta(days=1)
         scanned += 1
     days.reverse()
     return days
+
+
+def _today_local(now: datetime, tz_name: str) -> str:
+    """`now` as a YYYY-MM-DD calendar date in `tz_name` (alpha-engine-config-
+    I6758) — the reference a cycle day is compared against to decide whether
+    its calendar day has closed."""
+    from zoneinfo import ZoneInfo
+
+    return now.astimezone(ZoneInfo(tz_name)).date().isoformat()
 
 
 def _role_of(rec: ExecutionRecord, role_field: str) -> str | None:
@@ -575,6 +666,7 @@ def _classify_window(
     stage_states: tuple[str, ...],
     cutovers: dict[str, dict[str, Any]],
     noop_max_seconds: float | None,
+    today_local: str,
     source: str,
 ) -> tuple[list[Entity], list[tuple[str, bool]], list[dict[str, Any]], list[dict[str, Any]]]:
     cycles: list[Entity] = []
@@ -632,7 +724,12 @@ def _classify_window(
                 break
 
         if not cadence_today:
-            state = NEVER_FIRED
+            # A day that has not closed yet (alpha-engine-config-I6758) with
+            # zero cadence executions has not failed to fire — it may simply
+            # not have been triggered. Only a CLOSED day with zero executions
+            # is a real absence. A day that already fired is classified below
+            # on its actual outcome regardless of whether it has closed.
+            state = PENDING if d >= today_local else NEVER_FIRED
         else:
             first = cadence_today[0]
             evidence = first.get("executionArn") or first.get("name")
@@ -707,6 +804,46 @@ def _classify_window(
 
 
 # ── signals (§5.8 self-describing fields) ───────────────────────────────
+
+
+def _window_coverage_signal(
+    pipeline_key: str,
+    arn: str,
+    requested_days: int,
+    rendered_days: int,
+    floor: str | None,
+    region: str,
+) -> Entity:
+    """States the window length the strip actually rendered against what was
+    configured (alpha-engine-config-I7068 deliverable 2) — a 6-cell strip that
+    claims to be 20 is worse than a 6-cell strip that says it is 6. `floor` is
+    the oldest cycle day evidence reached; `None` means the read returned no
+    executions at all, so no floor was applied.
+    """
+    return Entity(
+        kind=Kind.SIGNAL,
+        id=f"pipeline-reliability:{pipeline_key}:window-coverage",
+        state="reporting",
+        provenance=Provenance(source=f"pipeline-reliability:{region}:{arn}"),
+        facets={"pipeline": pipeline_key},
+        detail={
+            "floor_date": floor,
+            "fields": {
+                "window_days_requested": {
+                    "value": requested_days,
+                    "unit": "days",
+                    "baseline": None,
+                    "render": "count",
+                },
+                "window_days_rendered": {
+                    "value": rendered_days,
+                    "unit": "days",
+                    "baseline": None,
+                    "render": "count",
+                },
+            },
+        },
+    )
 
 
 def _first_attempt_signal(

@@ -67,7 +67,12 @@ def _cfg(**extra):
 
 
 def _now():
-    return datetime(2026, 8, 10, 20, 0, tzinfo=timezone.utc)
+    # Tue 2026-08-11 — one calendar day past the window's last trading day
+    # (Mon 2026-08-10), so every day already inside the fixture window is a
+    # CLOSED cycle day and renders on its historical outcome, never PENDING.
+    # `test_current_trading_day_before_close_renders_pending` below freezes a
+    # separate `now` inside the still-open day to cover the I6758 path.
+    return datetime(2026, 8, 11, 20, 0, tzinfo=timezone.utc)
 
 
 def _cycles_by_date(result):
@@ -143,6 +148,40 @@ def test_holiday_and_never_fired_are_distinct():
     assert cycles["2026-08-10"].state != "HOLIDAY"
 
 
+def test_current_trading_day_before_close_renders_pending():
+    """alpha-engine-config-I6758: 2026-08-10 is Monday and still IN PROGRESS
+    (frozen mid-day PT, well before the calendar day closes in the exchange
+    timezone) with zero cadence executions. Not evidence the schedule failed —
+    it may not have been triggered yet. Distinct from both NEVER-FIRED (a
+    closed day, still zero executions) and HOLIDAY (never expected)."""
+    mid_day = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)  # 08:00 PDT
+    result = pr.fetch(_cfg(), reader=_reader_for([]), trading_day_checker=_checker(), now=mid_day)
+    cycles = _cycles_by_date(result)
+    assert cycles["2026-08-10"].state == pr.PENDING
+    assert cycles["2026-08-10"].state != pr.NEVER_FIRED
+    assert cycles["2026-08-10"].state != pr.HOLIDAY
+
+
+def test_a_cadence_execution_on_the_still_open_day_classifies_normally():
+    """A day that already fired is classified on its actual outcome even if
+    its calendar day has not closed — PENDING only replaces a bare
+    zero-execution NEVER-FIRED, it never masks a real result."""
+    mid_day = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)
+    records = [_exec("run-1", "SUCCEEDED", "2026-08-10T13:00:00Z", "2026-08-10T13:12:00Z", role="daily")]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=mid_day)
+    cycles = _cycles_by_date(result)
+    assert cycles["2026-08-10"].state == pr.SUCCEEDED
+
+
+def test_closed_day_with_zero_executions_is_still_never_fired():
+    """The day after the still-open day above: 2026-08-10 is now CLOSED
+    (frozen the next calendar day in the exchange timezone) and zero cadence
+    executions is a real absence again."""
+    result = pr.fetch(_cfg(), reader=_reader_for([]), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert cycles["2026-08-10"].state == pr.NEVER_FIRED
+
+
 def test_never_fired_is_zero_cadence_executions_even_if_something_ran():
     """An ad-hoc/adhoc-role execution on a day the schedule never fired is
     still NEVER-FIRED — an operator poking the pipeline is not the cycle."""
@@ -156,6 +195,57 @@ def test_window_covers_exactly_the_configured_trading_days():
     result = pr.fetch(_cfg(), reader=_reader_for([]), trading_day_checker=_checker(), now=_now())
     cycles = _cycles_by_date(result)
     assert set(cycles) == {"2026-08-03", "2026-08-04", "2026-08-05", "2026-08-07", "2026-08-10"}
+
+
+# ============================================================= #
+# alpha-engine-config-I7068 — floor/ceiling from execution      #
+# history, and the rendered window length stated on the strip.  #
+# ============================================================= #
+
+
+def test_floor_drops_cycle_days_older_than_the_oldest_execution():
+    """The state machine's oldest surviving execution is 2026-08-05 — a cycle
+    day before that did not fail to fire, it did not exist yet, and must not
+    render NEVER-FIRED. Dropped from the strip entirely, not `UNKNOWN`."""
+    records = [_exec("run-1", "SUCCEEDED", "2026-08-05T13:00:00Z", "2026-08-05T13:12:00Z", role="daily")]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert "2026-08-03" not in cycles
+    assert "2026-08-04" not in cycles
+    assert cycles["2026-08-05"].state == pr.SUCCEEDED
+    assert set(cycles) == {"2026-08-05", "2026-08-07", "2026-08-10"}
+
+
+def test_floor_does_not_apply_when_no_execution_evidence_exists_at_all():
+    """An empty read is "no evidence", not "evidence of nothing" — applying a
+    floor from zero records would drop the entire window, which is a worse
+    false reading than the one this closes."""
+    result = pr.fetch(_cfg(), reader=_reader_for([]), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert set(cycles) == {"2026-08-03", "2026-08-04", "2026-08-05", "2026-08-07", "2026-08-10"}
+
+
+def test_window_coverage_signal_states_requested_versus_rendered_length():
+    records = [_exec("run-1", "SUCCEEDED", "2026-08-05T13:00:00Z", "2026-08-05T13:12:00Z", role="daily")]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    signal = next(
+        e for e in result.entities
+        if e.kind is Kind.SIGNAL and e.id.endswith("window-coverage")
+        and e.facets.get("pipeline") == "preopen"
+    )
+    assert signal.detail["floor_date"] == "2026-08-05"
+    assert signal.detail["fields"]["window_days_requested"]["value"] == 5
+    assert signal.detail["fields"]["window_days_rendered"]["value"] == 3  # 8/5, 8/7, 8/10
+
+
+def test_window_trading_days_overridable_per_state_machine_entry():
+    """Deliverable 3's window half — falls back to the adapter-level default
+    when an entry does not declare its own."""
+    cfg = _cfg()
+    cfg["state_machines"][0]["window_trading_days"] = 2
+    result = pr.fetch(cfg, reader=_reader_for([]), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert set(cycles) == {"2026-08-07", "2026-08-10"}
 
 
 # ------------------------------------------------------------ first-attempt --
@@ -316,9 +406,20 @@ def test_no_consumed_by_edges_declared_structural_leaf():
 
 def test_cycle_state_is_not_a_component_state_vocabulary_member():
     """§5.1's second half: Cycle is outside COMPONENT_STATE_KINDS, so the
-    six-value string is legal without touching the closed twelve."""
+    seven-value string is legal without touching the closed twelve."""
     from console.model.kinds import COMPONENT_STATE_KINDS, Kind
     assert Kind.CYCLE not in COMPONENT_STATE_KINDS
+
+
+def test_reliability_vocabulary_is_closed_at_seven_values():
+    """PENDING (alpha-engine-config-I6758) is a deliberate seventh member, not
+    a reuse of HOLIDAY or NEVER-FIRED — the vocabulary stays closed and this
+    pins its size so a future addition is a deliberate edit, not a drift."""
+    assert set(pr.RELIABILITY_STATES) == {
+        pr.SUCCEEDED, pr.FAILED_RECOVERED, pr.FAILED_UNRECOVERED,
+        pr.DEGRADED, pr.HOLIDAY, pr.NEVER_FIRED, pr.PENDING,
+    }
+    assert len(pr.RELIABILITY_STATES) == 7
 
 
 # ===================================================================== #
@@ -399,7 +500,7 @@ def test_weekly_cadence_windows_saturdays_not_trading_days():
         trading_day_checker=lambda d: False,  # a market calendar: never a Saturday
         now=_now(),
     )
-    # _now() is Mon 2026-08-10; the last three Saturdays are 8/8, 8/1, 7/25.
+    # _now() is Tue 2026-08-11; the last three Saturdays are 8/8, 8/1, 7/25.
     assert set(_wcycles(result)) == {"2026-07-25", "2026-08-01", "2026-08-08"}
     assert all(c.state == pr.NEVER_FIRED for c in _wcycles(result).values())
 
@@ -408,7 +509,7 @@ def test_calendar_day_cadence_expects_every_day():
     cfg = _weekly_cfg()
     cfg["state_machines"][0]["cadence"] = pr.CADENCE_CALENDAR_DAY
     result = pr.fetch(cfg, reader=_weekly_reader([]), trading_day_checker=lambda d: False, now=_now())
-    assert set(_wcycles(result)) == {"2026-08-08", "2026-08-09", "2026-08-10"}
+    assert set(_wcycles(result)) == {"2026-08-09", "2026-08-10", "2026-08-11"}
 
 
 def test_missing_trading_calendar_is_not_fatal_for_a_non_trading_day_cadence():

@@ -24,9 +24,10 @@ sniffs.
 """
 from __future__ import annotations
 
+import json as _json
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any
-
-from datetime import datetime, timezone
 
 from ..index.graph import Index
 from ..model.entity import Edge, Entity
@@ -40,6 +41,45 @@ from ..server.router import Resolved
 #: other is what the index hands a consumer, and they change for different
 #: reasons.
 SCHEMA_VERSION = 1
+
+
+def _wire_default(obj: Any) -> Any:
+    """The ONE place a non-JSON Python value becomes a wire value.
+
+    Adapters hand the index whatever their source held — a YAML registry row
+    parses `created_at: 2026-08-10` as `datetime.date`, boto3 answers with
+    `datetime` and `Decimal` — and `detail` passes through verbatim by design
+    (§5.8: the console renders fields it has never seen). So the boundary that
+    must know how to spell them is the serializer, once, for every emission
+    site (`server/app.py`, `console index`, `emit.py`). Before this existed a
+    single dated registry row raised inside the request handler and the
+    surface answered nothing at all (config-I7432, 2026-08-17).
+
+    Only types with one unambiguous textual form are accepted; anything else
+    still raises, naming the type — a value the wire cannot spell is a
+    contract violation, not something to `str()` quietly.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (set, frozenset, tuple)):
+        return sorted(obj, key=str) if isinstance(obj, (set, frozenset)) else list(obj)
+    raise TypeError(
+        f"{obj.__class__.__name__} is not representable on the console wire "
+        f"(render/json.py::_wire_default)"
+    )
+
+
+def dumps(doc: Any) -> str:
+    """Serialize a payload for the wire — every JSON emission site uses this
+    and nothing calls `json.dumps` on console data directly (tests assert
+    it), so the spelling of a date is the same on HTTP, on `console index`
+    and in an emitted report.
+    """
+    return _json.dumps(doc, indent=2, sort_keys=True, default=_wire_default)
 
 
 def aggregate(count: int, denominator: int | None) -> dict[str, int]:

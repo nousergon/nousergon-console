@@ -34,6 +34,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
+from ..state_machine_shape import run_state
 from ..aws import client as _aws_client
 
 #: Execution history is an OBSERVATION (§2.5) — what ran, when, and how it ended.
@@ -327,34 +328,14 @@ def _durable_keys(obj: Any, default_consumed: bool) -> list[tuple[str, bool]]:
     return found
 
 
-def _run_state(status: str) -> State:
-    """Map the source's own execution status onto the closed vocabulary.
-
-    The source's statement, never a guessed verdict (§2.3).
-
-    ``TIMED_OUT`` is STALLED rather than FAILED: it started and nothing
-    reported an ending, which is exactly §8.3's distinction — retry logic and
-    diagnosis differ from a run that stopped.
-
-    **In-flight is the one place §8.3's twelve do not fit**, and it is recorded
-    here rather than papered over. `RUNNING`/`PENDING` have not failed and have
-    not finished; the vocabulary has no in-flight member (§8.1 speaks of
-    "recovering", which is not one of the twelve). Rendering them DEGRADED
-    claims a completed run with a missing deliverable, which is false, and
-    UNREPORTED would put every normal execution on the exception list and
-    inflate the transparency-gap count whose objective is zero. So they render
-    HEALTHY with the source's own status carried in ``detail`` — and the gap is
-    filed against observability-policy.md §8.3, not resolved by this adapter.
-    """
-    if status == "SUCCEEDED":
-        return State.HEALTHY
-    if status in ("FAILED", "ABORTED"):
-        return State.FAILED
-    if status == "TIMED_OUT":
-        return State.STALLED
-    if status in ("RUNNING", "PENDING", "PENDING_REDRIVE"):
-        return State.HEALTHY
-    return State.UNREPORTED
+#: The SF execution-status -> twelve-state mapping now lives in
+#: `console/state_machine_shape.py::run_state` so the `state-machine` driver
+#: (`console/drivers/state_machine.py`, `nousergon-console#99`) reads the
+#: identical function rather than forking it — the same pattern
+#: `console/records_shape.py` set for the `s3-records` adapter/driver pair.
+#: Kept as `_run_state` here (a thin alias) so this module's call sites and
+#: existing tests are unchanged.
+_run_state = run_state
 
 
 #: Severity order over §8.3's twelve, worst first. The three DECLARED states

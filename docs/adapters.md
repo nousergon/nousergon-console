@@ -41,6 +41,7 @@ whole fleet can bind to; it never adds knowledge of any component.
 | `log-source` | `component` | `METERED` | a declared metric field out of a log window |
 | `sql-source` | `component` | `METERED` | one parameterless `SELECT`'s single row |
 | `s3-records` | any of the seven | `CHEAP` | one document, fanned out into N entities |
+| `state-machine` | `run` | `CHEAP` | one declared state machine's own execution history |
 
 ## Before you write a new adapter: the boundary test
 
@@ -245,6 +246,42 @@ forbidden shape at the data layer.
 Production deployments inject a boto3-backed reader; the library ships none,
 so an enabled adapter without a reader returns `FAILED` / `unavailable=reader`
 rather than silently zero rows.
+
+## `state-machine` (driver)
+
+| | |
+|---|---|
+| **Reads** | One state machine a component's own descriptor names (`state_machine_arn`) |
+| **Emits** | `run` |
+| **Cannot supply** | `cost` (executions carry no cost tag by default); Cycle or Artifact entities |
+| **Config** | `state_machine_arn`, `region`, `cadence_minutes` (or `cadence_seconds`/`cadence_hours`) |
+
+The **driver** twin of the `state-machine` **adapter** above — same precedent
+as `object-store` and `s3-records` existing as both
+(`nousergon-console#99`). The adapter reads a console-configured LIST of
+state machines and builds Run + Cycle + Artifact entities with full
+horizon-honesty paging; this driver reads ONE state machine a component's own
+descriptor names, and emits Run entities only — no Cycle/Artifact/horizon-
+honesty machinery, since that is the adapter's job for a fleet-wide
+configured list and a component descriptor has nowhere to declare a
+`cycle_key` or durable-key field names the way the adapter's console config
+does.
+
+**The status mapping itself is not reimplemented.** Both this driver and the
+`state-machine` adapter import it from
+`console/state_machine_shape.py::run_state` — the SF execution-status ->
+twelve-state mapping (`SUCCEEDED`→`HEALTHY`, `FAILED`/`ABORTED`→`FAILED`,
+`TIMED_OUT`→`STALLED`, `RUNNING`/`PENDING`/`PENDING_REDRIVE`→`HEALTHY` with
+the source status carried in `detail`, everything else→`UNREPORTED`) — so the
+two callers can never drift apart on what one status means (§2.3), the same
+discipline `console/records_shape.py` set for the `s3-records` adapter/driver
+pair (`nousergon-console#98`).
+
+One Run per execution (id = execution ARN). Production deployments inject a
+boto3-backed reader via `context["execution_reader"]`; the library ships
+none, so a binding without a reader returns a failed `DriverResult` /
+`unavailable=reader` rather than silently zero runs — the same convention
+`object-store`'s driver uses for its `object_stat` injection point.
 
 ## `pipeline-reliability`
 

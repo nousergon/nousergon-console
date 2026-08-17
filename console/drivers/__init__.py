@@ -18,7 +18,7 @@ from ..model.descriptor import Binding, Descriptor
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from . import (
     document_fields, emitted_envelope, log_source, object_store, s3_records,
-    sql_source,
+    sql_source, state_machine,
 )
 from .base import Cost, DriverResult
 
@@ -32,6 +32,7 @@ DRIVERS: dict[str, Any] = {
     sql_source.name: sql_source,
     document_fields.name: document_fields,
     s3_records.name: s3_records,
+    state_machine.name: state_machine,
 }
 
 KNOWN_DRIVERS = frozenset(DRIVERS)

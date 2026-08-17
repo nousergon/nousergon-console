@@ -26,6 +26,22 @@ under.
 | `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query` |
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units`, `cloudwatch-metrics` |
 
+## Drivers (`console/drivers/__init__.py::DRIVERS`)
+
+A driver names a source **shape**, read from one component's own descriptor
+binding (§2.7) — the opposite direction from an adapter, whose config names a
+whole source the console enumerates. Registering a driver adds a shape the
+whole fleet can bind to; it never adds knowledge of any component.
+
+| Driver | Kinds | Cost | Reads |
+|---|---|---|---|
+| `object-store` | `artifact` | `CHEAP` | one declared key's last-modified stamp |
+| `emitted-envelope` | `component`, `run`, `artifact` | `CHEAP` | one `console/emit.py`-shaped envelope |
+| `document-fields` | `component` | `CHEAP` | one or more legacy JSON documents, named fields |
+| `log-source` | `component` | `METERED` | a declared metric field out of a log window |
+| `sql-source` | `component` | `METERED` | one parameterless `SELECT`'s single row |
+| `s3-records` | any of the seven | `CHEAP` | one document, fanned out into N entities |
+
 ## Before you write a new adapter: the boundary test
 
 **Ruled 2026-08-11 (Brian, `nousergon-console#79`).** Four adapters implementing
@@ -530,6 +546,45 @@ name, defaulting to `UNREPORTED` when nothing matches; for every other kind
 the raw value renders verbatim (§5.1's "otherwise the value itself"). With
 neither declared, state falls back to the `object-store` freshness convention
 (`fresh`/`stale`/`no-freshness-stamp`/`no-cadence-declared`/`unreadable`).
+
+## `s3-records` (driver)
+
+| | |
+|---|---|
+| **Reads** | One document a component's own descriptor names (`key`) |
+| **Emits** | Whichever entity kind the binding declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
+| **Cannot supply** | anything not reachable by a declared field `path` |
+| **Config** | `key`, `kind`, `format` (default `json`), one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `cadence_minutes` |
+
+The **driver** twin of the `s3-records` **adapter** above — same precedent as
+`object-store` existing as both (`nousergon-console#98`, closing the gap
+`alpha-engine-config-I7477`'s report-card v3 console binding hit). The adapter
+enumerates a whole prefix the console's config names; this driver reads ONE
+document a component names in its own descriptor, and applies the identical
+fan-out grammar to project N entities from it — e.g. one Signal per
+`report_card.json`'s `tiles.*.components` row, bound from
+`crucible-evaluator`'s own `console.descriptor.yaml` rather than
+`config.example.yaml`.
+
+**The grammar itself is not reimplemented.** Both this driver and the
+`s3-records` adapter import it from `console/records_shape.py` — one module
+implementing whole-body / `records_path` list / grouped `*` fan-out with
+`group_field` / `array_fields` parallel arrays / CSV, plus id-template
+resolution, `fields` extraction (§5.8) and `state_field`/`state_map`
+resolution (§5.1/§5.5) — so the two callers can never drift apart on what one
+shape means (§2.3).
+
+Two differences from the adapter, both a consequence of reading one document
+instead of listing a prefix: there is no key-pattern regex, so `id_template`
+and `facets` resolve only against body-level and per-record values (no
+capture-group context); and freshness comes from an injected `object_stat`
+(the same injection point `object-store`'s driver uses) rather than the
+lister's per-key last-modified stamp.
+
+Use `s3-records` (driver) over `document-fields` when one document must fan
+out into **several** entities (a report card's per-tile rows, an audit's
+per-loop outcomes); use `document-fields` when several documents combine into
+**one** component's own fields.
 
 ## `sql-query`
 

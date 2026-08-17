@@ -25,7 +25,7 @@ from ..model.descriptor import Binding
 from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
 from .base import Cost, DriverResult
-from ..aws import client as _aws_client
+from .context import default_object_stat as _default_stat
 
 name = "object-store"
 kinds = ("artifact",)
@@ -122,27 +122,3 @@ def _freshness(last_modified: str | None, cadence: float | None,
     except ValueError:
         return "unreadable"
     return "fresh" if (now - ts).total_seconds() <= cadence * factor else "stale"
-
-
-def _default_stat() -> Callable[[str], str | None] | None:
-    """boto3-backed head_object, when the optional `aws` extra is installed."""
-    try:
-        import boto3  # type: ignore[import-not-found]
-    except ImportError:
-        return None
-
-    client = _aws_client("s3")
-
-    def stat(uri: str) -> str | None:
-        if not uri.startswith("s3://"):
-            raise ValueError(f"not an s3:// URI: {uri!r}")
-        bucket, _, key = uri[len("s3://"):].partition("/")
-        try:
-            head = client.head_object(Bucket=bucket, Key=key)
-        except client.exceptions.ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
-                return None  # declared and not there — a finding, not an error
-            raise
-        return head["LastModified"].isoformat()
-
-    return stat

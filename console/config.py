@@ -32,6 +32,7 @@ from .adapters import (
     yaml_directory,
 )
 from .drivers import KNOWN_DRIVERS, resolve_bindings
+from .drivers.context import defaults as driver_defaults
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
@@ -183,6 +184,10 @@ def _driver_context(config: dict[str, Any]) -> dict[str, Any]:
     """
     console_cfg = config.get("console") or {}
     return {
+        # Production readers first (`drivers/context.py`) — a build with no
+        # injected reader is the LIVE build, and until 2026-08-17 that build
+        # had none, so every S3-bound binding failed on the box (config-I7425).
+        **driver_defaults(),
         "staleness_factor": float(console_cfg.get("staleness_factor", 1.5)),
         # Values live only in the gitignored runtime config; descriptors carry
         # the stable key, never a DSN or password (§2.7).

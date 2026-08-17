@@ -18,15 +18,18 @@ Config (matches `config.example.yaml`'s `registry:` block):
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 import yaml
 
+from .. import calendar_cadence
 from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.descriptor import Descriptor, parse as parse_descriptor
 from ..model.kinds import DECLARED_LIFECYCLE_STATES, Kind, State
+from ..trading_calendar import TradingDayChecker
 
 #: A registry directory is a DECLARATION (§2.5): it says what EXISTS and what
 #: its declared lifecycle, owner and authority tier are. It does not say how
@@ -37,7 +40,11 @@ name = "registry"
 produces = ("component",)
 
 
-def fetch(config: dict[str, Any]) -> AdapterResult:
+def fetch(
+    config: dict[str, Any],
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> AdapterResult:
     path = config.get("path")
     id_field = config.get("id_field", "component_id")
     if not path or not os.path.isdir(path):
@@ -85,7 +92,9 @@ def fetch(config: dict[str, Any]) -> AdapterResult:
                     evidence=f"file://{fpath}",
                 ),
                 facets=_facets(row),
-                detail=_detail(row, fname),
+                detail=_detail(
+                    row, fname, now=now, trading_day_checker=trading_day_checker,
+                ),
             )
         )
         if row.get(id_field):
@@ -122,7 +131,13 @@ def _lineage_edges(descriptors: list[Descriptor]) -> list[Edge]:
     return edges
 
 
-def _detail(row: dict[str, Any], fname: str) -> dict[str, Any]:
+def _detail(
+    row: dict[str, Any],
+    fname: str,
+    *,
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> dict[str, Any]:
     """What the declaration supplies beyond identity and lifecycle.
 
     `cadence_minutes` is here because §2.5's table names **cadence** as a thing
@@ -150,6 +165,19 @@ def _detail(row: dict[str, Any], fname: str) -> dict[str, Any]:
         minutes = 0.0
     if minutes > 0:
         detail["cadence_minutes"] = minutes
+    # A component row may declare its cadence as a calendar SYMBOL instead of
+    # a literal minute count — the same grammar `declared-registry` already
+    # accepts, read through the one shared translator
+    # (`console/calendar_cadence.py`, alpha-engine-config-I7050/I7060). It is
+    # the only honest declaration available to a component whose real trigger
+    # is a trading-day pipeline stage: a flat 1440 on a `weekday_sf` Lambda
+    # false-flags MISSED every weekend, so before this the row's only options
+    # were a lie and silence — and silence is the transparency gap.
+    # A literal `cadence_minutes` above wins its own field and is never
+    # overridden; an untranslatable symbol adds nothing at all.
+    calendar_cadence.apply_declared_cadence(
+        detail, row, now=now, trading_day_checker=trading_day_checker,
+    )
     return detail
 
 

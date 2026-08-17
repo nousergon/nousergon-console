@@ -54,6 +54,7 @@ trading calendar all return ``None`` — "unauditable", never "assume fresh".
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any, Mapping
 
 from .trading_calendar import TradingDayChecker, default_trading_day_checker
 
@@ -162,3 +163,52 @@ def _most_recent_trading_day_before(today: date, checker: TradingDayChecker) -> 
             return cursor
         cursor -= timedelta(days=1)
     return None
+
+
+def apply_declared_cadence(
+    detail: dict[str, Any],
+    entry: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> None:
+    """Symbolic `cadence` -> the numeric `detail["cadence_minutes"]` the index
+    audits (alpha-engine-config-I7050, I7060).
+
+    ONE grammar, TWO callers — the `records_shape.py` precedent (#100). Both
+    registry adapters read the identical declaration shape:
+
+    - `adapters/declared_registry.py` — one YAML document, many entries of one
+      kind (the fleet's `ARTIFACT_REGISTRY.yaml`).
+    - `adapters/yaml_directory.py` — a directory of one file per Component
+      (the fleet's `governance/observability.d/`).
+
+    Forking it — leaving the directory adapter numeric-only because "a
+    component row can just state its minutes" — is what made a weekday Lambda
+    undeclarable: a flat `1440` on a `weekday_sf` stage false-flags `MISSED`
+    every Saturday and Sunday, so the only honest declaration available was
+    none at all, and the row stayed in the transparency gap
+    (`observability-policy.md` §8.3).
+
+    A row that already declares a plain numeric `cadence_minutes` keeps it
+    VERBATIM (§5.1's declaration-wins-its-own-field rule) — this only fills
+    the gap for a row whose cadence is a calendar symbol, never overriding an
+    explicit value. When the symbol cannot be honestly translated
+    (`event_driven`, an unknown symbol, a trading-day symbol with no reachable
+    calendar) nothing is added: the row stays excluded from the audited
+    population (§5.3), never faked into looking fresh.
+    """
+    if detail.get("cadence_minutes"):
+        return
+    cadence = entry.get("cadence")
+    if not cadence:
+        return
+    minutes = effective_cadence_minutes(
+        cadence,
+        now=now,
+        trading_day_checker=trading_day_checker,
+        sla_minutes_after_cron=entry.get("sla_minutes_after_cron"),
+        interval_minutes=entry.get("interval_minutes"),
+    )
+    if minutes is not None:
+        detail["cadence_minutes"] = minutes

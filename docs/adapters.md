@@ -154,6 +154,27 @@ same field is what gives §9.6 `staleness_honesty` a row it can audit; a
 non-positive or unparseable value is dropped rather than passed through, so a
 declared-but-unusable cadence never reads as declared.
 
+**A row may declare its cadence as a calendar SYMBOL instead** — `cadence:
+saturday_sf | weekday_sf | eod_sf | continuous | event_driven`, plus
+`sla_minutes_after_cron` (grace after the trigger) or `interval_minutes`
+(required by `continuous`). It is the identical grammar `declared-registry`
+accepts, read through the identical translator
+([`console/calendar_cadence.py`](../console/calendar_cadence.py)'s
+`apply_declared_cadence`) — one grammar, two callers, the
+[`records_shape.py`](../console/records_shape.py) precedent.
+
+Why a *component* row needs it: most of a fleet's silent scheduled work is
+trading-day pipeline stages. A flat `cadence_minutes: 1440` on one of those
+resolves to `MISSED` every Saturday and Sunday, so the only declarations
+available were a standing false alarm and no declaration at all — and no
+declaration is exactly the `UNREPORTED` transparency gap the field exists to
+close. A literal `cadence_minutes` still wins its own field and is never
+overridden; a symbol that cannot be honestly translated (`event_driven`, an
+unknown symbol, a trading-day symbol with no reachable calendar) adds
+nothing, leaving the row excluded from the audit rather than faked fresh.
+`fetch` takes optional `now` and `trading_day_checker` arguments for this,
+same contract as `declared-registry`'s.
+
 ## `object-store`
 
 | | |
@@ -466,7 +487,7 @@ gate value (gated-off / gated-on / always-on) *is* the fact nothing else
 observes, so the lone claim renders unmerged.
 
 **Calendar-aware cadence (`console/calendar_cadence.py`, alpha-engine-config-
-I7050).** A registry entry may declare `cadence: saturday_sf|weekday_sf|eod_sf|
+I7050; shared with `yaml-directory` above since I7060).** A registry entry may declare `cadence: saturday_sf|weekday_sf|eod_sf|
 continuous|event_driven` instead of a literal `cadence_minutes` — the shape
 the fleet's own `ARTIFACT_REGISTRY.yaml` uses, one refresh symbol per row
 rather than a flat minute count that cannot tell a real gap from an ordinary

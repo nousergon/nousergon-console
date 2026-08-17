@@ -819,44 +819,6 @@ adapters:
         turnover_one_way: {path: diagnostics.turnover_one_way, unit: ratio}
         expected_alpha: {path: diagnostics.expected_alpha}
 
-  # Evaluation & Backtesting slice (nousergon-console#57). Overlap
-  # investigation: the former `Report_Card.py` (module-rollup framing) and
-  # `Crucible_Evaluation.py` (per-tile metric-browser framing) both read this
-  # ONE artifact and carry the same MetricRecord fields — merged into one
-  # Signal-kind pane rather than two, per console-policy.md §4.4 ("same-
-  # question, different-place is a fork"): the generic Signal list (facetable
-  # by `tile`) plus each Signal's own entity page already serve both framings.
-  - name: crucible-report-card
-    kind: s3-records
-    enabled: false
-    produces: [signal]
-    config:
-      bucket: your-research-bucket
-      prefix: evaluator/
-      kind: signal                     # one Signal per (tile, component)
-      question: >-
-        What is the current institutional grade (RED/WATCH/GREEN) for each
-        module/component, and why?
-      key_pattern: "evaluator/(?P<date>\\d{4}-\\d{2}-\\d{2})/report_card\\.json$"
-      # Grouped fan-out: neither a plain array nor parallel arrays reach
-      # this — `tiles` is a dict keyed by tile name, each value carrying its
-      # own `components` array. `*` iterates the dict; `group_field` injects
-      # the tile name onto every component record it reaches.
-      records_path: tiles.*.components
-      group_field: tile
-      id_template: "{tile}:{name}"
-      state_field: status              # RED / WATCH / GREEN / N/A, verbatim
-      fields:
-        value: {path: value}
-        ci_low: {path: ci_low}
-        ci_high: {path: ci_high}
-        n_samples: {path: n_samples, render: count}
-        target: {path: target}
-        red_line: {path: red_line}
-        trend: {path: trend_decoration, render: text}
-        criticality: {path: criticality, render: text}
-        reason: {path: status_reason, render: text}
-
   - name: crucible-execution
     kind: s3-records
     enabled: false

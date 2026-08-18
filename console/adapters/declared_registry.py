@@ -26,7 +26,7 @@ absence. When nothing observes a declared identifier, the single surviving
 claim IS this adapter's own base state — deliberately the string `"absent"`,
 the same token `drivers/object_store.py`'s own `object-store` driver already
 uses for "declared and not there" (§5.1's second half: an Artifact carries the
-source's own value verbatim, never the twelve). `console-policy.md`'s
+source's own value verbatim, never the thirteen). `console-policy.md`'s
 declared-only state guard (§8.3) does not apply here: that guard is scoped to
 `COMPONENT_STATE_KINDS` (Component/Run) only, so a non-component kind's raw
 state is free to mean whatever its own domain does.

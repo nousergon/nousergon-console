@@ -564,7 +564,7 @@ def test_produces_covers_every_kind_reachable_via_config():
 # adapters were consolidated (nousergon-console#79, Brian ruling 2026-08-11).
 #
 # It was that adapter's ONE genuine capability. Without it this adapter can only
-# read sources that already emit `observability-policy.md` §8.3's twelve state
+# read sources that already emit `observability-policy.md` §8.3's thirteen state
 # names verbatim, which almost no real source does.
 #
 # The three outcomes below are three different facts (§5.5), and collapsing any
@@ -632,7 +632,7 @@ def test_a_state_map_naming_a_nonexistent_state_is_DEGRADED_never_green():
 
 def test_a_direct_state_name_still_resolves_without_any_map():
     """The pre-existing behaviour is unchanged: a source already emitting the
-    twelve needs no map, and adding one must not have made a map mandatory."""
+    thirteen needs no map, and adding one must not have made a map mandatory."""
     result = _run_fetch({"finished_at": "2026-08-08T02:00:00+00:00", "outcome": "healthy"})
     assert list(_by_id(result).values())[0].state is State.HEALTHY
 

@@ -176,7 +176,7 @@ def _state(
 
     This adapter emits **Artifacts**, which do not resolve to component states,
     so §5.1's second half applies and the row carries the value itself. That is
-    what keeps the twelve honest: forcing "this object has no cadence declared"
+    what keeps the thirteen honest: forcing "this object has no cadence declared"
     into a component vocabulary is precisely the pressure that produced the
     `UNKNOWN` fall-through observability-policy.md §8.3 forbids by name.
 

@@ -43,7 +43,7 @@ def is_exception(ent: Entity) -> bool:
     """Whether this row belongs on the exception-first landing view (§4.3).
 
     Handles both halves of §5.1: a component state is checked against the
-    twelve, and a raw value (an Artifact's freshness, a tracker's open/closed)
+    thirteen, and a raw value (an Artifact's freshness, a tracker's open/closed)
     against the small set of values that mean the same thing. An open decision
     is NOT an exception — it is the "waiting on Brian" half of the same view.
     """

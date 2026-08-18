@@ -72,7 +72,7 @@ FACETS: tuple[str, ...] = (
 STATE_FILTER: str = "state"
 
 
-#: The twelve-state closed vocabulary is NORMATIVE in observability-policy.md
+#: The thirteen-state closed vocabulary is NORMATIVE in observability-policy.md
 #: §8.3. This console renders it and does not define one: console-policy.md's
 #: superordinate note says §8.3's vocabulary "is the only state vocabulary this
 #: policy renders". Adding a member here is a PR against observability-policy.md
@@ -87,9 +87,14 @@ STATE_FILTER: str = "state"
 #: The informative content is in the pairs, so nothing here may collapse them:
 #: DISABLED vs MISSED (a decision vs a defect) · RETIRED vs ABSENT (a stated
 #: absence vs an unexplained one) · NEVER_RAN vs MISSED (untested vs
-#: untriggered) · UNREPORTED vs HEALTHY (never, under any circumstance).
+#: untriggered) · UNREPORTED vs HEALTHY (never, under any circumstance) ·
+#: RUNNING vs STALLED (heartbeat current vs overdue) · RUNNING vs HEALTHY (has
+#: not ended, added `alpha-engine-config-I6358` — see that issue for why a
+#: raw-value carve-out for Run entities was tried first and found structurally
+#: infeasible before this state was added).
 class State(enum.Enum):
     HEALTHY = "HEALTHY"            # ran inside its window, ended ok
+    RUNNING = "RUNNING"            # started, not finished, heartbeat within cadence (or none declared)
     DEGRADED = "DEGRADED"          # completed, but a deliverable or quality signal is short
     FAILED = "FAILED"              # ran and ended non-ok
     STALLED = "STALLED"            # started, never finished, heartbeat past cadence
@@ -114,7 +119,7 @@ DECLARED_LIFECYCLE_STATES: dict[str, State] = {
 
 
 #: console-policy.md §5.1: a row carries "exactly one value from §8.3's
-#: twelve-state closed vocabulary, FOR ANYTHING THAT RESOLVES TO A COMPONENT
+#: thirteen-state closed vocabulary, FOR ANYTHING THAT RESOLVES TO A COMPONENT
 #: STATE; otherwise the value itself." Component and Run resolve to component
 #: states. Artifact, Signal, Decision and Incident do not — an issue is not
 #: HEALTHY or FAILED, it is open or closed — so those kinds carry the source's

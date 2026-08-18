@@ -106,7 +106,7 @@ def test_index_delegates_to_the_numbers_module():
 
 def test_a_declared_disabled_row_is_not_a_violation():
     """`lifecycle: disabled` is the STRONGEST disclosure of staleness the
-    twelve-state vocabulary carries — the registry saying the component was
+    thirteen-state vocabulary carries — the registry saying the component was
     not expected to report at all (`observability-policy.md` §8.3).
 
     Counting it as dishonest inverts the number: it becomes unclearable by

@@ -1,6 +1,6 @@
 """The state-machine execution-status SHAPE — read once, used at two layers.
 
-`run_state()` is the Step Functions execution-status -> twelve-state mapping,
+`run_state()` is the Step Functions execution-status -> thirteen-state mapping,
 lifted out of `console/adapters/state_machine.py` so both the adapter and the
 `state-machine` **driver** (`console/drivers/state_machine.py`,
 `nousergon-console#99`) import the same function rather than forking it — the
@@ -26,16 +26,15 @@ def run_state(status: str) -> State:
     reported an ending, which is exactly §8.3's distinction — retry logic and
     diagnosis differ from a run that stopped.
 
-    **In-flight is the one place §8.3's twelve do not fit**, and it is recorded
-    here rather than papered over. `RUNNING`/`PENDING` have not failed and have
-    not finished; the vocabulary has no in-flight member (§8.1 speaks of
-    "recovering", which is not one of the twelve). Rendering them DEGRADED
-    claims a completed run with a missing deliverable, which is false, and
-    UNREPORTED would put every normal execution on the exception list and
-    inflate the transparency-gap count whose objective is zero. So they render
-    HEALTHY with the source's own status carried in the caller's ``detail`` —
-    and the gap is filed against observability-policy.md §8.3, not resolved
-    by either caller of this function.
+    ``RUNNING``/``PENDING``/``PENDING_REDRIVE`` map to `State.RUNNING`
+    (`alpha-engine-config-I6358`): they have neither failed nor finished, and
+    §8.3 added a thirteenth state for exactly this rather than collapsing an
+    in-flight execution into HEALTHY (claims an ending that has not happened)
+    or STALLED (claims a stale heartbeat before one exists) or UNREPORTED
+    (would put every normal execution on the exception list and inflate the
+    transparency-gap count, whose objective is zero). Before this state
+    existed, a long-running execution that would eventually fail rendered
+    green for its entire duration — that defect is what this mapping fixes.
     """
     if status == "SUCCEEDED":
         return State.HEALTHY
@@ -44,5 +43,5 @@ def run_state(status: str) -> State:
     if status == "TIMED_OUT":
         return State.STALLED
     if status in ("RUNNING", "PENDING", "PENDING_REDRIVE"):
-        return State.HEALTHY
+        return State.RUNNING
     return State.UNREPORTED

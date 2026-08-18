@@ -124,7 +124,7 @@ def test_state_field_reads_severity_verbatim_lowercased():
 
 def test_incident_is_not_forced_into_component_vocabulary():
     # §5.1 second half — an Incident carries the source's own value, a plain
-    # str, never observability-policy.md §8.3's twelve-state enum.
+    # str, never observability-policy.md §8.3's thirteen-state enum.
     result = changelog_events.fetch(
         _entries_cfg(), lister=_lister(ENTRY_BODIES), reader=_reader(ENTRY_BODIES), now=NOW,
     )

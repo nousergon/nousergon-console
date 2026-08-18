@@ -45,7 +45,7 @@ kind-specific rendering code.
 **Component/Run state** comes from ``state_field`` (a dotted path), resolved in
 this order: an optional ``state_map`` translating the source's own vocabulary
 (``{"passed": "HEALTHY", "failed": "FAILED"}``) into
-`observability-policy.md` §8.3's twelve, then a direct match on a state name.
+`observability-policy.md` §8.3's thirteen, then a direct match on a state name.
 Three outcomes stay three facts (§5.5): **no value** renders ``UNREPORTED``
 (nothing reported), a value **nothing can interpret** renders ``DEGRADED``
 (something reported, uninterpretable — a finding), and a ``state_map`` entry

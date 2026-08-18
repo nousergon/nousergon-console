@@ -209,7 +209,7 @@ def _state(
     body: dict[str, Any], state_field: str | None, state_literal: str | None
 ) -> str:
     """An Incident is not a component (§5.1 second half) — the row carries the
-    source's own value, never observability-policy.md §8.3's twelve.
+    source's own value, never observability-policy.md §8.3's thirteen.
 
     ``state_literal`` wins when a whole prefix means one thing regardless of
     the event's own fields (every quarantine object is "quarantined"

@@ -179,7 +179,7 @@ def _to_entity(
 
 
 def _resolve_state(row: Row, kind: Kind, q: dict[str, Any]) -> tuple[State | str, bool]:
-    """§5.1: a Run/Component row MUST resolve to one of §8.3's twelve; a
+    """§5.1: a Run/Component row MUST resolve to one of §8.3's thirteen; a
     Signal/Decision/Artifact row carries the source's own value verbatim.
 
     Returns ``(state, ok)`` — ``ok`` is False when a Run/Component row could

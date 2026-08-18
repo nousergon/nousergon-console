@@ -241,7 +241,7 @@ class TestTheFourStatesStayFourFacts:
         assert e.provenance.as_of is None, "a never-run workflow must not carry an invented timestamp"
 
     def test_an_in_flight_run_keeps_the_last_state_and_flags_itself(self):
-        """§8.3's twelve have no in-progress member (`alpha-engine-config-I6358`).
+        """§8.3's thirteen have no in-progress member (`alpha-engine-config-I6358`).
         Inventing a thirteenth breaks the closed vocabulary every consumer
         switches on; rendering UNREPORTED would blink a healthy nightly job to
         'nothing reported' every night while it ran. The fact is carried in

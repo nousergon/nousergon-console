@@ -328,7 +328,7 @@ def _durable_keys(obj: Any, default_consumed: bool) -> list[tuple[str, bool]]:
     return found
 
 
-#: The SF execution-status -> twelve-state mapping now lives in
+#: The SF execution-status -> thirteen-state mapping now lives in
 #: `console/state_machine_shape.py::run_state` so the `state-machine` driver
 #: (`console/drivers/state_machine.py`, `nousergon-console#99`) reads the
 #: identical function rather than forking it — the same pattern
@@ -338,15 +338,18 @@ def _durable_keys(obj: Any, default_consumed: bool) -> list[tuple[str, bool]]:
 _run_state = run_state
 
 
-#: Severity order over §8.3's twelve, worst first. The three DECLARED states
+#: Severity order over §8.3's thirteen, worst first. The three DECLARED states
 #: (DISABLED/DEPRECATED/RETIRED) sit BELOW the defects deliberately: a decision
 #: already taken must never outrank a live failure in a roll-up, and it must
 #: never be collapsed into one either — which is why they are present rather
-#: than filtered out.
+#: than filtered out. RUNNING sits just above HEALTHY: it is not a defect, but
+#: a group with an in-flight member is not yet resolved either, so RUNNING
+#: must outrank a stale HEALTHY reading from a member that finished earlier.
 _SEVERITY: tuple[State, ...] = (
     State.FAILED, State.STALLED, State.MISSED, State.DEGRADED,
     State.UNREPORTED, State.ABSENT, State.UNREGISTERED, State.NEVER_RAN,
-    State.DEPRECATED, State.DISABLED, State.RETIRED, State.HEALTHY,
+    State.DEPRECATED, State.DISABLED, State.RETIRED, State.RUNNING,
+    State.HEALTHY,
 )
 
 

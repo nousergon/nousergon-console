@@ -14,12 +14,12 @@ how `object-store` exists as both an adapter and (separately) a driver —
 **Why a Cycle, not a Component/Run state (alpha-engine-config#6695).** The
 six values here — SUCCEEDED / FAILED-recovered / FAILED-unrecovered /
 DEGRADED / HOLIDAY / NEVER-FIRED — are NOT a member of
-`observability-policy.md` §8.3's closed twelve-state component vocabulary,
+`observability-policy.md` §8.3's closed thirteen-state component vocabulary,
 and are not meant to be: they classify a **trading day**, not a component or
 a run. `model/kinds.py`'s `COMPONENT_STATE_KINDS` is `{COMPONENT, RUN}` only
 — a Cycle "carries the source's own value verbatim" (§5.1's second half),
 exactly like an Artifact is "fresh" or "stale". Reusing §8.3's vocabulary here
-would force six trading-day facts into twelve component-shaped holes with no
+would force six trading-day facts into thirteen component-shaped holes with no
 member for most of them.
 
 **A cycle day is the pipeline's own cadence, not the market's

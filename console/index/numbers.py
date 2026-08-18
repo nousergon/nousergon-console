@@ -24,7 +24,7 @@ from ..render.panes import orphan_counts as _pane_orphan_counts
 #: registry, never inferred) say "it was not expected to report at all", which
 #: is a STRONGER disclosure of the same age, not a weaker one — a row stating
 #: `lifecycle: disabled` is the most explicit account of its own staleness the
-#: twelve-state vocabulary can carry. `render/html.py::EXCEPTION_STATES`
+#: thirteen-state vocabulary can carry. `render/html.py::EXCEPTION_STATES`
 #: already excludes exactly these three for exactly this reason ("a decision
 #: already taken"), and §9.6 disagreeing with it made a deliberately-off
 #: component read as a surface that is lying about freshness. That inversion

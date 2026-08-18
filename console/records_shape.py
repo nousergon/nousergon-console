@@ -184,11 +184,11 @@ def resolve_state(
     staleness_factor: float,
     now: datetime,
 ) -> State | str:
-    """§5.1: Component/Run resolve to one of the twelve-state closed
+    """§5.1: Component/Run resolve to one of the thirteen-state closed
     vocabulary; every other kind carries the source's own value verbatim.
 
     ``state_map`` translates the source's own vocabulary
-    (``{"passed": "HEALTHY"}``) into the twelve. The three not-computable
+    (``{"passed": "HEALTHY"}``) into the thirteen. The three not-computable
     outcomes stay three facts (§5.5): no value at all is `UNREPORTED`, a
     value nothing can interpret is `DEGRADED` (a finding, not a crash), and a
     `state_map` entry naming a state that does not exist is also `DEGRADED`

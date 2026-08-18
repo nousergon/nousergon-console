@@ -71,7 +71,7 @@ class Entity:
 
     kind: Kind
     id: str
-    # console-policy.md §5.1: one of observability-policy.md §8.3's twelve for
+    # console-policy.md §5.1: one of observability-policy.md §8.3's thirteen for
     # anything that resolves to a component state (Component, Run); otherwise
     # the source's own value, verbatim. An Artifact is fresh or stale; an issue
     # is open or closed. Forcing those into a component vocabulary is what
@@ -117,7 +117,7 @@ class Entity:
             raise ValueError(
                 f"{self.kind.value} {self.id!r} carries state {self.state!r}: a "
                 "component state must be one of observability-policy.md §8.3's "
-                "twelve (§5.1). Where the classifier cannot place it, the "
+                "thirteen (§5.1). Where the classifier cannot place it, the "
                 "answer is State.UNREPORTED — loud, not blank."
             )
 

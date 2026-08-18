@@ -23,7 +23,7 @@ this driver.
 
 **The status mapping itself is not reimplemented.** Both this driver and the
 `state-machine` adapter import it from `console/state_machine_shape.py::run_state`
-— one function implementing the SF execution-status -> twelve-state mapping,
+— one function implementing the SF execution-status -> thirteen-state mapping,
 so the two callers can never drift apart on what one status means (§2.3), the
 same discipline `console/records_shape.py` set for the `s3-records`
 adapter/driver pair (`nousergon-console#98`).

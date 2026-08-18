@@ -136,11 +136,12 @@ def test_reader_failure_is_failed():
     assert "sf unreachable" in result.error
 
 
-def test_twelve_state_mapping_over_fixture_executions():
-    """Closes-when (`nousergon-console#99`): a fixture execution list asserts
-    the twelve-state mapping — SUCCEEDED->HEALTHY, FAILED/ABORTED->FAILED,
-    TIMED_OUT->STALLED, RUNNING/PENDING/PENDING_REDRIVE->HEALTHY with source
-    status carried in detail, unknown->UNREPORTED."""
+def test_thirteen_state_mapping_over_fixture_executions():
+    """Closes-when (`nousergon-console#99`, extended `alpha-engine-config-I6358`):
+    a fixture execution list asserts the thirteen-state mapping —
+    SUCCEEDED->HEALTHY, FAILED/ABORTED->FAILED, TIMED_OUT->STALLED,
+    RUNNING/PENDING/PENDING_REDRIVE->RUNNING with source status carried in
+    detail, unknown->UNREPORTED."""
     result = driver.read(
         _binding({"state_machine_arn": ARN, "region": "xx-test-1"}),
         {"execution_reader": _reader_for({ARN: ALL_EXECS})},
@@ -151,11 +152,11 @@ def test_twelve_state_mapping_over_fixture_executions():
     assert runs[EXEC_FAILED["executionArn"]].state is State.FAILED
     assert runs[EXEC_ABORTED["executionArn"]].state is State.FAILED
     assert runs[EXEC_TIMED_OUT["executionArn"]].state is State.STALLED
-    assert runs[EXEC_RUNNING["executionArn"]].state is State.HEALTHY
+    assert runs[EXEC_RUNNING["executionArn"]].state is State.RUNNING
     assert runs[EXEC_RUNNING["executionArn"]].detail["status"] == "RUNNING"
-    assert runs[EXEC_PENDING["executionArn"]].state is State.HEALTHY
+    assert runs[EXEC_PENDING["executionArn"]].state is State.RUNNING
     assert runs[EXEC_PENDING["executionArn"]].detail["status"] == "PENDING"
-    assert runs[EXEC_PENDING_REDRIVE["executionArn"]].state is State.HEALTHY
+    assert runs[EXEC_PENDING_REDRIVE["executionArn"]].state is State.RUNNING
     assert runs[EXEC_PENDING_REDRIVE["executionArn"]].detail["status"] == "PENDING_REDRIVE"
     assert runs[EXEC_UNKNOWN["executionArn"]].state is State.UNREPORTED
     for e in result.entities:

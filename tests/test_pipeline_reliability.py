@@ -406,7 +406,7 @@ def test_no_consumed_by_edges_declared_structural_leaf():
 
 def test_cycle_state_is_not_a_component_state_vocabulary_member():
     """§5.1's second half: Cycle is outside COMPONENT_STATE_KINDS, so the
-    seven-value string is legal without touching the closed twelve."""
+    seven-value string is legal without touching the closed thirteen."""
     from console.model.kinds import COMPONENT_STATE_KINDS, Kind
     assert Kind.CYCLE not in COMPONENT_STATE_KINDS
 

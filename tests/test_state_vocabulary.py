@@ -1,6 +1,6 @@
 """The state vocabulary is closed, total, and not ours to widen.
 
-`observability-policy.md` §8.3 is normative for the twelve states; this console
+`observability-policy.md` §8.3 is normative for the thirteen states; this console
 *renders* that vocabulary and does not define one. These tests are the
 chokepoint for that, because the failure they guard against already happened:
 the first implementation shipped a FORK — it added `UNKNOWN`, `NOT_MEASURED`
@@ -29,8 +29,9 @@ from console.model.kinds import (
 #: observability-policy.md §8.3, transcribed. This literal is the point of the
 #: test: it is a second, independent statement of the vocabulary, so a change to
 #: the enum has to be made twice and the second time is against the policy text.
-POLICY_TWELVE = {
+POLICY_THIRTEEN = {
     "HEALTHY",
+    "RUNNING",
     "DEGRADED",
     "FAILED",
     "STALLED",
@@ -49,9 +50,9 @@ POLICY_TWELVE = {
 FORBIDDEN_FALL_THROUGHS = {"UNKNOWN", "OTHER", "PENDING", "N/A", "NOT_MEASURED"}
 
 
-def test_state_is_exactly_the_policy_twelve():
-    assert {s.value for s in State} == POLICY_TWELVE
-    assert len(State) == 12
+def test_state_is_exactly_the_policy_thirteen():
+    assert {s.value for s in State} == POLICY_THIRTEEN
+    assert len(State) == 13
 
 
 def test_no_fall_through_member_exists():
@@ -72,7 +73,9 @@ def test_the_informative_pairs_all_exist_and_are_distinct():
 
     DISABLED vs MISSED is a decision vs a defect; RETIRED vs ABSENT is a stated
     absence vs an unexplained one; NEVER_RAN vs MISSED is untested vs
-    untriggered; UNREPORTED vs HEALTHY must never collapse.
+    untriggered; UNREPORTED vs HEALTHY must never collapse; RUNNING vs STALLED
+    is a current heartbeat vs an overdue one; RUNNING vs HEALTHY is unfinished
+    vs ended.
     """
     for a, b in (
         (State.DISABLED, State.MISSED),
@@ -81,6 +84,8 @@ def test_the_informative_pairs_all_exist_and_are_distinct():
         (State.UNREPORTED, State.HEALTHY),
         (State.STALLED, State.FAILED),
         (State.DEGRADED, State.FAILED),
+        (State.RUNNING, State.STALLED),
+        (State.RUNNING, State.HEALTHY),
     ):
         assert a is not b
 
@@ -103,7 +108,7 @@ def test_a_component_may_not_carry_a_raw_value_state():
     cannot: construction fails.
     """
     for kind in COMPONENT_STATE_KINDS:
-        with pytest.raises(ValueError, match="twelve"):
+        with pytest.raises(ValueError, match="thirteen"):
             Entity(
                 kind=kind,
                 id="x",

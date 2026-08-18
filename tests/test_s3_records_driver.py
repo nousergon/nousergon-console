@@ -101,7 +101,7 @@ def test_grouped_fan_out_yields_one_signal_per_tile_component():
 
 def test_declared_fields_and_state_field_render_verbatim_for_a_non_component_kind():
     """Signal is not a COMPONENT_STATE_KIND (§5.1's second half): the source's
-    own state value renders verbatim, not mapped through the twelve."""
+    own state value renders verbatim, not mapped through the thirteen."""
     binding = _binding(**_report_card_spec())
     result = s3_records.read(binding, _ctx())
     by_id = {e.id: e for e in result.entities}

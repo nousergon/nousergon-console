@@ -316,7 +316,7 @@ def _workflow_slug(repo: str, path: str) -> str:
     return _SLUG_NON_ALNUM.sub("-", raw).strip("-")
 
 
-#: A workflow run's `conclusion` in the host's vocabulary → §8.3's twelve.
+#: A workflow run's `conclusion` in the host's vocabulary → §8.3's thirteen.
 #: `success` is the only value that may render HEALTHY; everything else is a
 #: named non-green rather than a fallback, because a conclusion this adapter
 #: has never seen is a fact about the host, not a healthy workflow.
@@ -355,7 +355,7 @@ def _workflow_to_entity(repo: str, wf: dict[str, Any]) -> Entity | None:
     - concluded            → mapped from the conclusion above.
 
     **A run currently in flight keeps the LAST CONCLUDED state**, with
-    ``detail.in_flight`` set. §8.3's twelve have no in-progress member — a
+    ``detail.in_flight`` set. §8.3's thirteen have no in-progress member — a
     known gap, `alpha-engine-config-I6358` — and the two alternatives are both
     worse than this: inventing a thirteenth state breaks the closed vocabulary
     every consumer switches on, and rendering ``UNREPORTED`` discards a real

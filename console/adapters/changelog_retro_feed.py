@@ -120,7 +120,7 @@ def fetch(
         has_writeup = bool(g.get("has_writeup"))
         # Not a component (§5.1 second half): "ready for retro" / "needs
         # triage" is what this pane's declared question actually asks, and
-        # forcing it into observability-policy.md §8.3's twelve would answer
+        # forcing it into observability-policy.md §8.3's thirteen would answer
         # a question nobody asked.
         state = "ready-for-retro" if has_writeup else "needs-triage"
 

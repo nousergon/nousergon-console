@@ -190,6 +190,22 @@ def test_produces_edge_names_the_document_as_the_component_produces_it():
     )
 
 
+def test_produces_edge_also_reaches_every_fanned_out_record():
+    """alpha-engine-config-I8768: the document-level `produces` edge above
+    named only `key` — none of the three fanned-out Signal ids equal the
+    document key, so they carried zero inbound edges regardless of the
+    binding declaring them. Each record's own id is this driver's own read
+    (§2.3), so the fix is naming it too."""
+    binding = _binding(**_report_card_spec())
+    result = s3_records.read(binding, _ctx())
+    rels = {(e.source, e.rel, e.target) for e in result.edges}
+    assert ("crucible-report-card", "produces", "research:signal-quality") in rels
+    assert ("crucible-report-card", "produces", "research:coverage") in rels
+    assert ("crucible-report-card", "produces", "execution:fill-quality") in rels
+    # The document-level edge is still there, exactly once.
+    assert len([e for e in result.edges if e.target == binding.spec["key"]]) == 1
+
+
 def test_the_driver_wires_through_a_descriptor_end_to_end(tmp_path):
     """The whole point: a component in a place no console config points at
     onboards through its own descriptor (§2.6)."""

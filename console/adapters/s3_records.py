@@ -159,6 +159,7 @@ def fetch(
             partial = True
             continue
 
+        key_entities: list[Entity] = []
         for record in records:
             mapped = _one_entity(
                 record, body_root, groups, kind, key, bucket, source_label,
@@ -167,11 +168,27 @@ def fetch(
             if mapped is None:
                 partial = True
                 continue
-            entities.append(mapped)
+            key_entities.append(mapped)
+        entities.extend(key_entities)
 
         cid = groups.get("component_id")
         if cid:
+            # The component produces the document (§3.3, §6) — declared even
+            # when the fan-out below is empty.
             edges.append(Edge(source=cid, rel="produces", target=key))
+            # alpha-engine-config-I8768: a grouped/list-of-dicts/parallel-array
+            # body fans ONE key out into MANY entities whose ids are never
+            # `key` itself — the edge above alone left every one of them with
+            # zero inbound edges. Each record's own id is already this
+            # adapter's own read (`mapped.id`, from the SAME record the entity
+            # above was built from), so pointing at it invents no identifier
+            # (§2.3). Skipped when the id already equals the key (the
+            # whole-body, one-entity-per-key case) — that is the edge above.
+            edges.extend(
+                Edge(source=cid, rel="produces", target=e.id)
+                for e in key_entities
+                if e.id != key
+            )
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,

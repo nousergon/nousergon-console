@@ -153,6 +153,17 @@ def fetch(
         if run is not None:
             entities.append(run)
             edges.append(run_edge)  # type: ignore[arg-type]
+            # alpha-engine-config-I8768: `run_edge` above is `run --belongs-
+            # to--> component` — the run is the SOURCE, so its own reverse
+            # edge lands on the COMPONENT (`index/graph.py::_add_edge` derives
+            # the reverse keyed by the forward edge's TARGET), never on the
+            # run. A run with only that outbound edge carries zero inbound
+            # edges and is unreachable by relation (§3.1, §9.3) however many
+            # runs a component has. The fix is the mirror declaration a
+            # component can make about its own run — `check_id` and `run_id`
+            # are both this adapter's own read (§2.3) — matching the
+            # component's existing `produces` claim on the artifact it wrote.
+            edges.append(Edge(source=component.id, rel="produces", target=run.id))
         edges.append(produces_edge)
         # Declared lineage (§6). `consumes` is the load-bearing direction: the
         # forward edge is a property of the producer and is usually written

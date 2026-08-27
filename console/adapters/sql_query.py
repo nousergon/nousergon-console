@@ -24,10 +24,22 @@ One adapter, several **named queries**, each declaring its own projection:
         as_of_field: eval_date
         facets: {team_id: team_id}
         json_columns: []                 # columns holding a JSON string to decode
+        component_id_field: team_id      # optional — see below
 
 Every query is validated as one parameterless `SELECT` — no semicolon, no
 second statement — before anything runs (§2.3's "configured, never
 hardcoded" extends to "never executable beyond a read").
+
+**A row can name the Component it is about (§3.3, §6, `nousergon-console#52`,
+alpha-engine-config-I8768).** When a query declares `component_id_field`, a
+row whose named column is non-null derives a `measures` edge from the row's
+own entity to that Component — exactly the `sql-source` adapter's own
+`component_id_field` (`console/adapters/sql_source.py`), read here rather
+than reinvented, because it is the same fact from the same source shape: a
+row that already carries the id of the component it is about. The reverse
+(`measured-by`) is derived by the index, so the row appears as a related
+entity on that Component's own page with no new rendering path. Never
+inferred: only a column this query's own result set actually returned.
 
 `entity_kind: run` (and `component`, though no binding in this repo currently
 uses it) resolves to `observability-policy.md` §8.3's closed vocabulary,
@@ -53,7 +65,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from ..model.entity import Entity, Provenance
+from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
@@ -90,6 +102,7 @@ def fetch(
         runner = _default_runner()
 
     entities: list[Entity] = []
+    edges: list[Edge] = []
     unavailable: list[str] = []
     read_any = False
 
@@ -105,10 +118,15 @@ def fetch(
             unavailable.append(qname)
             continue
         read_any = True
+        component_id_field = q.get("component_id_field")
         for row in rows:
             entity, ok = _to_entity(row, entity_kind, q, db_path, qname)
             if entity is not None:
                 entities.append(entity)
+                if component_id_field:
+                    cid = row.get(component_id_field)
+                    if cid:
+                        edges.append(Edge(source=entity.id, rel="measures", target=str(cid)))
             if not ok:
                 unavailable.append(f"{qname}:state")
 
@@ -121,6 +139,7 @@ def fetch(
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),
+        edges=tuple(edges),
         unavailable=tuple(dict.fromkeys(unavailable)),  # de-duplicate, keep order
     )
 
@@ -159,6 +178,9 @@ def _to_entity(
 
     detail_columns = q.get("detail_columns")
     excluded = set((q.get("facets") or {}).values())
+    component_id_field = q.get("component_id_field")
+    if component_id_field:
+        excluded.add(component_id_field)
     if detail_columns:
         detail = {str(c): row.get(c) for c in detail_columns}
     else:

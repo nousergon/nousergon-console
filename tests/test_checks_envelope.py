@@ -162,6 +162,13 @@ def test_artifact_and_run_emitted_with_edges():
     assert ("comp-alpha", "produces", f"{PREFIX}comp-alpha/latest.json") in rels
     assert any(s.startswith("comp-alpha@") and rel == "belongs-to" and t == "comp-alpha"
                for s, rel, t in rels)
+    # alpha-engine-config-I8768: the run's own `belongs-to` edge above makes
+    # the COMPONENT relation-reachable (its reverse lands on the component,
+    # `index/graph.py::_add_edge`), never the run itself — a run with only
+    # that outbound edge has no inbound edge at all. The component's mirror
+    # `produces` declaration is what closes it.
+    (run,) = [e for e in result.entities if e.kind is Kind.RUN and e.id.startswith("comp-alpha@")]
+    assert ("comp-alpha", "produces", run.id) in rels
 
 
 def test_unreadable_body_is_unreported_not_dropped():

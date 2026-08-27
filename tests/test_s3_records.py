@@ -296,6 +296,32 @@ def test_grouped_nested_state_field_and_declared_value_field():
     assert by_id["portfolio_outcome:sharpe"].detail["fields"]["value"]["value"] == 1.1
 
 
+def test_grouped_fan_out_produces_edge_reaches_every_record_not_just_the_key():
+    """alpha-engine-config-I8768: the component's `produces` edge used to
+    target only the document `key` — every entity a grouped/list fan-out
+    mints has an id that is never the key, so all of them carried zero
+    inbound edges however many were fanned out of one document."""
+    cfg = _grouped_nested_cfg(
+        key_pattern=(
+            r"evaluator/(?P<component_id>[^/]+)/(?P<date>\d{4}-\d{2}-\d{2})"
+            r"/report_card\.json$"
+        ),
+    )
+    result = s3_records.fetch(
+        cfg,
+        lister=_one_key_lister(
+            "evaluator/eval-quality/2026-08-08/report_card.json",
+            "2026-08-08T21:00:00+00:00",
+        ),
+        reader=_one_key_reader(REPORT_CARD), now=NOW,
+    )
+    rels = {(e.source, e.rel, e.target) for e in result.edges}
+    assert ("eval-quality", "produces", "evaluator/eval-quality/2026-08-08/report_card.json") in rels
+    assert ("eval-quality", "produces", "portfolio_outcome:beat_spy") in rels
+    assert ("eval-quality", "produces", "portfolio_outcome:sharpe") in rels
+    assert ("eval-quality", "produces", "evaluator_quality:rubric_drift") in rels
+
+
 def test_grouped_dict_of_records_injects_the_group_key():
     cfg = _grouped_dict_cfg()
     result = s3_records.fetch(

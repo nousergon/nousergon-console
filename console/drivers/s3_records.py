@@ -143,9 +143,28 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
             continue
         entities.append(entity)
 
-    edge = Edge(source=binding.component_id, rel="produces", target=str(key))
+    # The component produces the document (§3.3, §6) — always declared, even
+    # when the fan-out below is empty, so a document with zero matching
+    # records is still linked from its component.
+    edges = [Edge(source=binding.component_id, rel="produces", target=str(key))]
+    # nousergon-console-alpha-engine-config-I8768: when `records_path` fans
+    # one document out into MANY entities (`kind: signal`'s per-tile rows,
+    # for instance), the document-level edge above targets the KEY, never any
+    # of the record ids the fan-out actually mints — so every fanned-out
+    # entity carried zero inbound edges regardless of how many bindings
+    # pointed at its document. Each record's own id is already this driver's
+    # own read (`entity.id`, from `id_template` over the SAME record the
+    # entity above was built from), so declaring it here invents no
+    # identifier (§2.3). Skipped when the id already equals the document key
+    # (the non-fan-out, one-entity-per-document case) — that edge is the one
+    # above already, and a second copy would be a duplicate, not a new fact.
+    edges.extend(
+        Edge(source=binding.component_id, rel="produces", target=e.id)
+        for e in entities
+        if e.id != str(key)
+    )
     return DriverResult(
-        binding=binding, entities=tuple(entities), edges=(edge,),
+        binding=binding, entities=tuple(entities), edges=tuple(edges),
         cadence_seconds=cadence_seconds,
         unavailable=("record",) if partial else (),
     )

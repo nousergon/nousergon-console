@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from console.adapters import sql_query
+from console.model.entity import Edge
 from console.model.envelope import AdapterStatus
 from console.model.kinds import Kind, State
 
@@ -83,6 +84,39 @@ def test_two_queries_same_identifier_merge_as_separate_claims():
     assert ids == ["ACME:2026-08-01", "ACME:2026-08-01"]
     sources = {e.provenance.source for e in result.entities}
     assert sources == {"sql-query:fixture.db:score-history", "sql-query:fixture.db:investment-thesis"}
+
+
+# ----------------------------------------------------- component_id_field --
+
+
+def test_component_id_field_derives_measures_edge():
+    rows = [{"team_id": "technology", "eval_date": "2026-08-01", "cio_decision": "ADVANCE"}]
+    result = sql_query.fetch(
+        _cfg([{
+            "name": "cio-decisions", "entity_kind": "decision",
+            "query": "SELECT team_id, eval_date, cio_decision FROM cio_evaluations",
+            "id_template": "{team_id}:{eval_date}", "state_field": "cio_decision",
+            "component_id_field": "team_id",
+        }]),
+        runner=_runner({"cio_evaluations": rows}),
+    )
+    assert result.edges == (Edge(source="technology:2026-08-01", rel="measures", target="technology"),)
+    (entity,) = result.entities
+    assert "team_id" not in entity.detail
+
+
+def test_component_id_field_null_in_row_derives_no_edge():
+    rows = [{"team_id": None, "eval_date": "2026-08-01", "cio_decision": "ADVANCE"}]
+    result = sql_query.fetch(
+        _cfg([{
+            "name": "cio-decisions", "entity_kind": "decision",
+            "query": "SELECT team_id, eval_date, cio_decision FROM cio_evaluations",
+            "id_template": "{eval_date}", "state_field": "cio_decision",
+            "component_id_field": "team_id",
+        }]),
+        runner=_runner({"cio_evaluations": rows}),
+    )
+    assert result.edges == ()
 
 
 # -------------------------------------------------------------------- run --

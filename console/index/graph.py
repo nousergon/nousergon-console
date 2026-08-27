@@ -307,17 +307,31 @@ class Index:
         Both guards are the same shape, and it is the shape §8.3 asks for: a
         state whose meaning IS absence may only be asserted by a check that
         actually looked.
+
+        Both are about a COMPONENT's *declaration* — whether the registry
+        knows about it at all. A RUN (`checks_envelope`'s `<check_id>@<ran_at>`
+        rows, among others) is never itself registered or discovered; it is
+        an occurrence of an already-declared component and carries the state
+        its own adapter assigned. Comparing a run's id against the component
+        registry made every run of an unregistered component read
+        `UNREGISTERED` once per run instead of the component reading it once
+        (alpha-engine-config-I8766: 154 live runs). So the two reconciler
+        branches below apply to `Kind.COMPONENT` only; `COMPONENT_STATE_KINDS`
+        (Component ∪ Run) still gates entry to this method and the cadence
+        branch after it, since both a component and a run carry a `State` and
+        both are eligible for the MISSED/HEALTHY comparison.
         """
         if ent.kind not in COMPONENT_STATE_KINDS:
             return ent
-        classes = {c.claim_class for c in claims}
-        declared = ClaimClass.DECLARATION in classes
-        discovered = ClaimClass.DISCOVERY in classes
-        if not declared and self._saw_ok_declaration:
-            return dataclasses.replace(ent, state=State.UNREGISTERED)
-        if declared and not discovered and self._saw_ok_discovery:
-            if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
-                return dataclasses.replace(ent, state=State.ABSENT)
+        if ent.kind is Kind.COMPONENT:
+            classes = {c.claim_class for c in claims}
+            declared = ClaimClass.DECLARATION in classes
+            discovered = ClaimClass.DISCOVERY in classes
+            if not declared and self._saw_ok_declaration:
+                return dataclasses.replace(ent, state=State.UNREGISTERED)
+            if declared and not discovered and self._saw_ok_discovery:
+                if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
+                    return dataclasses.replace(ent, state=State.ABSENT)
         # The third state that exists only as a comparison between claims:
         # `MISSED` (and the `HEALTHY` on its other side) for a component a
         # counter-reading source found SILENT and a registry row declares a

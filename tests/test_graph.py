@@ -265,3 +265,94 @@ def test_an_aliased_id_observed_but_never_declared_elsewhere_is_not_unregistered
     completeness = idx.population_completeness()
     assert completeness["unregistered"] == 0
     assert completeness["of"] == 1
+
+
+# ------------------------ alias state inheritance (alpha-engine-config-I8973) -
+#
+# #8779 mints a DECLARATION for every alias; #8973 covers what happens to its
+# STATE. Two live shapes, both legitimate: a rename alias (nothing ever
+# reports under the old name — it must not render UNREPORTED on top of a live
+# parent) and the #8779 shape (the alias IS the emitted name, the parent may
+# be the one that never reports).
+
+
+def test_a_silent_alias_inherits_the_parents_state_and_as_of():
+    """Rename-alias shape: `alias_ids: [old-name]` on a row now emitted under
+    the new name (I6838). The alias carries only its own DECLARATION — no
+    OBSERVATION/DISCOVERY ever arrives under the old name — and must inherit
+    the parent's merged state/as-of rather than reading UNREPORTED. 23 of
+    these, live, inflated `transparency_gap` 14 -> 37 before this existed."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-old-name",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-old-name", rel="alias-of", target="comp-parent"),),
+    ))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent", state=State.HEALTHY,
+                   provenance=prov("checks_envelope", as_of="2026-08-27T23:00:00Z")),
+        ),
+    ))
+    idx.finalize()
+
+    alias = idx.entity("comp-old-name")
+    assert alias.state is State.HEALTHY
+    assert alias.detail["alias_state"] == "inherited"
+    assert alias.provenance.as_of == "2026-08-27T23:00:00Z"
+
+    # Excluded from BOTH the count and the denominator: it is a pointer to
+    # the parent, already counted, not a second silent component.
+    assert idx.transparency_gap() == {"count": 0, "of": 1}
+
+
+def test_an_observed_alias_keeps_its_own_state_and_the_unobserved_parent_inherits():
+    """#8779 shape: the substrate reports under the alias id, not the
+    declared parent id. The alias keeps its own state (unchanged from
+    PR115); the parent, carrying no report of its own, inherits FROM it —
+    the observation belongs to the running process, not to whichever of its
+    two names happened to receive the registry row."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-emitted-name",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-emitted-name", rel="alias-of", target="comp-parent"),),
+    ))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-emitted-name", state=State.HEALTHY,
+                   provenance=prov("checks_envelope", as_of="2026-08-27T23:00:00Z")),
+        ),
+    ))
+    idx.finalize()
+
+    alias = idx.entity("comp-emitted-name")
+    parent = idx.entity("comp-parent")
+    assert alias.state is State.HEALTHY
+    assert "alias_state" not in alias.detail
+
+    assert parent.state is State.HEALTHY
+    assert parent.detail["alias_state"] == "inherited"
+    assert parent.provenance.as_of == "2026-08-27T23:00:00Z"
+
+    # The alias DID receive its own report, so it stays counted; the parent
+    # is no longer UNREPORTED either way.
+    assert idx.transparency_gap() == {"count": 0, "of": 2}

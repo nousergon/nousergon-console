@@ -1144,6 +1144,70 @@ adapters:
         proposed_owner: {path: proposed_owner, render: text}
         confidence: {path: confidence, unit: score, render: value}
 
+# Optional. Declared milestone predicates — console-policy.md §4.4's pane, whose
+# question is "has the declared milestone been met, and which clause is holding
+# it?" The console evaluates; it declares nothing. Every clause id, target and
+# binding below belongs to the deployment, not to this repo.
+#
+# Two binding kinds, and only two:
+#
+#   number: <key>   a key of the §9 numbers block this build publishes, with
+#                   `path` selecting a member of that number's own shape. Its
+#                   as-of is the index build time.
+#   entity: <id>    an entity id on the index, with `field` naming a declared
+#                   field (§5.8) or a plain `detail` key. Its as-of, source and
+#                   evidence are that entity's own, per field (§5.1).
+#
+# Comparators are closed: ==  !=  >=  <=  >  <. An unknown binding kind or
+# comparator FAILS THE BUILD naming the milestone and clause — the same build
+# `console index --config config.example.yaml` runs on every PR — rather than
+# rendering as an absence on a page that otherwise looks fine.
+#
+# A clause whose binding resolves to no entity, no field, no number, or a value
+# that cannot be compared with its target renders UNREPORTED with the reason.
+# UNREPORTED is never met and never quietly unmet, and it is counted separately
+# from both: the pane's roll-up is `N of M clauses met` plus the ids holding it,
+# never a single verdict (§4.3 forbids the aggregate green light).
+milestones:
+  - id: example-exit-predicate
+    question: "Has the example milestone exited, and which clause is holding it?"
+    tracker: https://example.invalid/tracker/1
+    clauses:
+      # An `all_of` clause: every binding must be met, and one unreadable
+      # binding makes the whole clause UNREPORTED rather than unmet.
+      - id: c1-every-example-signal-streaks
+        label: "both example signals report at least four consecutive cycles"
+        all_of:
+          - {entity: "example-signal:alpha", field: consecutive_cycles, op: ">=", target: 4}
+          - {entity: "example-signal:beta", field: consecutive_cycles, op: ">=", target: 4}
+      # A `number` clause: one member of one §9 number, compared to a target.
+      - id: c2-no-transparency-gap
+        label: "no component is UNREPORTED"
+        number: transparency_gap
+        path: count
+        op: "=="
+        target: 0
+      # `requires` guards a number that may decline to answer. §9.6 publishes
+      # `computable: false` with a reason rather than a count over an
+      # unestablished population; without this precondition the clause would
+      # read `0 == 0` and be MET on a number that refused to state one.
+      - id: c3-staleness-honesty
+        label: "no row renders a stale value with no staleness marker"
+        number: staleness_honesty
+        path: count
+        op: "=="
+        target: 0
+        requires: {path: computable, equals: true}
+      # An entity field compared to a string. `==`/`!=` are defined over any two
+      # values; the orderings require both sides to be numbers, and an ordering
+      # over anything else is a config defect that renders UNREPORTED.
+      - id: c4-verdict-passes
+        label: "the example verdict artifact says PASS"
+        entity: comp-alpha
+        field: correctness_verdict
+        op: "=="
+        target: PASS
+
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing
 # dimension everywhere; omitting one does not hide the field.

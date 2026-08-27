@@ -40,6 +40,15 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
     Pane("search", "where is X", None),
     Pane("doctor", "why is X not on the surface", None),
     Pane("registry", "what does this registry declare", None),
+    # §4.4: the question no other pane answers. `landing` answers "is anything
+    # wrong right now"; this answers "is the thing we said we were building
+    # finished, and which clause is holding it" — a different question, asked at
+    # a different moment, by a reader deciding whether a phase of work is over.
+    # Cross-cutting because a milestone's clauses bind across kinds and across
+    # the §9 numbers, which belong to no kind at all.
+    Pane("milestones",
+         "has the declared milestone been met, and which clause is holding it",
+         None),
 )
 
 PANES: tuple[Pane, ...] = _CROSS_CUTTING + tuple(

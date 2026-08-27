@@ -33,6 +33,7 @@ from .adapters import (
 )
 from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
+from .index import milestones as milestone_predicates
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
@@ -72,6 +73,12 @@ def build_index(config: dict[str, Any]) -> Index:
     source, never empties (§2.3).
     """
     index = Index()
+    # Parsed FIRST, before any adapter runs: an unknown binding kind or
+    # comparator must fail the build naming the milestone and clause, not
+    # render as an absence on a page that otherwise looks fine (§4.5). This is
+    # the same build `console index --config config.example.yaml` runs on every
+    # PR, so a bad declaration is caught there rather than live.
+    declared_milestones = milestone_predicates.parse(config.get("milestones"))
     # One tolerance, set before any claim arrives: the merge's DISABLED/MISSED
     # comparison and §9.6's staleness audit both read it, and they must not be
     # able to disagree about one row (`index/cadence_state.py`).
@@ -141,6 +148,9 @@ def build_index(config: dict[str, Any]) -> Index:
     )
     # §9.4: run the standing question set against the index just built.
     index.set_answer_latency(measure_answer_latency(index))
+    # Declarations only — evaluation is per query, over the built graph, and
+    # nothing about it is cached (§5.6).
+    milestone_predicates.attach(index, declared_milestones)
     return index
 
 

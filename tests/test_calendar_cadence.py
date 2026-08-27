@@ -176,3 +176,61 @@ def test_tuesday_after_a_holiday_monday_still_resolves_via_the_checker():
     ))
     result = idx.staleness_honesty(now=TUESDAY_MORNING)
     assert result["count"] == 0
+
+
+# ------------------------------------------------- resolve_key_template ----
+# alpha-engine-config-I8770. `partition_lag_days` is the console-only escape
+# hatch for a row whose declared `cadence` this module cannot translate into
+# a calendar position — `continuous` is the live case, since an interval
+# declares no calendar position by design (module docstring).
+
+
+def test_continuous_templated_key_is_unresolved_with_no_lag_declared():
+    """The residue this module exists to name honestly: `continuous` alone
+    gives no calendar position, so the key stays unresolved."""
+    key = calendar_cadence.resolve_key_template(
+        "ops/scheduled_workflow_health/{date}.json",
+        cadence="continuous", now=TUESDAY_MORNING,
+    )
+    assert key is None
+
+
+def test_partition_lag_days_resolves_a_continuous_templated_key():
+    """A genuine daily-all-calendar-days GHA cron declared `continuous`
+    (no symbol in the fleet's closed cadence vocabulary covers it) resolves
+    via its own declared lag rather than `cadence` at all."""
+    key = calendar_cadence.resolve_key_template(
+        "ops/scheduled_workflow_health/{date}.json",
+        cadence="continuous", now=TUESDAY_MORNING, lag_days=1,
+    )
+    assert key == "ops/scheduled_workflow_health/2026-08-17.json"
+
+
+def test_partition_lag_days_zero_is_todays_own_partition():
+    key = calendar_cadence.resolve_key_template(
+        "ops/x/{date}.json", cadence="continuous", now=TUESDAY_MORNING,
+        lag_days=0,
+    )
+    assert key == "ops/x/2026-08-18.json"
+
+
+def test_partition_lag_days_wins_over_cadence_and_resolver():
+    """`lag_days` is the most specific override — checked before `cadence`/
+    `resolver` are consulted at all, so it resolves even a symbol this module
+    would otherwise call unauditable (`event_driven`)."""
+    key = calendar_cadence.resolve_key_template(
+        "ops/x/{date}.json", cadence="event_driven",
+        resolver=calendar_cadence.RUN_DATE, now=TUESDAY_MORNING, lag_days=2,
+    )
+    assert key == "ops/x/2026-08-16.json"
+
+
+def test_partition_lag_days_still_refuses_a_non_partition_placeholder():
+    """The placeholder-shape guard runs first regardless of `lag_days` — a
+    key templated on something other than a partition is never filled with a
+    date, honest or not."""
+    key = calendar_cadence.resolve_key_template(
+        "models/{model_version}/weights.bin", cadence="continuous",
+        now=TUESDAY_MORNING, lag_days=1,
+    )
+    assert key is None

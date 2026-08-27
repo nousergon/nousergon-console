@@ -54,8 +54,13 @@ lines rather than one per key.
 
 A `declared-registry`'s `default_state` may not be an `EXCEPTION_VALUES` member.
 That default is what every row NOTHING observed carries, so an exception there
-asserts a finding about each of them off no reading at all; `config.py::
-validate_config` refuses the build and names the fragment.
+asserts a finding about each of them off no reading at all. `console index` /
+`console check-namespace` refuse the build and name the fragment
+(`config.py::validate_config`) — the strict author-time gate CI runs. The
+SERVING path (`console serve`) instead fails only that one fragment's source:
+`build_index` catches the same check per adapter and renders it FAILED,
+naming the fragment, rather than emptying the whole index over one bad
+declaration (alpha-engine-config-I8778).
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units`, `cloudwatch-metrics` |
 
 ## Drivers (`console/drivers/__init__.py::DRIVERS`)

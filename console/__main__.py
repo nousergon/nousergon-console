@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from .config import build_index, load_config, supervised_index
+from .config import build_index, load_config, supervised_index, validate_config
 from .diagnose import doctor, render_text
 from .index.graph import Index
 from .index.namespace import check as check_namespace
@@ -64,11 +64,21 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     if args.command == "index":
+        # Strict build-time gate (§3.6, alpha-engine-config-I8778): `index`
+        # is what CI runs against `config.example.yaml`, so a per-adapter
+        # `ConfigError` must still fail the PR here even though `build_index`
+        # itself now degrades that adapter rather than raising — the SERVING
+        # path (below) is what must never go blank over one bad fragment.
+        validate_config(config)
         print(_dump(build_index(config)))
         return 0
     if args.command == "check-namespace":
-        # Reads committed files only — no adapter runs, so this is usable as a
-        # pull-request gate on a machine with no access to any fleet source.
+        # Same strict pre-flight as `index` (alpha-engine-config-I8778) —
+        # this command reads committed files only and runs no adapter, so it
+        # is usable as a pull-request gate on a machine with no access to any
+        # fleet source, and a bad `default_state` should fail it too rather
+        # than only surfacing once `index` also runs.
+        validate_config(config)
         collisions = check_namespace(config)
         for collision in collisions:
             print(collision.render())

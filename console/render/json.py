@@ -30,6 +30,7 @@ from decimal import Decimal
 from typing import Any
 
 from ..index.graph import Index
+from ..index.milestones import evaluate as evaluate_milestones
 from ..model.entity import Edge, Entity
 from ..model.kinds import STATE_FILTER, State
 from ..model.fields import parse as parse_fields
@@ -168,7 +169,8 @@ def _landing(index: Index) -> dict[str, Any]:
     exceptions = [e for e in entities if is_exception(e)]
     conflicts = index.conflicts()
     gap = index.transparency_gap()
-    return {
+    n = numbers(index, exceptions, conflicts, gap)
+    doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "registry_pages": index.registry_coverage(),
         "view": "landing",
@@ -185,8 +187,21 @@ def _landing(index: Index) -> dict[str, Any]:
         # `of`/`ratio` both `None` (not wrapped in `aggregate()`, which would
         # reject a missing denominator outright), and §9.2 always has a real
         # denominator (the component population), so it never needs to.
-        "numbers": numbers(index, exceptions, conflicts, gap),
+        "numbers": n,
     }
+    # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
+    # renders (`render.html.milestones_section` calls the same `evaluate` over
+    # the same `numbers` dict), so the two representations of this URL cannot
+    # answer the predicate differently.
+    #
+    # The key is ABSENT when nothing is declared, rather than an empty list: a
+    # deployment that declares no milestone has no milestone pane, and an empty
+    # `milestones: []` reads to a consumer like a declared predicate with no
+    # clauses — which `parse` refuses to build in the first place.
+    declared_milestones = evaluate_milestones(index, n)
+    if declared_milestones:
+        doc["milestones"] = declared_milestones
+    return doc
 
 
 #: §9.7 (surface liveness) is explicitly out of THIS issue's scope — it

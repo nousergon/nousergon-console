@@ -300,7 +300,14 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
 def landing_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
     state and age · the transparency-gap count · what is waiting on Brian
-    (the decision queue) · the completeness ratio. No aggregate green light."""
+    (the decision queue) · the completeness ratio. No aggregate green light.
+
+    Above the exception table, and only when configuration declares one, §4.4's
+    milestone pane: the declared exit predicate, clause by clause. It sits
+    there because "is the thing we are building finished" is the question a
+    reader brings to this page second, immediately after "is anything on fire",
+    and it was previously answerable only by hand off five other surfaces.
+    """
     exceptions = [e for e in index.all() if is_exception(e)]
     conflicts = index.conflicts()
     reach = index.reachability()
@@ -330,6 +337,8 @@ def landing_page(index: Index) -> str:
         Kind.COMPONENT, State.UNREGISTERED.value,
         completeness.get("unregistered_ids") or ())
     gap = index.transparency_gap()
+    from .json import numbers as _numbers
+    n = _numbers(index, exceptions, conflicts, gap)
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
@@ -337,11 +346,12 @@ def landing_page(index: Index) -> str:
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2) · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
+{milestones_section(index, n)}
 {_table(exceptions)}
 <h2>waiting on Brian</h2>
 {_table(queue)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
-{numbers_section(index, exceptions, conflicts, gap)}
+{numbers_section(index, exceptions, conflicts, gap, n)}
 </body></html>"""
 
 
@@ -365,14 +375,137 @@ def _member_links(kind: Kind, state: str, member_ids) -> str:
             f': {links}')
 
 
+#: The question this pane answers, rendered ON the pane (§4.4). Held beside the
+#: renderer so the pane registry entry and the heading cannot drift: a pane
+#: whose declared question and rendered question differ is two panes.
+_MILESTONE_PANE_QUESTION = (
+    "has the declared milestone been met, and which clause is holding it"
+)
+
+
+def milestones_section(index: Index, numbers: dict) -> str:
+    """console-policy.md §4.4's milestone pane — declared predicates, evaluated.
+
+    Renders nothing at all when no milestone is declared. That is not §5.5's
+    forbidden blank region: §5.5 governs a fact this surface is EXPECTED to
+    carry and could not read, and a deployment that declares no milestone is
+    not expecting one. A pane that rendered "no milestones" on every console
+    that has none would be the aggregate green light §4.3 forbids, wearing an
+    empty state as a disguise.
+
+    Every clause carries §5.1's four fields plus the target it is measured
+    against, and an UNREPORTED clause carries the reason it could not be read —
+    never a blank cell, and never counted toward `met`.
+    """
+    from ..index.milestones import MET, UNREPORTED, evaluate
+
+    declared = evaluate(index, numbers)
+    if not declared:
+        return ""
+    return "".join(_milestone(m) for m in declared)
+
+
+def _milestone(m: dict) -> str:
+    tracker = (
+        f' &middot; <a href="{esc(m["tracker"])}">tracker</a>'
+        if m.get("tracker") else
+        ' &middot; <em class="absent">no tracker link declared</em>'
+    )
+    # `N of M clauses met`, never a single verdict: §4.3 forbids the aggregate
+    # green light, and the unreported count is stated SEPARATELY because a
+    # clause nobody could read is not a clause that failed.
+    unreported = (
+        f' &middot; <span class="state-UNREPORTED">{m["unreported"]} UNREPORTED</span>'
+        if m.get("unreported") else ""
+    )
+    holding = (
+        " &middot; holding: " + ", ".join(esc(c) for c in m["holding"])
+        if m.get("holding") else
+        " &middot; no clause outstanding"
+    )
+    rows = "".join(_milestone_rows(c) for c in m["clauses"])
+    return (
+        f'<h2>milestone: {esc(m["id"])}</h2>'
+        # §4.4: the question sentence is rendered on the pane, not left in a
+        # registry a reader never opens.
+        f'<p class="pane-question">{esc(_MILESTONE_PANE_QUESTION)} &mdash; '
+        f'{esc(m["question"])}</p>'
+        f'<p>{m["met"]} of {m["of"]} clauses met{unreported}{holding}{tracker}</p>'
+        "<table><thead><tr><th>clause</th><th>status</th><th>bound to</th>"
+        "<th>value</th><th>target</th><th>as-of</th><th>evidence</th>"
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _milestone_rows(clause: dict) -> str:
+    """One row per TERM, each repeating its clause id and status.
+
+    Repeated rather than row-spanned on purpose: a blank cell under a spanned
+    heading is indistinguishable from a fact this pane could not supply, which
+    is the confusion §5.5 exists to remove.
+    """
+    if not clause["terms"]:
+        # A clause whose PRECONDITION refused — it has no terms to show, and
+        # the reason is the whole finding.
+        return (
+            f'<tr class="milestone-{esc(clause["status"])}">'
+            f'<td>{esc(clause["id"])}<br><small>{esc(clause["label"])}</small></td>'
+            f'<td>{esc(clause["status"])}</td>'
+            f'<td colspan="5"><em class="absent">{esc(clause.get("reason", "no reason given"))}</em></td>'
+            "</tr>"
+        )
+    return "".join(_milestone_term_row(clause, t) for t in clause["terms"])
+
+
+def _milestone_term_row(clause: dict, term: dict) -> str:
+    as_of = (
+        esc(term["as_of"]) if term.get("as_of")
+        else '<em class="absent">no freshness stamp</em>'
+    )
+    evidence = (
+        f'<a href="{esc(term["evidence"])}">evidence</a>' if term.get("evidence")
+        else '<em class="absent">no link</em>'
+    )
+    value = (
+        esc(term["value"]) if term.get("value") is not None
+        else '<em class="absent">no value</em>'
+    )
+    reason = (
+        f'<br><small class="absent">{esc(term["reason"])}</small>'
+        if term.get("reason") else ""
+    )
+    return (
+        # `milestone-` and not `state-`: MET/UNMET are not members of
+        # observability-policy.md §8.3's closed state vocabulary, and
+        # borrowing its selector namespace for two values that are not
+        # states is how a vocabulary stops being closed. UNREPORTED IS one
+        # of the thirteen and means here exactly what it means there.
+        f'<tr class="milestone-{esc(clause["status"])}">'
+        f'<td>{esc(clause["id"])}<br><small>{esc(clause["label"])}</small></td>'
+        f'<td>{esc(term["status"])}</td>'
+        f'<td><code>{esc(term["binding"])}:{esc(term["ref"])}.{esc(term["selector"])}</code>{reason}</td>'
+        f"<td>{value}</td>"
+        f'<td>{esc(term["op"])} {esc(term["target"])}</td>'
+        f"<td>{as_of}</td><td>{evidence}</td>"
+        "</tr>"
+    )
+
+
 def numbers_section(index: Index, exceptions: list[Entity], conflicts: list[Entity],
-                    gap: dict) -> str:
+                    gap: dict, numbers: dict | None = None) -> str:
     """console-policy.md §9 — the nine numbers, rendered (§3.8: the JSON
     representation carries the identical shape via `render.json.numbers`,
-    which this function reads rather than recomputing)."""
+    which this function reads rather than recomputing).
+
+    `numbers` is the already-assembled dict when the caller has one — the
+    landing view grades its milestone clauses (§4.4) against the same numbers
+    it renders here, and computing them twice per page would let one section
+    render a value the other did not use.
+    """
     from .json import numbers as _numbers
 
-    n = _numbers(index, exceptions, conflicts, gap)
+    n = numbers if numbers is not None else _numbers(index, exceptions, conflicts, gap)
     rows = "".join(_number_row(label, key, n[key]) for label, key in _NUMBER_ROWS)
     return f"""<h2>the nine numbers</h2>
 <table><thead><tr><th>§</th><th>number</th><th>value</th></tr></thead>

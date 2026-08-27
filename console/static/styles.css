@@ -8,3 +8,13 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 .state-DISABLED, .state-DEPRECATED, .state-RETIRED { border-left: .35rem solid #4c5563; }
 .state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid #8a4b00; }
 .absent { border-left: .35rem dashed #4c5563; padding-left: .5rem; }
+/* §4.4's milestone pane. A separate selector namespace from `.state-*` on
+   purpose: MET and UNMET are not members of observability-policy.md §8.3's
+   closed state vocabulary, and a clause's UNREPORTED borrows the same warm
+   border as the state it shares a name with because it is the same fact —
+   this clause was not measured. Colour carries one axis (§5.7) and the status
+   word is rendered in its own column, so nothing here is colour-only. */
+.milestone-MET { border-left: .35rem solid #087f23; }
+.milestone-UNMET { border-left: .35rem solid #b00020; }
+.milestone-UNREPORTED { border-left: .35rem solid #8a4b00; }
+.pane-question { color: #4c5563; font-style: italic; }

@@ -305,8 +305,9 @@ def fetch(
         # contain, so the floor derived from it is the ceiling too — no
         # second, hand-picked number (I7068 deliverable 2).
         floor = min(by_date) if by_date else None
+        cadence_rule = _cadence_rule(entry)
         cycle_days = _window_cycle_days(
-            now.date(), window, trading_day_checker, _cadence_rule(entry), floor=floor,
+            now.date(), window, trading_day_checker, cadence_rule, floor=floor,
         )
 
         # History is O(cycle days), not O(list_executions) — stage depth and
@@ -359,6 +360,9 @@ def fetch(
         entities.append(_attempts_to_success_signal(pipeline_key, arn, attempt_points, region))
         entities.append(_rerun_trigger_signal(
             pipeline_key, arn, attempt_points, rerun_threshold, region,
+        ))
+        entities.append(_scheduled_first_attempt_streak_signal(
+            pipeline_key, arn, cycles, _cycles_per_week(*cadence_rule), region,
         ))
         if measure_buffer and open_time_s and open_tz:
             entities.append(_buffer_signal(
@@ -953,6 +957,105 @@ def _rerun_trigger_signal(
                     "value": len(breaches),
                     "unit": "cycles",
                     "baseline": 0,
+                    "render": "number",
+                },
+            },
+        },
+    )
+
+
+def _cycles_per_week(cadence: str, weekdays: frozenset[int]) -> int:
+    """How many cycle days the pipeline's own cadence expects per calendar
+    week — the denominator `consecutive_weeks` divides by (issue #8764).
+
+    `trading-day` is 5 (Mon-Fri, holidays already excluded by the calendar
+    checker upstream of this count). `weekday` names its own count of fixed
+    weekdays — a weekly pipeline scheduled for one Saturday is 1. `calendar-day`
+    expects every day, so 7. `max(1, ...)` only guards a misconfigured empty
+    `cadence_weekdays` list from a division by zero; a `weekday` cadence with no
+    declared weekdays windows no cycle days at all (see `_window_cycle_days`)
+    so this never actually divides a nonzero streak by it in practice.
+    """
+    if cadence == CADENCE_WEEKDAY:
+        return max(1, len(weekdays))
+    if cadence == CADENCE_CALENDAR_DAY:
+        return 7
+    return 5
+
+
+def _scheduled_first_attempt_streak(
+    cycles: list[Entity],
+) -> tuple[int, str | None, bool, str | None]:
+    """Walk `cycles` most-recent-to-oldest (they arrive oldest-first from
+    `_classify_window`), skipping PENDING and HOLIDAY, counting consecutive
+    SUCCEEDED cells — clause 1 of `alpha-engine-config#6967` ("four
+    consecutive weeks on the scheduled trigger, zero reruns") as a number.
+
+    `SUCCEEDED` here already means `first_attempt_ok and not first_degraded`
+    — `_classify_window` assigns it on exactly that condition, so no second
+    read of `detail["first_attempt_ok"]` is needed. Every other reachable
+    state (FAILED-recovered, FAILED-unrecovered, DEGRADED, NEVER-FIRED) ends
+    the streak, including a rerun-recovered day: "a run that a human started
+    is evidence about the human," not the schedule.
+
+    Returns `(consecutive_cycles, last_break_date, censored, evidence)`.
+    `censored=True` (with `last_break_date=None`) when the walk exhausts every
+    windowed cycle without finding a break — the streak reaches the window
+    floor and is a lower bound, not a count.
+    """
+    consecutive = 0
+    for cell in reversed(cycles):
+        if cell.state in (PENDING, HOLIDAY):
+            continue
+        if cell.state == SUCCEEDED:
+            consecutive += 1
+            continue
+        last_break_date = cell.detail.get("date")
+        evidence = cell.provenance.evidence
+        return consecutive, last_break_date, False, evidence
+    return consecutive, None, True, None
+
+
+def _scheduled_first_attempt_streak_signal(
+    pipeline_key: str,
+    arn: str,
+    cycles: list[Entity],
+    cycles_per_week: int,
+    region: str,
+) -> Entity:
+    """The clause-1 number of `alpha-engine-config#6967` — a scheduled
+    first-attempt streak per pipeline, in cycles and in weeks (issue #8764).
+
+    Deliberately walks the already-classified `cycles` list rather than
+    re-deriving `first_attempt_ok`/`first_degraded` — `SUCCEEDED` already
+    encodes exactly that conjunction (see `_scheduled_first_attempt_streak`),
+    so this stays a pure projection over `_classify_window`'s own output, the
+    same discipline `_first_attempt_signal` and `_attempts_to_success_signal`
+    already follow.
+    """
+    consecutive, last_break_date, censored, evidence = _scheduled_first_attempt_streak(cycles)
+    weeks = (consecutive / cycles_per_week) if cycles_per_week else None
+    return Entity(
+        kind=Kind.SIGNAL,
+        id=f"pipeline-reliability:{pipeline_key}:scheduled-first-attempt-streak",
+        state="reporting" if cycles else "no-data",
+        provenance=Provenance(source=f"pipeline-reliability:{region}:{arn}", evidence=evidence),
+        facets={"pipeline": pipeline_key},
+        detail={
+            "last_break_date": last_break_date,
+            "censored": censored,
+            "window_cycles": len(cycles),
+            "fields": {
+                "consecutive_cycles": {
+                    "value": consecutive,
+                    "unit": "cycles",
+                    "baseline": None,
+                    "render": "number",
+                },
+                "consecutive_weeks": {
+                    "value": (round(weeks, 2) if weeks is not None else None),
+                    "unit": "weeks",
+                    "baseline": 4.0,
                     "render": "number",
                 },
             },

@@ -41,6 +41,7 @@ from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 from ..aws import client as _aws_client
+from ..freshness import freshness as _artifact_freshness
 
 #: A check-result envelope is an OBSERVATION (§2.5): it says what actually ran
 #: and when. It may never produce DISABLED/DEPRECATED/RETIRED — telemetry
@@ -258,13 +259,26 @@ def _from_envelope(
         },
     )
 
+    # §5.2: the artifact's own state is its FRESHNESS — last_modified against
+    # the envelope's declared cadence — never the verdict inside the body.
+    # `latest.json` being present and recently written is a true fact about
+    # the object regardless of what the check concluded; conflating the two
+    # is what put a healthy, fresh artifact on the exception list carrying a
+    # component's DEGRADED verdict (alpha-engine-config-I8979).
+    cadence_seconds = (
+        float(cadence_minutes) * 60.0
+        if cadence_minutes not in (None, "", 0)
+        else None
+    )
+    art_state = _artifact_freshness(last_modified, cadence_seconds, staleness_factor, now)
+
     art = Entity(
         kind=Kind.ARTIFACT,
         id=key,  # the key is the source-assigned artifact id (§2.1)
-        state=state,
+        state=art_state,
         provenance=Provenance(
             source=source_label,
-            as_of=str(ran_at) if ran_at else None,
+            as_of=last_modified,
             evidence=f"s3://{bucket}/{key}",
         ),
         detail={"check_id": check_id, "schema_version": body.get("schema_version")},

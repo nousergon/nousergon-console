@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 
 from console.adapters import checks_envelope
 from console.config import ADAPTERS
+from console.index.graph import Index
 from console.model.envelope import AdapterStatus
 from console.model.kinds import Kind, State
+from console.render.html import is_exception, landing_exceptions
 
 NOW = datetime(2026, 7, 31, 12, 0, 0, tzinfo=timezone.utc)
 BUCKET = "fixture-bucket"
@@ -169,6 +171,89 @@ def test_artifact_and_run_emitted_with_edges():
     # `produces` declaration is what closes it.
     (run,) = [e for e in result.entities if e.kind is Kind.RUN and e.id.startswith("comp-alpha@")]
     assert ("comp-alpha", "produces", run.id) in rels
+
+
+def _build_index(result) -> Index:
+    index = Index()
+    index.add_result(result)
+    return index
+
+
+def test_artifact_state_is_freshness_not_the_envelope_status():
+    """§5.2 (alpha-engine-config-I8979): the artifact's state is FRESH/STALE
+    from last_modified vs cadence, never the verdict inside the body. A fresh
+    `latest.json` reporting an `error` verdict is still a healthy artifact."""
+    result = checks_envelope.fetch(
+        _cfg(), lister=_lister, reader=_reader, now=NOW,
+    )
+    by_id = _by_id(result)
+    gamma_component = by_id["comp-gamma"]
+    gamma_artifact = by_id[f"{PREFIX}comp-gamma/latest.json"]
+    assert gamma_component.state is State.FAILED
+    assert gamma_artifact.state == "fresh"
+    assert gamma_artifact.state != gamma_component.state_value
+
+
+def test_stale_artifact_freshness_independent_of_ok_status():
+    """comp-stale reports status ok (its component is MISSED on staleness) —
+    the artifact's own freshness reasons from the SAME last_modified/cadence
+    and lands on `stale`, not on the component's status or derived state."""
+    result = checks_envelope.fetch(
+        _cfg(), lister=_lister, reader=_reader, now=NOW,
+    )
+    by_id = _by_id(result)
+    assert by_id[f"{PREFIX}comp-stale/latest.json"].state == "stale"
+
+
+def test_degraded_envelope_collapses_to_one_exception_row():
+    """The 133-of-139 defect: one DEGRADED envelope minted a component, a run
+    and an artifact that all rendered as exceptions. Now only the component
+    row (the verdict) lists; the fresh artifact and the redundant run do not."""
+    result = checks_envelope.fetch(
+        _cfg(), lister=_lister, reader=_reader, now=NOW,
+    )
+    index = _build_index(result)
+    exceptions = landing_exceptions(index)
+    beta_rows = [e for e in exceptions if e.detail.get("check_id") == "comp-beta"
+                 or e.id == "comp-beta"]
+    assert [e.kind for e in beta_rows] == [Kind.COMPONENT]
+    # The run stays fully present and reachable in the index — only the
+    # exception VIEW collapses (§4.3), never the underlying graph.
+    (run,) = [e for e in index.all()
+              if e.kind is Kind.RUN and e.id.startswith("comp-beta@")]
+    assert run.state is State.DEGRADED
+    assert is_exception(run)  # still an exception in isolation
+    assert run not in exceptions  # but suppressed as a component echo
+    edges = {(e.source, e.rel, e.target) for e in index.related(run.id)}
+    assert (run.id, "belongs-to", "comp-beta") in edges
+
+
+def test_transient_run_failure_under_healthy_component_still_lists():
+    """A run that disagrees with its (now-healthy) component is a different
+    fact — a transient — and must still list even though the component does
+    not (alpha-engine-config-I8979)."""
+    from console.model.entity import Edge, Entity, Provenance
+
+    now_iso = "2026-07-31T12:00:00+00:00"
+    component = Entity(
+        kind=Kind.COMPONENT, id="comp-recovered", state=State.HEALTHY,
+        provenance=Provenance(source="s3://x", as_of=now_iso, evidence="s3://x/comp-recovered"),
+    )
+    run = Entity(
+        kind=Kind.RUN, id="comp-recovered@2026-07-31T11:00:00+00:00", state=State.FAILED,
+        provenance=Provenance(source="s3://x", as_of="2026-07-31T11:00:00+00:00",
+                               evidence="s3://x/comp-recovered"),
+    )
+    index = Index()
+    from console.model.envelope import AdapterResult, ClaimClass
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.OBSERVATION, fetched_at=now_iso, name="checks",
+        status=AdapterStatus.OK, entities=(component, run),
+        edges=(Edge(source=run.id, rel="belongs-to", target=component.id),),
+    ))
+    exceptions = landing_exceptions(index)
+    assert run in exceptions
+    assert component not in exceptions
 
 
 def test_unreadable_body_is_unreported_not_dropped():

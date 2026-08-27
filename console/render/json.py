@@ -164,10 +164,10 @@ def _landing(index: Index) -> dict[str, Any]:
     An agent asking "is anything wrong" gets the same answer, in the same
     order, as a human looking at the page.
     """
-    from ..render.html import is_exception
+    from ..render.html import landing_exceptions
 
     entities = index.all()
-    exceptions = [e for e in entities if is_exception(e)]
+    exceptions = landing_exceptions(index)
     conflicts = index.conflicts()
     gap = index.transparency_gap()
     n = numbers(index, exceptions, conflicts, gap)

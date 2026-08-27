@@ -133,3 +133,51 @@ def test_reachability_measures_each_path_independently(monkeypatch):
 
 def test_reachability_empty_index_is_null_not_zero():
     assert Index().reachability()["ratio"] is None
+
+
+def test_unregistered_reconciler_leaves_run_state_alone():
+    """alpha-engine-config-I8766: `_reconcile`'s UNREGISTERED/ABSENT branches
+    are about a COMPONENT's declaration, not a RUN's own outcome. A run of an
+    unregistered component (`checks_envelope`'s `<check_id>@<ran_at>` ids)
+    never matches any registry row by construction, so treating RUN like
+    COMPONENT here rewrote every one of it to UNREGISTERED once per run
+    (154 live rows on 2026-08-27) instead of flagging the component once.
+    """
+    idx = Index()
+    # A successful declaration pass registers one component, leaving a
+    # second component undeclared, and contributes a RUN entity that no
+    # registry could ever match — the adapter's own assigned state must
+    # survive `_reconcile` unchanged.
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="comp-declared",
+                         state=State.UNREPORTED, provenance=prov("registry")),),
+    ))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-undeclared",
+                   state=State.HEALTHY, provenance=prov("checks_envelope")),
+            Entity(kind=Kind.RUN, id="check-x@2026-08-27T00:00:00Z",
+                   state=State.HEALTHY, provenance=prov("checks_envelope")),
+            Entity(kind=Kind.RUN, id="check-y@2026-08-27T00:05:00Z",
+                   state=State.FAILED, provenance=prov("checks_envelope")),
+        ),
+    ))
+    idx.finalize()
+
+    run_ok = idx.entity("check-x@2026-08-27T00:00:00Z")
+    run_failed = idx.entity("check-y@2026-08-27T00:05:00Z")
+    undeclared_component = idx.entity("comp-undeclared")
+
+    # Runs keep the state their adapter assigned...
+    assert run_ok.state is State.HEALTHY
+    assert run_failed.state is State.FAILED
+    # ...while an undeclared COMPONENT is still flagged.
+    assert undeclared_component.state is State.UNREGISTERED
+
+    completeness = idx.population_completeness()
+    assert completeness["unregistered"] == 1
+    assert completeness["unregistered_ids"] == ["comp-undeclared"]

@@ -59,6 +59,43 @@ def is_exception(ent: Entity) -> bool:
     return str(ent.state).strip().lower() in EXCEPTION_VALUES
 
 
+def _is_component_echo(ent: Entity, index: Index) -> bool:
+    """Whether a RUN row says nothing the landing view doesn't already say.
+
+    A check envelope mints one Component and one Run from the same publish
+    (`adapters/checks_envelope.py`), and when the component's state was
+    derived from this exact run (§4.3, alpha-engine-config-I8979) the run adds
+    no information — same verdict, same `ran_at`, reachable from the
+    component by the `belongs-to` relation already. A run that disagrees with
+    its component — a transient failure under an otherwise HEALTHY component
+    — is a DIFFERENT fact and still lists.
+    """
+    if ent.kind is not Kind.RUN:
+        return False
+    for edge in index.related(ent.id):
+        if edge.source != ent.id or edge.rel != "belongs-to":
+            continue
+        component = index.entity(edge.target)
+        if (
+            component is not None
+            and component.kind is Kind.COMPONENT
+            and component.state == ent.state
+            and component.provenance.as_of == ent.provenance.as_of
+        ):
+            return True
+    return False
+
+
+def landing_exceptions(index: Index) -> list[Entity]:
+    """The §4.3 exception list: every non-HEALTHY row, minus a run that only
+    echoes the component derived from it (alpha-engine-config-I8979). The
+    component row stays; its latest run is reachable from it by relation."""
+    return [
+        e for e in index.all()
+        if is_exception(e) and not _is_component_echo(e, index)
+    ]
+
+
 def esc(s: object) -> str:
     return html.escape(str(s), quote=True)
 
@@ -315,7 +352,7 @@ def landing_page(index: Index) -> str:
     reader brings to this page second, immediately after "is anything on fire",
     and it was previously answerable only by hand off five other surfaces.
     """
-    exceptions = [e for e in index.all() if is_exception(e)]
+    exceptions = landing_exceptions(index)
     conflicts = index.conflicts()
     reach = index.reachability()
     ratio = reach["ratio"]

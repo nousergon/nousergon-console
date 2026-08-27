@@ -129,11 +129,62 @@ def test_unobserved_default_is_accepted_and_no_default_is_accepted():
     ]})
 
 
-def test_build_index_refuses_before_any_adapter_runs():
+def test_build_index_fails_only_the_offending_source_not_the_whole_build(tmp_path):
+    """The regression this whole slice exists for (alpha-engine-config-I8778):
+    `nousergon-console-PR112`/`PR113` had `build_index` call `validate_config`
+    once, blanket, so one bad `declared-registry` fragment raised BEFORE any
+    adapter ran and emptied the entire index — measured live 2026-08-27,
+    `sources: []` for ~10 minutes while a fixable one-line config edit sat
+    unmerged. `build_index` must instead fail only that fragment's source: a
+    FAILED `AdapterResult` naming the fragment in `unavailable`, while a sibling
+    source with valid config builds normally, with its entities present, in
+    the SAME pass."""
+    good_path = _registry_doc(tmp_path, [{"key": "data/x.json"}])
+    index = build_index({"adapters": [
+        {"name": "artifact-registry", "kind": "declared-registry",
+         "enabled": True, "config": {"default_state": "absent"}},
+        {"name": "decisions", "kind": "declared-registry", "enabled": True,
+         "config": {"default_state": UNOBSERVED_VALUE, "path": good_path,
+                    "kind": "artifact", "id_field": "key",
+                    "entries_field": "artifacts"}},
+    ]}).finalize()
+    adapters = {a.name: a for a in index.build_info.adapters}
+    assert len(adapters) == 2
+    bad = adapters["artifact-registry"]
+    assert bad.status == AdapterStatus.FAILED.value
+    assert "artifact-registry" in bad.unavailable[0]
+    assert "absent" in bad.unavailable[0]
+    good = adapters["decisions"]
+    assert good.status == AdapterStatus.OK.value
+    assert index.entity("data/x.json") is not None
+
+
+def test_build_index_registry_shaped_declared_registry_also_degrades():
+    """Same guard, the OTHER config spelling (`registry:`/`registries:` carries
+    the adapter config at the top level rather than under `config:`) — the
+    fix for `test_registry_shaped_entry_is_guarded_too` must not be evadable
+    by using this shape instead."""
+    index = build_index({
+        "registry": {"name": "fleet-artifacts", "adapter": "declared-registry",
+                     "kind": "artifact", "default_state": "absent",
+                     "path": "/nonexistent.yaml"},
+    }).finalize()
+    (adapter,) = index.build_info.adapters
+    assert adapter.status == AdapterStatus.FAILED.value
+    assert "fleet-artifacts" in adapter.unavailable[0]
+
+
+def test_cli_index_and_check_namespace_still_refuse_the_whole_pre_flight():
+    """`console index`/`console check-namespace` call `validate_config`
+    directly (`__main__.py`) BEFORE `build_index` — the strict author-time
+    gate CI runs against `config.example.yaml` stays a raise, even though
+    `build_index` itself now degrades the one bad source rather than
+    raising."""
+    config = {"adapters": [{
+        "name": "artifact-registry", "kind": "declared-registry",
+        "enabled": True, "config": {"default_state": "absent"}}]}
     with pytest.raises(ConfigError):
-        build_index({"adapters": [{
-            "name": "artifact-registry", "kind": "declared-registry",
-            "enabled": True, "config": {"default_state": "absent"}}]})
+        validate_config(config)
 
 
 # --------------------------------------------- 3. the observation half ------

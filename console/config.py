@@ -67,13 +67,20 @@ def load_config(path: str) -> dict[str, Any]:
 
 
 class ConfigError(Exception):
-    """A configuration that cannot be honestly indexed — a BUILD failure.
+    """A configuration fragment that cannot be honestly indexed.
 
-    Distinct from a source that cannot be read, which is an entity state and
-    never an exception (§2.3). This is the `index/merge.py::NamespaceCollision`
-    class of problem: config asserting something about the fleet that is not a
-    reading of the fleet, where degrading quietly would render the assertion as
-    fact on every row it touches.
+    Scoped to the one adapter fragment that raised it (alpha-engine-config-
+    I8778) — this is `index/merge.py::NamespaceCollision`'s SIBLING class of
+    problem (config asserting something that is not a reading of the fleet),
+    not a whole-build failure. `build_index` catches a `ConfigError` raised
+    while resolving one adapter fragment and fails only that fragment's
+    source (§2.3's "a source failure never empties the surface", applied to
+    a bad DECLARATION exactly as it already applies to an unreachable one).
+    The two CLI pre-flight commands (`console index`, `console
+    check-namespace`) call `validate_config` directly, BEFORE any adapter
+    runs, so an author-time mistake still fails the PR loudly (§3.6's
+    build-time gate) — only the SERVING path (`console serve` /
+    `supervised_index`) degrades per source.
     """
 
 
@@ -90,24 +97,43 @@ def validate_config(config: dict[str, Any]) -> None:
     Live cost of the config edit nobody could flag: 177 of 508 exception rows
     on 2026-08-27.
 
-    Raised, not logged. A surface that renders 177 invented findings is worse
-    than a surface that will not start, and the message names the FRAGMENT so
-    the fix is a one-line edit in a file the operator already has open.
+    Raised, not logged — but only reachable from two places now
+    (alpha-engine-config-I8778): the `console index` / `console
+    check-namespace` CLI pre-flight (`__main__.py`), which is the strict
+    build-time gate CI runs, and `_check_declared_registry_default_state`
+    below, which `build_index` calls PER FRAGMENT so one bad fragment fails
+    only its own source rather than raising here and emptying the whole
+    index (`nousergon-console-PR112`/`PR113` shipped the blanket call that
+    did that — measured live 2026-08-27 22:43-22:5xZ: `sources: []`,
+    `exceptions: 0`, a blank all-clear-looking surface for ~10 minutes).
+    The message names the FRAGMENT so the fix is a one-line edit in a file
+    the operator already has open.
     """
     for label, cfg in _declared_registry_configs(config):
-        raw = cfg.get("default_state")
-        if raw is None:
-            continue
-        if str(raw).strip().lower() in EXCEPTION_VALUES:
-            raise ConfigError(
-                f"{label}: `default_state: {raw}` is an exception state. A "
-                "declared-registry's default is what a row carries when "
-                "NOTHING observed it, so this asserts a finding about every "
-                "unobserved row off no reading at all (observability-policy.md "
-                "§8.3). Use `default_state: unobserved` and wire an observation "
-                "half (an `object-store` adapter over the same identifiers) for "
-                "the rows a real read can reach."
-            )
+        _check_declared_registry_default_state(label, cfg)
+
+
+def _check_declared_registry_default_state(label: str, cfg: dict[str, Any]) -> None:
+    """The one rule in `validate_config`, scoped to one fragment.
+
+    Shared by the strict CLI pre-flight (`validate_config`, called once per
+    fragment in a loop) and `build_index`'s per-adapter degrade (called
+    inline for the one fragment about to be built) — one rule, one place it
+    is checked, so the two paths cannot drift apart on what counts as bad.
+    """
+    raw = cfg.get("default_state")
+    if raw is None:
+        return
+    if str(raw).strip().lower() in EXCEPTION_VALUES:
+        raise ConfigError(
+            f"{label}: `default_state: {raw}` is an exception state. A "
+            "declared-registry's default is what a row carries when "
+            "NOTHING observed it, so this asserts a finding about every "
+            "unobserved row off no reading at all (observability-policy.md "
+            "§8.3). Use `default_state: unobserved` and wire an observation "
+            "half (an `object-store` adapter over the same identifiers) for "
+            "the rows a real read can reach."
+        )
 
 
 def _declared_registry_configs(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -137,10 +163,17 @@ def build_index(config: dict[str, Any]) -> Index:
 
     A FAILED adapter contributes its entities as UNREPORTED (handled in the
     index) and does not stop the other adapters — the surface degrades per
-    source, never empties (§2.3). A config that is itself unindexable raises
-    before any adapter runs (`validate_config`).
+    source, never empties (§2.3). A per-fragment `ConfigError` (currently:
+    a `declared-registry`'s `default_state` naming an exception state) is
+    caught HERE, per fragment, and fails only that fragment's source — never
+    a blanket `validate_config(config)` call, which would fail the whole
+    build over one bad fragment while every other source stayed healthy
+    (measured live 2026-08-27: `sources: []` for ~10 minutes,
+    alpha-engine-config-I8778). The strict, whole-config `validate_config` is
+    still called directly by the CLI's build-time pre-flight commands
+    (`__main__.py`), run before any adapter, so CI still fails a PR that
+    introduces the mistake.
     """
-    validate_config(config)
     index = Index()
     # Parsed FIRST, before any adapter runs: an unknown binding kind or
     # comparator must fail the build naming the milestone and clause, not
@@ -164,6 +197,12 @@ def build_index(config: dict[str, Any]) -> Index:
         if reg.get("adapter") not in ADAPTERS:
             index.add_result(_unknown_adapter(name, reg.get("adapter")))
             continue
+        if reg.get("adapter") == "declared-registry":
+            try:
+                _check_declared_registry_default_state(name, reg)
+            except ConfigError as exc:
+                index.add_result(_config_error_result(name, exc))
+                continue
         module = ADAPTERS[reg["adapter"]]
         result, elapsed = _timed_fetch(module.fetch, {
             **reg, "_name": name,
@@ -186,7 +225,14 @@ def build_index(config: dict[str, Any]) -> Index:
         if module is None:
             index.add_result(_unknown_adapter(entry.get("name", kind), kind))
             continue
-        cfg = {**entry.get("config", {}), "_name": entry.get("name", kind)}
+        name = entry.get("name", kind)
+        if kind == "declared-registry":
+            try:
+                _check_declared_registry_default_state(str(name), entry.get("config") or {})
+            except ConfigError as exc:
+                index.add_result(_config_error_result(str(name), exc))
+                continue
+        cfg = {**entry.get("config", {}), "_name": name}
         result, elapsed = _timed_fetch(module.fetch, cfg)
         index.add_result(result, elapsed_seconds=elapsed)
 
@@ -252,6 +298,24 @@ def _unknown_adapter(name: str, kind: Any) -> AdapterResult:
         status=AdapterStatus.FAILED,
         fetched_at=now_iso(),
         unavailable=(f"adapter:{kind}",),
+    )
+
+
+def _config_error_result(name: str, exc: ConfigError) -> AdapterResult:
+    """A per-fragment `ConfigError`, rendered as a FAILED source (§2.3).
+
+    The sibling of `_unknown_adapter`: a configured source this build cannot
+    honestly build, named and red on every page, never a build-wide raise
+    (alpha-engine-config-I8778). The error text IS the `unavailable` reason —
+    it already names the fragment and the fix (`_check_declared_registry_
+    default_state`'s message), so the landing page's failing-source row is
+    the same one-line edit the operator would get from `console index`.
+    """
+    return AdapterResult(
+        name=name,
+        status=AdapterStatus.FAILED,
+        fetched_at=now_iso(),
+        unavailable=(str(exc),),
     )
 
 

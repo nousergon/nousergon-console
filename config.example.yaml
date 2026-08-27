@@ -697,13 +697,15 @@ adapters:
       kind: artifact
       id_field: key                            # each entry's S3 key, matching object-store's own id
       # What a row carries when NOTHING observed it. It may not be an
-      # EXCEPTION_VALUES member — `config.py::validate_config` refuses the
-      # build and names this fragment. `absent` here asserted "the substrate
-      # does not have it" for every declared key off no reading at all; on the
-      # fleet's own surface that was 177 of 508 exception rows
-      # (alpha-engine-config-I8765). `unobserved` is the default and needs no
-      # line at all; it is spelled out here because this is the example that
-      # got it wrong.
+      # EXCEPTION_VALUES member — `console index`/`console check-namespace`
+      # refuse the build and name this fragment (`config.py::validate_config`,
+      # the author-time gate CI runs); the SERVING path fails only THIS
+      # source instead (alpha-engine-config-I8778). `absent` here asserted
+      # "the substrate does not have it" for every declared key off no
+      # reading at all; on the fleet's own surface that was 177 of 508
+      # exception rows (alpha-engine-config-I8765). `unobserved` is the
+      # default and needs no line at all; it is spelled out here because this
+      # is the example that got it wrong.
       default_state: unobserved
 
   # The OBSERVATION half of the registry above — the same identifiers, read.

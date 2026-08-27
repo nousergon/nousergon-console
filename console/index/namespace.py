@@ -80,8 +80,24 @@ def _registry_entries(config: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
-def _rows(path: str, id_field: str) -> list[tuple[str, str]]:
-    """(identifier, file) for every readable row in one registry directory.
+def _row_aliases(body: dict, alias_field: str) -> list[str]:
+    """Mirrors `yaml_directory._aliases` — a scalar or a list, never raises."""
+    raw = body.get(alias_field)
+    if not raw:
+        return []
+    if isinstance(raw, (str, bytes)):
+        raw = [raw]
+    return [str(a) for a in raw if a]
+
+
+def _rows(path: str, id_field: str, alias_field: str = "alias_ids") -> list[tuple[str, str]]:
+    """(identifier, file) for every readable row in one registry directory,
+    AND for every alias it declares (§3.6, alpha-engine-config-I8779).
+
+    An alias is a second name the same declared row is served under — a
+    component id colliding with someone ELSE's alias, or two rows aliasing the
+    same id, shadows exactly the way two component ids would, so it is checked
+    in the same pass rather than only the primary `id_field`.
 
     An unreadable or malformed file is SKIPPED rather than raising. This check
     answers one question — is any identifier declared twice — and a parse error
@@ -105,6 +121,8 @@ def _rows(path: str, id_field: str) -> list[tuple[str, str]]:
         identifier = body.get(id_field)
         if identifier:
             found.append((str(identifier), full))
+        for alias_id in _row_aliases(body, alias_field):
+            found.append((alias_id, full))
     return found
 
 
@@ -125,7 +143,11 @@ def check(config: dict[str, Any]) -> list[Collision]:
 
     seen: dict[str, list[str]] = {}
     for ordinal, reg in enumerate(_registry_entries(config), start=1):
-        for identifier, source in _rows(reg.get("path"), reg.get("id_field", "component_id")):
+        for identifier, source in _rows(
+            reg.get("path"),
+            reg.get("id_field", "component_id"),
+            reg.get("alias_field", "alias_ids"),
+        ):
             seen.setdefault(identifier, []).append(source)
     for identifier, sources in sorted(seen.items()):
         if len(sources) > 1:

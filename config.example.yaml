@@ -65,6 +65,13 @@ registry:
   adapter: yaml-directory
   path: ./example/registry.d          # one file per component
   id_field: component_id
+  # Optional: the key holding a row's alias ids (default `alias_ids`, a list
+  # or a single string). An alias is the SAME substrate process publishing
+  # under a second name, not a second component — each one mints its own
+  # declaration carrying the parent row's facets/lifecycle/cadence plus
+  # `detail.alias_of`, and renders under the id the substrate actually emits
+  # rather than as UNREGISTERED (alpha-engine-config-I8779).
+  # alias_field: alias_ids
 
 # One entry per source of truth. Each is handled by exactly one adapter, and no
 # adapter knows about any other — cross-source relations are formed by the index

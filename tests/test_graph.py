@@ -7,7 +7,7 @@ from console.index.graph import Index, NamespaceCollision
 from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
 from tests.fixtures import component, fixture_graph, prov
-from console.model.entity import Entity
+from console.model.entity import Edge, Entity
 
 
 def _index_with(entities, edges, status=AdapterStatus.OK) -> Index:
@@ -181,3 +181,87 @@ def test_unregistered_reconciler_leaves_run_state_alone():
     completeness = idx.population_completeness()
     assert completeness["unregistered"] == 1
     assert completeness["unregistered_ids"] == ["comp-undeclared"]
+
+
+# ------------------------ alias ids (alpha-engine-config-I8779) -------------
+#
+# An alias is the same substrate process publishing under a second name, not
+# a second registry row: `population_completeness().of` must count the parent
+# once, and an alias's OBSERVATION claim must merge onto its own declaration
+# rather than reading UNREGISTERED.
+
+
+def test_an_alias_declaration_does_not_inflate_the_denominator():
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-alias", rel="alias-of", target="comp-parent"),),
+    ))
+    completeness = idx.population_completeness()
+    assert completeness["of"] == 1
+    assert completeness["rendered"] == 1
+
+
+def test_alias_of_is_traversable_from_both_ends():
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-alias", rel="alias-of", target="comp-parent"),),
+    ))
+    idx.finalize()
+    assert any(
+        e.rel == "alias-of" and e.target == "comp-parent"
+        for e in idx.related("comp-alias")
+    )
+    assert any(
+        e.rel == "has-alias" and e.target == "comp-alias"
+        for e in idx.related("comp-parent")
+    )
+
+
+def test_an_aliased_id_observed_but_never_declared_elsewhere_is_not_unregistered():
+    """The acceptance case: the substrate reports under the alias id, and the
+    registry's declaration (minted by `yaml-directory` under the SAME alias
+    id) is what keeps it out of `unregistered`."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+    ))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.HEALTHY, provenance=prov("checks_envelope")),
+        ),
+    ))
+    idx.finalize()
+    alias = idx.entity("comp-alias")
+    assert alias.state is State.HEALTHY
+    completeness = idx.population_completeness()
+    assert completeness["unregistered"] == 0
+    assert completeness["of"] == 1

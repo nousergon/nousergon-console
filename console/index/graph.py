@@ -458,6 +458,17 @@ class Index:
                 for c in claims
             )
         }
+        # An alias (`detail.alias_of` set, alpha-engine-config-I8779) is the
+        # SAME substrate process the parent row already counts, publishing
+        # under a second name — not a second registry row. Counting it here
+        # would inflate `of` by one per alias every time a component grows a
+        # second name, so it is subtracted from the denominator even though
+        # it carries its own DECLARATION claim and its own rendered entity.
+        alias_ids = {
+            eid for eid in declared_ids
+            if eid in self._entities and self._entities[eid].detail.get("alias_of")
+        }
+        declared_ids -= alias_ids
         unrendered_ids = sorted(eid for eid in declared_ids if eid not in self._entities)
         rendered = len(declared_ids) - len(unrendered_ids)
         of = len(declared_ids)

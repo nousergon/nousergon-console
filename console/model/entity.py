@@ -162,4 +162,11 @@ RELATIONS: dict[str, str] = {
     "blocks": "blocked-by",
     "measures": "measured-by",
     "runs-on": "hosts",
+    # §3.3 — a substrate publishing under a second name, both directions
+    # traversable from either the alias's page or the parent's
+    # (alpha-engine-config-I8779). Deliberately not symmetric under one
+    # spelling: the forward edge names which id is the ALIAS, so a reader on
+    # either page can tell the parent from the alias rather than seeing two
+    # identical "alias-of" links and having to guess.
+    "alias-of": "has-alias",
 }

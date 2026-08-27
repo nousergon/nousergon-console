@@ -82,6 +82,42 @@ adapters:
       key_pattern: "ops/checks/(?P<component_id>[^/]+)/latest.json"
       cadence: 1h                    # declared, so staleness is computable
 
+  # The SAME adapter's second access mode: the OBSERVATION half of a
+  # `declared-registry`. It HEADs one key per declared row and never lists a
+  # prefix, so the state of a declared artifact comes off a real read instead
+  # of the registry's default.
+  #
+  # The key list is BOUND to the registry, not copied here: `keys_from` names
+  # the same document/entries_field/id_field the declaration fragment names, so
+  # both halves emit the same identifiers and the two claims merge into one row
+  # (§2.5). A generated copy of the key list is a drift source with a detector
+  # bolted on, and on a config store with a size cap it is also simply too big.
+  # (`keys:` — an inline list of the same entry shape — stays supported for a
+  # deployment with a handful of them.)
+  #
+  # What is genuinely per-deployment stays declared, and stays small: which
+  # partition a cadence's run WRITES is not derivable from when it ran, and a
+  # real registry disagrees with its own rule on individual rows. Two tables,
+  # not one line per key.
+  - name: artifact-observation
+    kind: object-store
+    enabled: false
+    produces: [artifact]
+    config:
+      keys_from:
+        path: ./example/ARTIFACT_REGISTRY.yaml
+        entries_field: artifacts     # where the rows live in that document
+        id_field: s3_key_template    # the id BOTH halves key their claims by
+        bucket_from: defaults.s3_bucket   # or declare `bucket:` here instead
+      staleness_factor: 1.5
+      max_workers: 16
+      partition_by_cadence:          # cadence -> the partition its run writes
+        saturday_sf: last-trading-day-before-run
+        weekday_sf: run-date
+        eod_sf: run-date
+      partition_overrides:           # the rows whose producer disagrees
+        "backtest/{trading_day}/run_scope.json": run-date
+
   # Fleet-flavoured example (synthetic names only). Prefer checks-envelope
   # over object-store when the objects are fleet check-result envelopes: the
   # body carries status/ran_at/cadence and the entity kind is Component, not

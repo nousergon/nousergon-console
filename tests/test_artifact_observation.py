@@ -322,3 +322,178 @@ def test_the_number_is_published_in_json_and_on_the_page():
     # §5.1's evidence field: the gap is navigable, not merely counted.
     assert f"state={UNOBSERVED_VALUE}" in line or UNOBSERVED_VALUE in line
     assert "b.json</a>" in line
+
+
+# ------------------- 5. the key list is BOUND to the registry, not copied ----
+#
+# The first cut of the observation half GENERATED a 170-key `keys:` list into
+# the deployment's config from the registry, with a `--check` job proving the
+# copy still matched. Measured (alpha-engine-config-I8765): 25,799 bytes,
+# against a deployment whose entire config is one SSM parameter capped at
+# 4,096 characters — and a copy that needs a detector to stay true is a drift
+# source with a detector on it. `keys_from:` binds to the same document the
+# declaration half reads, and derives the list at fetch time.
+
+_REGISTRY = [
+    {"s3_key_template": "market_data/weekly/{date}/manifest.json",
+     "cadence": "saturday_sf", "sla_minutes_after_cron": 60},
+    {"s3_key_template": "backtest/{trading_day}/run_scope.json",
+     "cadence": "saturday_sf", "sla_minutes_after_cron": 600},
+    {"s3_key_template": "rag/corpus_freshness/latest.json",
+     "cadence": "saturday_sf", "sla_minutes_after_cron": 480},
+    {"s3_key_template": "groom/{date}/", "cadence": "weekday_sf"},
+    {"s3_key_template": "ops/pr_resting_state/{date}.json",
+     "cadence": "continuous", "interval_minutes": 60},
+]
+
+_BINDING = {
+    "path": None,  # filled per test
+    "entries_field": "artifacts",
+    "id_field": "s3_key_template",
+}
+
+_BY_CADENCE = {"saturday_sf": "last-trading-day-before-run",
+               "weekday_sf": "run-date", "eod_sf": "run-date"}
+
+_OVERRIDES = {"backtest/{trading_day}/run_scope.json": "run-date"}
+
+
+def _bound_fetch(tmp_path, store, entries=None, **config):
+    path = _registry_doc(tmp_path, entries if entries is not None else _REGISTRY)
+    return path, object_store.fetch(
+        {"bucket": "bkt",
+         "keys_from": {**_BINDING, "path": path},
+         "partition_by_cadence": _BY_CADENCE,
+         "partition_overrides": _OVERRIDES,
+         **config},
+        stat=lambda uri: store.get(uri),
+        now=NOW,
+        trading_day_checker=_weekday_checker,
+    )
+
+
+def test_keys_are_derived_from_the_registry_with_no_list_in_config(tmp_path):
+    """No `keys:` anywhere in the config, and the adapter still HEADs the
+    registry's rows — the whole point of the binding."""
+    store = {
+        "s3://bkt/market_data/weekly/2026-08-21/manifest.json": "2026-08-22T11:00:00+00:00",
+        "s3://bkt/backtest/2026-08-22/run_scope.json": "2026-08-22T16:00:00+00:00",
+    }
+    _, result = _bound_fetch(tmp_path, store)
+    states = {e.id: e.state for e in result.entities}
+    assert states == {
+        "market_data/weekly/{date}/manifest.json": "fresh",
+        "backtest/{trading_day}/run_scope.json": "fresh",
+        "rag/corpus_freshness/latest.json": "absent",
+    }
+
+
+def test_the_cadence_rule_and_its_per_key_override_are_both_declared(tmp_path):
+    """Both spellings occur in one registry: a `saturday_sf` run writes the
+    FRIDAY partition, except for the two rows whose producer writes the run
+    date. The rule is a table of cadences; the exceptions are a table of keys.
+    Neither is one config line per registry row."""
+    store = {
+        "s3://bkt/market_data/weekly/2026-08-21/manifest.json": "2026-08-22T11:00:00+00:00",
+        "s3://bkt/backtest/2026-08-22/run_scope.json": "2026-08-22T16:00:00+00:00",
+    }
+    _, result = _bound_fetch(tmp_path, store)
+    resolved = {e.id: e.detail["resolved_key"] for e in result.entities}
+    assert resolved["market_data/weekly/{date}/manifest.json"] == \
+        "market_data/weekly/2026-08-21/manifest.json"
+    assert resolved["backtest/{trading_day}/run_scope.json"] == \
+        "backtest/2026-08-22/run_scope.json"
+
+
+def test_an_entrys_own_partition_still_wins_over_both_tables(tmp_path):
+    entries = [{"s3_key_template": "x/{date}.json", "cadence": "saturday_sf",
+                "partition": "run-date"}]
+    _, result = _bound_fetch(tmp_path, {}, entries=entries)
+    (ent,) = result.entities
+    assert ent.detail["resolved_key"] == "x/2026-08-22.json"
+
+
+def test_a_prefix_row_is_not_headed_and_is_named_as_such(tmp_path):
+    """`groom/{date}/` is a prefix. HEAD on it is always 404, so looking would
+    manufacture an absence out of a key SHAPE — and the fix is a registry edit,
+    which is why it is counted apart from an unresolvable partition."""
+    _, result = _bound_fetch(tmp_path, {})
+    assert "not-an-object:1" in result.unavailable
+    assert "groom/{date}/" not in {e.id for e in result.entities}
+
+
+def test_a_continuous_templated_row_is_still_not_looked_at(tmp_path):
+    """The residue survives the redesign unchanged: `continuous` declares an
+    interval, not a calendar position, so no partition is "the last expected
+    one" and the declaration's `unobserved` stands."""
+    _, result = _bound_fetch(tmp_path, {})
+    assert "unresolved-partition:1" in result.unavailable
+    assert "ops/pr_resting_state/{date}.json" not in {e.id for e in result.entities}
+
+
+def test_an_unreadable_registry_is_failed_never_a_partial_reading(tmp_path):
+    result = object_store.fetch(
+        {"bucket": "bkt", "keys_from": {**_BINDING, "path": str(tmp_path / "nope.yaml")}},
+        stat=lambda uri: None, now=NOW, trading_day_checker=_weekday_checker)
+    assert result.status is AdapterStatus.FAILED
+    assert result.unavailable == ("keys_from",)
+
+
+def test_the_bucket_may_come_from_the_registrys_own_declaration(tmp_path):
+    path = tmp_path / "registry.yaml"
+    path.write_text(yaml.safe_dump({
+        "defaults": {"s3_bucket": "declared-bucket"},
+        "artifacts": [{"s3_key_template": "a/latest.json", "cadence": "eod_sf"}]}))
+    result = object_store.fetch(
+        {"keys_from": {**_BINDING, "path": str(path),
+                       "bucket_from": "defaults.s3_bucket"}},
+        stat=lambda uri: None, now=NOW, trading_day_checker=_weekday_checker)
+    (ent,) = result.entities
+    assert ent.provenance.source == "s3://declared-bucket/a/latest.json"
+
+
+def test_both_halves_read_the_same_document_and_the_rows_merge(tmp_path):
+    """The property the shared walk exists for (§2.5). Declaration and
+    observation are pointed at ONE document with the SAME `entries_field` and
+    `id_field`, and every observed row lands on top of its declaration rather
+    than beside it."""
+    store = {
+        "s3://bkt/market_data/weekly/2026-08-21/manifest.json": "2026-08-22T11:00:00+00:00",
+    }
+    path, observation = _bound_fetch(tmp_path, store)
+    declaration = declared_registry.fetch(
+        {"path": path, "kind": "artifact", "id_field": "s3_key_template",
+         "entries_field": "artifacts"}, now=NOW,
+        trading_day_checker=_weekday_checker)
+
+    index = Index()
+    index.add_result(declaration)
+    index.add_result(observation)
+    final = index.finalize()
+
+    declared_ids = {e.id for e in declaration.entities}
+    observed_ids = {e.id for e in observation.entities}
+    assert observed_ids and observed_ids <= declared_ids     # no orphan rows
+    assert len([e for e in final.all() if e.kind is Kind.ARTIFACT]) == len(declared_ids)
+    assert final.entity("market_data/weekly/{date}/manifest.json").state == "fresh"
+
+    cov = artifact_observation_coverage(final)
+    assert cov["of"] == len(_REGISTRY)                       # never narrowed
+    assert cov["observed"] == len(observed_ids)
+    # The two the redesign still cannot resolve stay visible as the gap.
+    assert set(cov["unobserved_ids"]) == {"groom/{date}/",
+                                          "ops/pr_resting_state/{date}.json"}
+
+
+def test_the_keys_modes_unreadable_source_paths_return_an_envelope(tmp_path):
+    """Regression: `_failed` was called by three paths in the keys mode and
+    defined by none of them (`nousergon-console-PR112`), so a misconfigured
+    fragment raised `NameError` out of the adapter instead of declaring itself
+    unable. Only reachable off boto3's absence or a malformed fragment, which
+    is why no live run found it."""
+    for config in ({"keys": [{"key": "a.json"}]},          # no bucket
+                   {"bucket": "bkt", "keys": []}):         # no keys
+        result = object_store.fetch(config, stat=lambda uri: None, now=NOW,
+                                    trading_day_checker=_weekday_checker)
+        assert result.status is AdapterStatus.FAILED
+        assert result.unavailable == ("all",)

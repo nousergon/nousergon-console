@@ -26,6 +26,16 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e ".[test]"
+      - name: Undefined names (F821) — the class that merged green here
+        # `console/adapters/object_store.py` shipped a `_failed` helper that
+        # three failure paths called and nothing defined; every one of them
+        # raised NameError instead of returning the FAILED envelope §5.5
+        # requires (alpha-engine-config-I8765). Nothing on the box hit it,
+        # because an adapter's unreadable-source path is precisely the path a
+        # healthy run never takes — so the test suite could not be the
+        # detector, and this is. One second, and it fails the PR.
+        run: ruff check --select F821 .
+
       - name: Test
         run: python -m pytest tests/ -q
       - name: Build the index against the example config (§3.6 build-time gate)

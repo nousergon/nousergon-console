@@ -12,8 +12,22 @@ the id field) comes from configuration (§2.3).
 
 Config (matches `config.example.yaml`'s `registry:` block):
 
-    path:      directory of .yaml/.yml files, one per component
-    id_field:  the key in each file holding the component id (e.g. component_id)
+    path:        directory of .yaml/.yml files, one per component
+    id_field:    the key in each file holding the component id (e.g. component_id)
+    alias_field: the key holding a list of alias ids for the row (default
+                 `alias_ids`). An alias is the same substrate process
+                 publishing under a second name — not a second component
+                 (`observability-policy.md` §2.2, alpha-engine-config-I7926) —
+                 so each alias mints its own DECLARATION claim carrying the
+                 parent row's facets/lifecycle/cadence plus
+                 `detail.alias_of: <component_id>`, and an `alias-of` edge
+                 back to the parent. Without this, an alias the substrate
+                 emits under has no declaration at all and its observation
+                 claim merges as UNREGISTERED (alpha-engine-config-I8779: five
+                 live components, `nous-ergon-ops/governance/observability.d/`
+                 rows already carry `alias_ids:` and the fleet reconciler
+                 `scripts/observability_registry.py` already honours it — only
+                 this console adapter did not).
 """
 from __future__ import annotations
 
@@ -47,6 +61,7 @@ def fetch(
 ) -> AdapterResult:
     path = config.get("path")
     id_field = config.get("id_field", "component_id")
+    alias_field = config.get("alias_field", "alias_ids")
     if not path or not os.path.isdir(path):
         # A missing registry is a FAILED adapter state, not an empty surface
         # and not an exception (§2.3). With no rows we cannot even name the
@@ -67,6 +82,7 @@ def fetch(
     # followed its own rows' bindings would become a reader of every source in
     # the fleet.
     descriptors: list[Descriptor] = []
+    alias_edges: list[Edge] = []
     known = config.get("known_drivers")
     for fname in sorted(os.listdir(path)):
         if not fname.endswith((".yaml", ".yml")):
@@ -102,15 +118,56 @@ def fetch(
                 parse_descriptor(row, str(cid), source_file=fpath,
                                  known_drivers=known)
             )
+            for alias_id in _aliases(row, alias_field):
+                entities.append(
+                    Entity(
+                        kind=Kind.COMPONENT,
+                        id=alias_id,
+                        state=state,
+                        provenance=Provenance(
+                            source=fpath,
+                            as_of=_as_of(row),
+                            evidence=f"file://{fpath}",
+                        ),
+                        facets=_facets(row),
+                        detail={
+                            **_detail(
+                                row, fname, now=now,
+                                trading_day_checker=trading_day_checker,
+                            ),
+                            "alias_of": str(cid),
+                        },
+                    )
+                )
+                alias_edges.append(
+                    Edge(source=alias_id, rel="alias-of", target=str(cid))
+                )
     return AdapterResult(
         claim_class=CLAIM_CLASS,
         fetched_at=now_iso(),
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),
-        edges=tuple(_lineage_edges(descriptors)),
+        edges=tuple(_lineage_edges(descriptors)) + tuple(alias_edges),
         descriptors=tuple(descriptors),
     )
+
+
+def _aliases(row: dict[str, Any], alias_field: str) -> list[str]:
+    """The row's declared alias ids, as strings, in file order.
+
+    A scalar under `alias_field` is accepted alongside a list — the same
+    tolerance the fleet's own `observability_registry.py` reconciler applies
+    — but never expands a string into its characters, and a blank or absent
+    field yields no aliases rather than raising (§2.3: a row missing this
+    field simply declares none).
+    """
+    raw = row.get(alias_field)
+    if not raw:
+        return []
+    if isinstance(raw, (str, bytes)):
+        raw = [raw]
+    return [str(a) for a in raw if a]
 
 
 def _lineage_edges(descriptors: list[Descriptor]) -> list[Edge]:

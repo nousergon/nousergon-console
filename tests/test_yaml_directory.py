@@ -186,6 +186,65 @@ def test_the_same_silence_under_a_flat_daily_cadence_would_false_flag(tmp_path):
     assert placed.state is State.MISSED
 
 
+# --------------------------- alias ids (alpha-engine-config-I8779) ----------
+#
+# `alias_ids:` on a registry row is the same substrate process publishing
+# under a second name (`credential_health` -> `credential_liveness`), not a
+# second component. Each alias needs its own declaration or its observation
+# claim merges as UNREGISTERED.
+
+
+def test_an_alias_mints_its_own_declaration_carrying_alias_of(tmp_path):
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-parent\nlifecycle: in-service\n"
+        "owner: brian\nalias_ids: [comp-alias-one, comp-alias-two]\n"
+    )
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    ids = {e.id for e in result.entities}
+    assert ids == {"comp-parent", "comp-alias-one", "comp-alias-two"}
+    alias = next(e for e in result.entities if e.id == "comp-alias-one")
+    assert alias.detail["alias_of"] == "comp-parent"
+    # The alias carries the parent's declared facets and lifecycle, not a
+    # blank row — it is the same declaration, addressed by a second name.
+    assert alias.facets.get("owner") == "brian"
+    assert alias.state == State.UNREPORTED
+
+
+def test_an_alias_carries_an_alias_of_edge_to_its_parent(tmp_path):
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-parent\nlifecycle: in-service\nalias_ids: [comp-alias]\n"
+    )
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert any(
+        e.source == "comp-alias" and e.rel == "alias-of" and e.target == "comp-parent"
+        for e in result.edges
+    )
+
+
+def test_a_row_with_no_alias_ids_mints_no_extra_entity(tmp_path):
+    (tmp_path / "c.yaml").write_text("component_id: comp-solo\nlifecycle: in-service\n")
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert {e.id for e in result.entities} == {"comp-solo"}
+
+
+def test_a_single_string_alias_is_accepted_alongside_a_list(tmp_path):
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-parent\nlifecycle: in-service\nalias_ids: comp-alias\n"
+    )
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert {e.id for e in result.entities} == {"comp-parent", "comp-alias"}
+
+
+def test_a_custom_alias_field_is_honoured(tmp_path):
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-parent\nlifecycle: in-service\nother_names: [comp-alias]\n"
+    )
+    result = yaml_directory.fetch(
+        {"path": str(tmp_path), "id_field": "component_id", "alias_field": "other_names"}
+    )
+    assert {e.id for e in result.entities} == {"comp-parent", "comp-alias"}
+
+
 def test_a_genuine_weekday_miss_is_still_caught(tmp_path):
     """Widening for the calendar must not blind the check: a weekday component
     last seen two full trading weeks ago is still MISSED."""

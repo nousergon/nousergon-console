@@ -132,6 +132,36 @@ def test_a_missing_registry_directory_is_not_a_collision(tmp_path):
     assert check(config) == []
 
 
+# ------------------------ alias ids (alpha-engine-config-I8779) -------------
+
+
+def test_an_alias_colliding_with_another_rows_id_is_a_collision(tmp_path):
+    config = {"registry": _registry(tmp_path, "fleet", {
+        "a.yaml": {"component_id": "comp-a", "alias_ids": ["comp-b"]},
+        "b.yaml": {"component_id": "comp-b"},
+    })}
+    collisions = check(config)
+    assert [c.identifier for c in collisions] == ["comp-b"]
+    with pytest.raises(DeclaredNamespaceCollision):
+        assert_unique(config)
+
+
+def test_two_rows_aliasing_the_same_id_is_a_collision(tmp_path):
+    config = {"registry": _registry(tmp_path, "fleet", {
+        "a.yaml": {"component_id": "comp-a", "alias_ids": ["shared-alias"]},
+        "b.yaml": {"component_id": "comp-b", "alias_ids": ["shared-alias"]},
+    })}
+    assert [c.identifier for c in check(config)] == ["shared-alias"]
+
+
+def test_an_alias_with_no_collision_passes(tmp_path):
+    config = {"registry": _registry(tmp_path, "fleet", {
+        "a.yaml": {"component_id": "comp-a", "alias_ids": ["comp-a-alias"]},
+        "b.yaml": {"component_id": "comp-b"},
+    })}
+    assert check(config) == []
+
+
 def test_a_custom_id_field_is_honoured(tmp_path):
     """The id field is configuration (§2.3) — a check hardcoding
     `component_id` would silently pass on any registry that does not use it."""

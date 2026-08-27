@@ -23,13 +23,29 @@ DECLARATION claim from this adapter, merged by identifier (§2.5) against an
 OBSERVATION claim from `object-store` pointed at the same keys, is what turns
 "never showed up in the listing" into a rendered fact rather than a silent
 absence. When nothing observes a declared identifier, the single surviving
-claim IS this adapter's own base state — deliberately the string `"absent"`,
-the same token `drivers/object_store.py`'s own `object-store` driver already
-uses for "declared and not there" (§5.1's second half: an Artifact carries the
-source's own value verbatim, never the thirteen). `console-policy.md`'s
-declared-only state guard (§8.3) does not apply here: that guard is scoped to
+claim IS this adapter's own base state — and that state is
+`kinds.UNOBSERVED_VALUE` (`"unobserved"`), never `"absent"`
+(alpha-engine-config-I8765).
+
+**Why the default may not be an exception state.** `absent` means *the
+substrate does not have it*, and `observability-policy.md` §8.3 permits that
+claim only off a successful discovery pass — `index/graph.py::_reconcile`
+enforces exactly this for Components. A declaration has looked at nothing, so
+its default is what EVERY row gets when the observation half is missing:
+defaulting it to `absent` converts "nobody checked" into "it is not there" for
+the entire registry at once. Measured on the live surface 2026-08-27: 177 of
+508 exception rows were this one config value. `default_state` is now
+REFUSED at build time when it names any `EXCEPTION_VALUES` member
+(`config.py::validate_config`), naming the offending fragment — a guard rather
+than a convention, because the value that produced the 177 was a config edit
+nothing could have flagged.
+
+§5.1's second half still applies: an Artifact carries the source's own value
+verbatim, never the thirteen. `console-policy.md`'s declared-only state guard
+(§8.3) does not apply here either: that guard is scoped to
 `COMPONENT_STATE_KINDS` (Component/Run) only, so a non-component kind's raw
-state is free to mean whatever its own domain does.
+state is free to mean whatever its own domain does — `unobserved` is the
+raw-value sibling of the `UNREPORTED` a Component in this position renders.
 
 **Why Decision entries need no merge at all.** `OBSERVATION_REGISTRY.yaml`'s
 gate value (gated-off/gated-on/always-on) *is* the fact — nothing else
@@ -54,7 +70,13 @@ from .. import calendar_cadence
 from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
-from ..model.kinds import COMPONENT_STATE_KINDS, DECLARED_LIFECYCLE_STATES, Kind, State
+from ..model.kinds import (
+    COMPONENT_STATE_KINDS,
+    DECLARED_LIFECYCLE_STATES,
+    UNOBSERVED_VALUE,
+    Kind,
+    State,
+)
 from ..trading_calendar import TradingDayChecker
 
 #: A registry document is a DECLARATION (§2.5): it says what is EXPECTED to
@@ -103,7 +125,9 @@ def fetch(
 
     id_field = config.get("id_field", "id")
     state_field = config.get("state_field")
-    default_state = config.get("default_state", "declared")
+    # "declared and nothing looked" — never an EXCEPTION_VALUES member, and
+    # `config.validate_config` refuses a deployment that configures one.
+    default_state = config.get("default_state", UNOBSERVED_VALUE)
     entries_field = config.get("entries_field")
 
     try:

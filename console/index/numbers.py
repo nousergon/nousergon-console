@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..model.kinds import State
+from ..model.envelope import ClaimClass
+from ..model.kinds import UNOBSERVED_VALUE, Kind, State
 from ..render.panes import orphan_counts as _pane_orphan_counts
 
 #: Rendered values that ALREADY say "this is stale" — a row carrying one of
@@ -38,8 +39,16 @@ _DECLARED_LIFECYCLE_STATES = frozenset(
 _DISCLOSED_COMPONENT_STATES = frozenset(
     {State.MISSED, State.STALLED, State.UNREPORTED, State.ABSENT}
 ) | _DECLARED_LIFECYCLE_STATES
+#: `unobserved` joins them (alpha-engine-config-I8765) for the same reason the
+#: DECLARED lifecycle states are here: a row saying "nothing has looked at me"
+#: has disclosed the provenance of its own age in the strongest terms available
+#: — it is not claiming freshness at all. Counting it as a staleness-honesty
+#: violation would make §9.6 unclearable by honesty (the only way down would be
+#: to hide the row), and it is already counted, by name, as the coverage gap it
+#: actually is (`artifact_observation_coverage`).
 _DISCLOSED_VALUES = frozenset(
-    {"stale", "no-freshness-stamp", "no-cadence-declared", "unreadable"}
+    {"stale", "no-freshness-stamp", "no-cadence-declared", "unreadable",
+     UNOBSERVED_VALUE}
 )
 
 
@@ -207,4 +216,45 @@ def _refused(reason: str, unauditable: dict[str, str] | None = None) -> dict[str
         "computable": False,
         "reason": reason,
         "unauditable": dict(sorted((unauditable or {}).items())),
+    }
+
+
+def artifact_observation_coverage(index) -> dict[str, object]:
+    """How many DECLARED artifacts anything actually looked at.
+
+    alpha-engine-config-I8765. A declared registry says what SHOULD exist; only
+    an observation can say whether it does. Where the observation half is
+    missing, the honest rendering of the row is `unobserved` — and the number
+    that must then exist is *how many rows are in that position*, or the fix
+    for 177 false findings is indistinguishable from having quietly stopped
+    looking. §5.3: the denominator is the whole declared population, inline,
+    and it never shrinks when coverage improves.
+
+    `observed` counts a declared artifact carrying at least one REACHABLE
+    observation claim. An unreachable source is speaking about itself, not
+    about the artifact (`index/merge.py::Claim.reachable`), so it is not
+    coverage — it is the same blindness wearing a different hat.
+    """
+    declared: list[str] = []
+    observed: list[str] = []
+    for ent in index.of_kind(Kind.ARTIFACT):
+        claims = index.claims_for(ent.id)
+        if not any(c.claim_class is ClaimClass.DECLARATION for c in claims):
+            continue
+        declared.append(ent.id)
+        if any(c.claim_class is ClaimClass.OBSERVATION and c.reachable
+               for c in claims):
+            observed.append(ent.id)
+    if not declared:
+        return _refused(
+            "no declared artifact rows — an empty population renders `0 of 0`, "
+            "which reads exactly like full coverage (§5.3)"
+        )
+    unobserved = sorted(set(declared) - set(observed))
+    return {
+        "count": len(observed),
+        "of": len(declared),
+        "observed": len(observed),
+        "unobserved_ids": unobserved,
+        "computable": True,
     }

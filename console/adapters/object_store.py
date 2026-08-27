@@ -24,6 +24,29 @@ deploying operator has configured as this key's reader — which derives the
 inferred: this adapter has no way to discover who reads an object-store key on
 its own, only what the key pattern's own named groups say (§2.3).
 
+**Two access modes, one source shape** (`docs/adapters.md`'s boundary test,
+step 3 — fold the capability in rather than forking the adapter). The default
+mode LISTS a prefix and matches keys against ``key_pattern``. The second mode
+(``keys:``) HEADs a list of DECLARED keys, one call each, and never lists
+anything: it is the OBSERVATION half of a `declared-registry`
+(alpha-engine-config-I8765), pointed at the same identifiers so the index
+merges declaration and observation into one row (§2.5) and a real read decides
+`fresh`/`stale`/`absent`.
+
+- **A prefix listing was not an option here.** The registry's 183 keys sit
+  under dozens of dated prefixes; enumerating them is the same cost class as
+  the 74.5s `pipeline-reliability` fetch (alpha-engine-config-I7424) against a
+  180s refresh budget. A HEAD per key is bounded, parallel and cheap.
+- **The entity id is the key AS DECLARED — the template, not the resolved
+  key.** §3.2: the identifier is the URL, so an id carrying today's date would
+  break every saved link nightly and would never merge with the declaration
+  claim, which is keyed by the template. The resolved key is the EVIDENCE.
+- **A key that cannot be honestly resolved is not looked at.** No claim is
+  emitted, the row stays declared-and-`unobserved`, and it shows up in
+  `index/numbers.py::artifact_observation_coverage` as the coverage gap it is.
+  HEADing a key the fleet never writes would render its 404 as a finding, which
+  is the defect this whole slice exists to remove.
+
 A declared ``question`` (`console-policy.md` §4.4, `nousergon-console#61`) is
 carried as a synthetic ``text`` declared field, exactly matching the
 ``s3-records`` adapter's own convention — the two are the right shape to
@@ -36,14 +59,19 @@ no new rendering code either adapter.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from .. import calendar_cadence
+from ..freshness import ABSENT as _ABSENT, NO_STAMP as _NO_STAMP, freshness as _freshness
 from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from ..aws import client as _aws_client
+from ..drivers.context import default_object_stat as _default_stat
+from ..trading_calendar import TradingDayChecker
 
 #: Object listings are an OBSERVATION (§2.5) — what is there and how fresh.
 CLAIM_CLASS = ClaimClass.OBSERVATION
@@ -55,13 +83,22 @@ produces = ("component", "run", "artifact")
 StoredObject = tuple[str, str | None]
 #: A lister takes (bucket, prefix) and returns the objects under it. Injectable.
 StoreLister = Callable[[str, str], list[StoredObject]]
+#: A stat takes one `s3://bucket/key` URI and returns its last-modified stamp,
+#: or `None` when the object is not there. Injectable, and shared verbatim with
+#: `drivers/object_store.py` (`drivers/context.py::default_object_stat`) — one
+#: HEAD implementation, not a second one that could disagree about a 404.
+KeyStat = Callable[[str], "str | None"]
 
 
 def fetch(
     config: dict[str, Any],
     lister: StoreLister | None = None,
     now: datetime | None = None,
+    stat: KeyStat | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
 ) -> AdapterResult:
+    if config.get("keys") is not None:
+        return _fetch_declared_keys(config, stat, now, trading_day_checker)
     bucket = config.get("bucket")
     prefix = config.get("prefix", "")
     pattern = config.get("key_pattern")
@@ -172,27 +209,14 @@ def _state(
     staleness_factor: float,
     now: datetime,
 ) -> str:
-    """Staleness is rendered, never inferred by the reader (§5.2).
-
-    This adapter emits **Artifacts**, which do not resolve to component states,
-    so §5.1's second half applies and the row carries the value itself. That is
-    what keeps the thirteen honest: forcing "this object has no cadence declared"
-    into a component vocabulary is precisely the pressure that produced the
-    `UNKNOWN` fall-through observability-policy.md §8.3 forbids by name.
-
-    The three not-computable cases stay THREE facts, per §5.5 — no stamp, no
-    declared cadence and an unparseable stamp are different findings with
-    different fixes, and collapsing them loses the fix."""
-    if last_modified is None:
-        return "no-freshness-stamp"
-    if cadence_seconds is None:
-        return "no-cadence-declared"
-    try:
-        ts = datetime.fromisoformat(last_modified.replace("Z", "+00:00"))
-    except ValueError:
-        return "unreadable"
-    age = (now - ts).total_seconds()
-    return "fresh" if age <= cadence_seconds * staleness_factor else "stale"
+    """The shared verdict (`console/freshness.py`), with THIS reader's own
+    "missing" token: a LISTING returned the key, so the object exists and could
+    not be dated — `no-freshness-stamp`, which is a different finding from the
+    keys mode's `absent` (we HEADed and it is not there). Staleness is rendered,
+    never inferred by the reader (§5.2).
+    """
+    return _freshness(last_modified, cadence_seconds, staleness_factor, now,
+                      missing=_NO_STAMP)
 
 
 def _default_lister() -> StoreLister | None:
@@ -242,3 +266,139 @@ def _parse_cadence(cadence: Any) -> float | None:
         return float(s[:-1]) * mult
     except ValueError:
         return None
+
+
+# ------------------------------------------------------------ keys mode ----
+
+def _fetch_declared_keys(
+    config: dict[str, Any],
+    stat: KeyStat | None,
+    now: datetime | None,
+    trading_day_checker: TradingDayChecker | None,
+) -> AdapterResult:
+    """HEAD each declared key — the OBSERVATION half of a declared registry.
+
+    Never lists. Every entity carries the key AS DECLARED as its id, so the
+    claim merges with the declaration keyed the same way (§2.5), and carries
+    the resolved key as its evidence.
+    """
+    bucket = config.get("bucket")
+    entries = config.get("keys") or []
+    if not bucket or not entries:
+        return _failed(config, ("all",))
+    if stat is None:
+        stat = _default_stat()
+        if stat is None:
+            # boto3 not installed — declare unable rather than silently zero
+            # (§5.5). Every declared row then stays `unobserved`, which is the
+            # honest answer and is counted as a coverage gap.
+            return _failed(config, ("stat",))
+
+    now = now or datetime.now(timezone.utc)
+    default_factor = float(config.get("staleness_factor", 1.5))
+    default_resolver = str(config.get("partition", calendar_cadence.RUN_DATE))
+    date_format = str(config.get("date_format", calendar_cadence.DEFAULT_DATE_FORMAT))
+
+    resolved: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+    unresolved = 0
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("key"):
+            unresolved += 1
+            continue
+        detail: dict[str, Any] = {}
+        calendar_cadence.apply_declared_cadence(
+            detail, entry, now=now, trading_day_checker=trading_day_checker)
+        key = calendar_cadence.resolve_key_template(
+            str(entry["key"]),
+            cadence=entry.get("cadence"),
+            resolver=str(entry.get("partition", default_resolver)),
+            now=now,
+            trading_day_checker=trading_day_checker,
+            date_format=str(entry.get("date_format", date_format)),
+        )
+        if key is None:
+            # Declared, and not honestly resolvable to a partition. Emitting
+            # nothing leaves the declaration's `unobserved` standing.
+            unresolved += 1
+            continue
+        resolved.append((entry, key, detail))
+
+    stamps, unreadable = _stat_all(stat, bucket, [k for _, k, _ in resolved],
+                                   int(config.get("max_workers", 8)))
+
+    entities: list[Entity] = []
+    for entry, key, detail in resolved:
+        if key in unreadable:
+            # The source could not be read for this key. Skipping is what keeps
+            # a transient error from rendering as a fleet finding (§2.3); the
+            # adapter says so in `unavailable` instead.
+            continue
+        cadence_minutes = detail.get("cadence_minutes")
+        cadence_seconds = float(cadence_minutes) * 60.0 if cadence_minutes else None
+        last_modified = stamps.get(key)
+        detail["resolved_key"] = key
+        if entry.get("cadence"):
+            detail["declared_cadence"] = entry["cadence"]
+        entities.append(Entity(
+            kind=Kind.ARTIFACT,
+            id=str(entry["key"]),  # the DECLARED key — the merge identifier (§3.2)
+            state=_freshness(
+                last_modified, cadence_seconds,
+                float(entry.get("staleness_factor", default_factor)),
+                now, missing=_ABSENT,
+            ),
+            provenance=Provenance(
+                source=f"s3://{bucket}/{key}",
+                as_of=last_modified,
+                evidence=f"s3://{bucket}/{key}",
+            ),
+            facets={"repo": bucket},
+            detail=detail,
+        ))
+
+    unavailable: list[str] = []
+    if unresolved:
+        unavailable.append(f"unresolved-partition:{unresolved}")
+    if unreadable:
+        unavailable.append(f"unreadable-keys:{len(unreadable)}")
+    return AdapterResult(
+        claim_class=CLAIM_CLASS,
+        fetched_at=now_iso(),
+        name=config.get("_name", name),
+        status=AdapterStatus.OK,
+        entities=tuple(entities),
+        unavailable=tuple(unavailable),
+    )
+
+
+def _stat_all(
+    stat: KeyStat, bucket: str, keys: list[str], max_workers: int,
+) -> tuple[dict[str, str | None], set[str]]:
+    """`(key -> stamp-or-None, keys the source could not be read for)`.
+
+    Parallel because the whole point of HEAD-per-key over a prefix listing is a
+    bounded, cheap fetch: 183 sequential round trips would put this adapter in
+    the cost class it was chosen to avoid. `None` is a RESULT (the object is not
+    there); an exception is the source failing, which is a different fact and is
+    reported as such rather than rendered as absence.
+    """
+    stamps: dict[str, str | None] = {}
+    unreadable: set[str] = set()
+
+    def one(key: str) -> tuple[str, str | None, bool]:
+        try:
+            return key, stat(f"s3://{bucket}/{key}"), True
+        except Exception:  # noqa: BLE001 - a state, never an exception (§2.3)
+            return key, None, False
+
+    if max_workers > 1 and len(keys) > 1:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(keys))) as pool:
+            results = list(pool.map(one, keys))
+    else:
+        results = [one(k) for k in keys]
+    for key, stamp, ok in results:
+        if ok:
+            stamps[key] = stamp
+        else:
+            unreadable.add(key)
+    return stamps, unreadable

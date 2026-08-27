@@ -31,6 +31,7 @@ from typing import Any
 
 from ..index.graph import Index
 from ..index.milestones import evaluate as evaluate_milestones
+from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..model.entity import Edge, Entity
 from ..model.kinds import STATE_FILTER, State
 from ..model.fields import parse as parse_fields
@@ -234,6 +235,12 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
         "surface_liveness": index.surface_liveness(),                   # §9.7
         "onboarding_cost": index.onboarding_cost(),                    # §9.8
         "claim_conflicts": aggregate(len(conflicts), len(entities)),   # §9.9
+        # Not one of the nine: the coverage number that keeps `unobserved`
+        # honest (alpha-engine-config-I8765). A declared registry with no
+        # observation half wired renders every row `unobserved`; without this
+        # number, that reads the same as a fleet nothing is wrong with.
+        "artifact_observation_coverage": _named_members(
+            _artifact_observation_coverage(index), "unobserved_ids"),
         # Not one of the nine, but the same denominator-inline discipline —
         # kept here rather than dropped, since a prior response reads it.
         "not_healthy": aggregate(len(exceptions), len(entities)),

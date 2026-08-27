@@ -131,12 +131,41 @@ COMPONENT_STATE_KINDS: frozenset[Kind] = frozenset({Kind.COMPONENT, Kind.RUN})
 #: exception-first landing view alongside the non-HEALTHY component states.
 #: Lower-cased at comparison, so an adapter's casing is not load-bearing.
 #:
-#: `"absent"` is `drivers/object_store.py`'s own token for "declared and not
-#: there" (a component's own artifact binding, confirmed missing) and
-#: `adapters/declared_registry.py`'s unmerged-claim default for a registered
-#: artifact nothing has observed — a load-bearing artifact that never showed
-#: up is exactly what §4.3's exception list exists to surface, and it was
-#: reaching the landing page's underlying set without ever appearing on it.
+#: `"absent"` is the token both S3 readers use for "we LOOKED and it is not
+#: there" — `drivers/object_store.py` (a component's own artifact binding) and
+#: `adapters/object_store.py`'s keys mode (a HEAD per declared key). A
+#: load-bearing artifact that never showed up is exactly what §4.3's exception
+#: list exists to surface, and it was reaching the landing page's underlying
+#: set without ever appearing on it.
+#:
+#: It is NO LONGER a declaration's default (alpha-engine-config-I8765): a
+#: registry that has run no discovery pass may not assert absence. See
+#: `UNOBSERVED_VALUE` below.
 EXCEPTION_VALUES: frozenset[str] = frozenset({
     "stale", "no-freshness-stamp", "no-cadence-declared", "unreadable", "absent",
 })
+
+#: The raw value a DECLARATION-only row carries: "this is declared to exist and
+#: nothing has looked" (alpha-engine-config-I8765).
+#:
+#: Deliberately NOT in `EXCEPTION_VALUES`, and the whole point of the token.
+#: `absent` means *the substrate does not have it* — a finding, and one
+#: `observability-policy.md` §8.3 permits ONLY as the result of a successful
+#: discovery pass ("ABSENT requires a successful opposite claim class"). A
+#: declared-registry with no observation half wired has run no such pass, so
+#: defaulting its rows to `absent` renders absence-of-evidence as evidence-of-
+#: absence: measured 2026-08-27, 177 of the live surface's 508 exception rows
+#: were artifacts nobody had ever looked for.
+#:
+#: `unobserved` is the honest answer and it is a COVERAGE gap, not a fleet
+#: exception — counted by `index/numbers.py::artifact_observation_coverage`
+#: and disclosed to §9.6 (`numbers._DISCLOSED_VALUES`) so a row whose age
+#: nothing measured is not also read as a surface lying about freshness. It is
+#: the raw-value sibling of `UNREPORTED`, which is what a Component in the same
+#: position already renders.
+UNOBSERVED_VALUE = "unobserved"
+
+#: Config guard for `declared-registry` (`config.py::validate_config`): a
+#: declaration may never DEFAULT a row into an exception state, because the
+#: default is by construction what a row gets when nothing observed it.
+DECLARED_DEFAULT_STATE_FORBIDDEN: frozenset[str] = EXCEPTION_VALUES

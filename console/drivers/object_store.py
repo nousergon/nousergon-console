@@ -24,6 +24,7 @@ from typing import Any, Callable
 from ..model.descriptor import Binding
 from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
+from ..freshness import ABSENT as _ABSENT, freshness as _freshness_of
 from .base import Cost, DriverResult
 from .context import default_object_stat as _default_stat
 
@@ -107,18 +108,8 @@ def _cadence_seconds(spec: dict[str, Any]) -> float | None:
 
 def _freshness(last_modified: str | None, cadence: float | None,
                factor: float, now: datetime) -> str:
-    """§5.1's second half: an artifact does not resolve to a component state.
-
-    The three not-computable cases stay three facts (§5.5) — no stamp, no
-    declared cadence and an unparseable stamp are different findings with
-    different fixes, and collapsing them loses the fix.
+    """The shared verdict (`console/freshness.py`), with THIS reader's own
+    "missing" token: a stat that returned nothing means the object is not
+    there, which is a different finding from a listing that could not date one.
     """
-    if last_modified is None:
-        return "absent"
-    if cadence is None:
-        return "no-cadence-declared"
-    try:
-        ts = datetime.fromisoformat(str(last_modified).replace("Z", "+00:00"))
-    except ValueError:
-        return "unreadable"
-    return "fresh" if (now - ts).total_seconds() <= cadence * factor else "stale"
+    return _freshness_of(last_modified, cadence, factor, now, missing=_ABSENT)

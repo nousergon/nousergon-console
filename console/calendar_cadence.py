@@ -53,6 +53,7 @@ trading calendar all return ``None`` — "unauditable", never "assume fresh".
 """
 from __future__ import annotations
 
+import re as _re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -212,3 +213,121 @@ def apply_declared_cadence(
     )
     if minutes is not None:
         detail["cadence_minutes"] = minutes
+
+
+# ------------------------------------------------- last expected partition --
+#
+# alpha-engine-config-I8765. A declared key template like
+# `signals/{trading_day}/signals.json` names a FAMILY of objects, one per
+# partition. To observe it — to HEAD one key and get a real fresh/stale/absent
+# answer rather than defaulting the whole row to a finding — the console must
+# resolve the placeholder to the LAST PARTITION THE DECLARATION EXPECTS.
+#
+# That is two steps, and keeping them separate is what makes the rule
+# auditable: (1) when did this cadence last fire, (2) which partition does a
+# run of that cadence write. The second is NOT derivable from the first, and
+# assuming it is manufactures absences at scale. Measured against the live
+# bucket 2026-08-27: every `saturday_sf` artifact is keyed by the FRIDAY, not
+# by the Saturday its pipeline runs on — `market_data/weekly/2026-08-22/` does
+# not exist at all — while two rows of the same cadence are keyed by the run
+# date itself. So the mapping is declared per key, from a closed vocabulary,
+# and never inferred from the cadence alone.
+
+#: The partition a run writes, relative to the run itself. Closed, add-by-PR.
+RUN_DATE = "run-date"
+LAST_TRADING_DAY_BEFORE_RUN = "last-trading-day-before-run"
+PARTITION_RESOLVERS = frozenset({RUN_DATE, LAST_TRADING_DAY_BEFORE_RUN})
+
+#: Placeholders a partition date may fill. A template carrying any OTHER
+#: placeholder is left unresolved (`None`) rather than filled with a date that
+#: is not what the name says — an artifact keyed by ticker or model version is
+#: not a partition, and a wrong key HEADs to a false `absent`.
+PARTITION_PLACEHOLDERS = frozenset({"date", "trading_day", "partition"})
+
+_PLACEHOLDER = _re.compile(r"\{(\w+)\}")
+
+#: ISO-8601 is the fleet's own partition spelling and the only one this
+#: resolves today; a deployment whose partitions are `YYYYMMDD` declares
+#: `date_format` rather than getting a second resolver.
+DEFAULT_DATE_FORMAT = "%Y-%m-%d"
+
+
+def last_expected_run_date(
+    cadence: str | None,
+    *,
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> date | None:
+    """The most recent date this cadence was expected to FIRE, before `now`.
+
+    `None` — never a guess — for `continuous` (an interval, not a calendar
+    position: today's partition may legitimately not exist yet and yesterday's
+    is legitimately old, so neither is "the last expected one"), for
+    `event_driven` (no schedule by declaration), for an unknown symbol, and for
+    a trading-day symbol with no reachable calendar.
+    """
+    if not cadence:
+        return None
+    symbol = str(cadence).strip().lower()
+    now = now or datetime.now(timezone.utc)
+    if symbol == SATURDAY_SF:
+        return _most_recent_weekday_before(now.date(), _SATURDAY)
+    if symbol in (WEEKDAY_SF, EOD_SF):
+        checker = trading_day_checker or default_trading_day_checker()
+        if checker is None:
+            return None
+        return _most_recent_trading_day_before(now.date(), checker)
+    return None
+
+
+def resolve_partition_date(
+    cadence: str | None,
+    resolver: str,
+    *,
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+) -> date | None:
+    """The partition date the last expected run of `cadence` wrote."""
+    run_date = last_expected_run_date(
+        cadence, now=now, trading_day_checker=trading_day_checker)
+    if run_date is None:
+        return None
+    if resolver == RUN_DATE:
+        return run_date
+    if resolver == LAST_TRADING_DAY_BEFORE_RUN:
+        checker = trading_day_checker or default_trading_day_checker()
+        if checker is None:
+            return None
+        return _most_recent_trading_day_before(run_date, checker)
+    return None  # an unknown resolver is unauditable, never a default
+
+
+def resolve_key_template(
+    template: str,
+    *,
+    cadence: str | None,
+    resolver: str = RUN_DATE,
+    now: datetime | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
+    date_format: str = DEFAULT_DATE_FORMAT,
+) -> str | None:
+    """`signals/{trading_day}/signals.json` -> `signals/2026-08-21/signals.json`.
+
+    Returns the template unchanged when it carries no placeholder, and `None`
+    when it carries one that cannot be honestly filled — an unresolvable
+    cadence, an unknown resolver, or a placeholder that does not name a
+    partition. `None` means "do not look", which leaves the row declared and
+    unobserved: a visible coverage gap, and strictly better than HEADing a key
+    the fleet never writes and rendering the 404 as a finding.
+    """
+    names = set(_PLACEHOLDER.findall(template))
+    if not names:
+        return template
+    if names - PARTITION_PLACEHOLDERS:
+        return None
+    partition = resolve_partition_date(
+        cadence, resolver, now=now, trading_day_checker=trading_day_checker)
+    if partition is None:
+        return None
+    stamp = partition.strftime(date_format)
+    return _PLACEHOLDER.sub(stamp, template)

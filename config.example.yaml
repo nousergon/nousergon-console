@@ -660,7 +660,49 @@ adapters:
       path: ./example/artifact-registry.yaml   # one YAML doc: a list or an id-keyed mapping
       kind: artifact
       id_field: key                            # each entry's S3 key, matching object-store's own id
-      default_state: absent                    # the honest answer when nothing else claims this key
+      # What a row carries when NOTHING observed it. It may not be an
+      # EXCEPTION_VALUES member — `config.py::validate_config` refuses the
+      # build and names this fragment. `absent` here asserted "the substrate
+      # does not have it" for every declared key off no reading at all; on the
+      # fleet's own surface that was 177 of 508 exception rows
+      # (alpha-engine-config-I8765). `unobserved` is the default and needs no
+      # line at all; it is spelled out here because this is the example that
+      # got it wrong.
+      default_state: unobserved
+
+  # The OBSERVATION half of the registry above — the same identifiers, read.
+  # `keys:` HEADs each declared key instead of listing a prefix, which is what
+  # makes this affordable over a registry whose objects live under dozens of
+  # dated prefixes (a listing is the cost class the refresh budget cannot
+  # absorb). Ids are the keys AS DECLARED, so declaration and observation merge
+  # into one row (§2.5) and the state is a real read.
+  - name: artifact-observation
+    kind: object-store
+    enabled: false
+    produces: [artifact]
+    config:
+      bucket: your-research-bucket
+      staleness_factor: 1.5
+      max_workers: 8
+      # Default for keys that do not name their own. `run-date` = the partition
+      # is the date the cadence last fired; `last-trading-day-before-run` = the
+      # run writes the previous trading day (a Saturday pipeline publishing
+      # Friday's data). Never inferred from the cadence: both spellings occur
+      # in one registry, and guessing manufactures 404s that render as findings.
+      partition: run-date
+      keys:
+        # A literal key: no placeholder, nothing to resolve.
+        - key: reference/price_cache/_freshness.json
+          cadence: eod_sf                      # symbolic cadences translate exactly
+          sla_minutes_after_cron: 120          #   as they do for declared-registry
+        # A partitioned key: `{date}`, `{trading_day}` and `{partition}` are
+        # filled with the last expected partition. Any other placeholder is
+        # left unresolved and the row stays `unobserved` — a visible coverage
+        # gap, never a HEAD against a key the source never writes.
+        - key: signals/{trading_day}/signals.json
+          cadence: saturday_sf
+          partition: last-trading-day-before-run
+          sla_minutes_after_cron: 60
 
   - name: observation-registry
     kind: declared-registry

@@ -24,6 +24,22 @@ under.
 |---|---|---|---|
 | `DECLARATION` | a registry | existence, `lifecycle`, owner, authority tier, declared cadence | `yaml-directory`, `declared-registry` |
 | `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query` |
+
+`object-store` has two access modes, one source shape (the boundary test below,
+step 3): a **prefix listing** matched against `key_pattern`, and a **`keys:`
+list** HEADed one call each. The second is the OBSERVATION half of a
+`declared-registry` (alpha-engine-config-I8765) — same identifiers, so the two
+claims merge into one row and the state comes off a real read instead of a
+default. It resolves `{date}` / `{trading_day}` / `{partition}` to the last
+expected partition from the key's declared cadence plus a declared `partition`
+resolver (`run-date` or `last-trading-day-before-run`); a key it cannot resolve
+honestly is **not looked at**, leaving the declaration's `unobserved` standing
+rather than HEADing a key nothing writes and rendering the 404 as a finding.
+
+A `declared-registry`'s `default_state` may not be an `EXCEPTION_VALUES` member.
+That default is what every row NOTHING observed carries, so an exception there
+asserts a finding about each of them off no reading at all; `config.py::
+validate_config` refuses the build and names the fragment.
 | `DISCOVERY` | a substrate enumeration | existence, and little else | `local-units`, `cloudwatch-metrics` |
 
 ## Drivers (`console/drivers/__init__.py::DRIVERS`)

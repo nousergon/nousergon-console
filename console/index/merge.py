@@ -131,7 +131,7 @@ def merge(claims: list[Claim]) -> Entity:
     # The freshest as-of across claims is the honest one: it is the most recent
     # moment any source could speak to this entity. Its evidence link travels
     # with it, so the row's "how do you know" and "go look" stay consistent.
-    freshest = _freshest(ordered)
+    freshest = _freshest(ordered, fallback=state_extras.winner)
     field_sources.setdefault("as_of", freshest)
 
     if conflicts and isinstance(state, State) and state not in DECLARED_ONLY:
@@ -278,14 +278,23 @@ def _same_rank_as_winner(
     return False
 
 
-def _freshest(ordered: list[Claim]) -> Provenance:
-    """The provenance carrying the most recent as-of, else the best-ranked.
+def _freshest(ordered: list[Claim], fallback: Provenance | None = None) -> Provenance:
+    """The provenance carrying the most recent as-of, else the state's own.
 
     A merged row's as-of is when the underlying fact was last true according to
     *some* source (§5.1), so taking the highest-ranked claim's stamp would
     report a registry file's absent freshness over live telemetry's.
+
+    **When NO claim carries an as-of**, the row falls back to the provenance of
+    whichever claim won the STATE, not to the best-ranked claim
+    (alpha-engine-config-I8765). The case is not hypothetical: an artifact a
+    HEAD proved missing has no last-modified stamp and neither does the
+    registry that declared it, so the row rendered `absent` — an observation —
+    while naming the registry YAML as its source. §5.1's source field answers
+    "how do you know", and for an absence the answer is the reader that looked,
+    never the document that expected it.
     """
     stamped = [c for c in ordered if c.entity.provenance.as_of]
     if not stamped:
-        return ordered[0].entity.provenance
+        return fallback or ordered[0].entity.provenance
     return max(stamped, key=lambda c: c.entity.provenance.as_of or "").entity.provenance

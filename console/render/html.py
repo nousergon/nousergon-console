@@ -24,7 +24,14 @@ from datetime import datetime, timezone
 from ..index.graph import Index
 from ..model.entity import Entity
 from ..model.fields import Field, format_value, parse as parse_fields
-from ..model.kinds import EXCEPTION_VALUES, STATE_FILTER, Kind, State
+from ..index.numbers import artifact_observation_coverage
+from ..model.kinds import (
+    EXCEPTION_VALUES,
+    STATE_FILTER,
+    UNOBSERVED_VALUE,
+    Kind,
+    State,
+)
 from ..server.router import path_for_entity, path_for_list
 
 #: Component states that mean "look at me" on the exception-first landing view
@@ -351,6 +358,7 @@ def landing_page(index: Index) -> str:
 <h2>waiting on Brian</h2>
 {_table(queue)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
+{observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}
 </body></html>"""
 
@@ -490,6 +498,37 @@ def _milestone_term_row(clause: dict, term: dict) -> str:
         f"<td>{as_of}</td><td>{evidence}</td>"
         "</tr>"
     )
+#: Above this many members, the inline enumeration stops being navigation and
+#: starts being the page. The filtered listing link is complete either way, so
+#: nothing is hidden — only the prose is bounded.
+_INLINE_MEMBER_LIMIT = 25
+
+
+def observation_coverage_line(index: Index) -> str:
+    """Declared artifacts anything actually LOOKED at (alpha-engine-config-I8765).
+
+    Not one of §9's nine. It exists because `unobserved` — the honest state of a
+    declared row with no observation half — is deliberately not an exception,
+    and a state that is not an exception is invisible on this view. Without this
+    line, removing 177 false `absent` findings would look exactly like the fleet
+    having got better, which is the failure §5.5 names: no data rendered as
+    green. The members are linked, so the coverage gap is navigable and not
+    merely counted (§3.1, §5.1).
+    """
+    cov = artifact_observation_coverage(index)
+    if cov.get("computable") is False:
+        return (f'<p>artifact observation coverage not computable — '
+                f'{esc(cov.get("reason", "no reason given"))}</p>')
+    members = list(cov.get("unobserved_ids") or ())
+    if len(members) > _INLINE_MEMBER_LIMIT:
+        listing = path_for_list(Kind.ARTIFACT, {STATE_FILTER: UNOBSERVED_VALUE})
+        links = (f' — <a href="{esc(listing)}">all {esc(UNOBSERVED_VALUE)} '
+                 f'{esc(Kind.ARTIFACT.value)}s</a> ({len(members)} rows)')
+    else:
+        links = _member_links(Kind.ARTIFACT, UNOBSERVED_VALUE, members)
+    return (f'<p>artifact observation coverage {cov["count"]} / {cov["of"]} '
+            f'declared artifacts observed · {len(members)} declared and never '
+            f'looked at{links}</p>')
 
 
 def numbers_section(index: Index, exceptions: list[Entity], conflicts: list[Entity],

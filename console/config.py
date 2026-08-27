@@ -38,6 +38,7 @@ from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
 from .model.envelope import AdapterResult, AdapterStatus
+from .model.kinds import EXCEPTION_VALUES
 from .qa.questions import measure as measure_answer_latency
 
 #: Adapter registry — name → module with a `fetch` callable. Adding a source
@@ -65,13 +66,81 @@ def load_config(path: str) -> dict[str, Any]:
         return yaml.safe_load(fh) or {}
 
 
+class ConfigError(Exception):
+    """A configuration that cannot be honestly indexed — a BUILD failure.
+
+    Distinct from a source that cannot be read, which is an entity state and
+    never an exception (§2.3). This is the `index/merge.py::NamespaceCollision`
+    class of problem: config asserting something about the fleet that is not a
+    reading of the fleet, where degrading quietly would render the assertion as
+    fact on every row it touches.
+    """
+
+
+def validate_config(config: dict[str, Any]) -> None:
+    """Refuse a config whose declarations would manufacture findings.
+
+    **One rule so far** (alpha-engine-config-I8765): a `declared-registry` may
+    not set `default_state` to a member of `EXCEPTION_VALUES`. That default is
+    by construction the state of every row NOTHING OBSERVED, so naming an
+    exception there asserts a finding about each of them off no reading at all
+    — `observability-policy.md` §8.3's "a state derived from the absence of
+    evidence", and the exact defect `index/graph.py::_reconcile` already
+    refuses for Components ("ABSENT requires a successful discovery pass").
+    Live cost of the config edit nobody could flag: 177 of 508 exception rows
+    on 2026-08-27.
+
+    Raised, not logged. A surface that renders 177 invented findings is worse
+    than a surface that will not start, and the message names the FRAGMENT so
+    the fix is a one-line edit in a file the operator already has open.
+    """
+    for label, cfg in _declared_registry_configs(config):
+        raw = cfg.get("default_state")
+        if raw is None:
+            continue
+        if str(raw).strip().lower() in EXCEPTION_VALUES:
+            raise ConfigError(
+                f"{label}: `default_state: {raw}` is an exception state. A "
+                "declared-registry's default is what a row carries when "
+                "NOTHING observed it, so this asserts a finding about every "
+                "unobserved row off no reading at all (observability-policy.md "
+                "§8.3). Use `default_state: unobserved` and wire an observation "
+                "half (an `object-store` adapter over the same identifiers) for "
+                "the rows a real read can reach."
+            )
+
+
+def _declared_registry_configs(config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """`(fragment label, adapter config)` for every configured declared-registry.
+
+    Both shapes: a `registry:`/`registries:` entry carries its adapter config at
+    the top level, an `adapters:` entry nests it under `config:`. The label is
+    the entry's `name`, which is the `config.d/<name>.yaml` fragment filename in
+    the fleet's own assembler (`nous-ergon-ops/scripts/console_config.py`), so
+    the error names the file to edit.
+    """
+    out: list[tuple[str, dict[str, Any]]] = []
+    registries = ([config["registry"]] if config.get("registry") else [])
+    registries.extend(config.get("registries") or [])
+    for reg in registries:
+        if reg.get("adapter") == "declared-registry":
+            out.append((str(reg.get("name", "registry")), reg))
+    for entry in config.get("adapters") or []:
+        if entry.get("kind") == "declared-registry":
+            out.append((str(entry.get("name", "declared-registry")),
+                        entry.get("config") or {}))
+    return out
+
+
 def build_index(config: dict[str, Any]) -> Index:
     """Run every enabled adapter once and fold its projection into the index.
 
     A FAILED adapter contributes its entities as UNREPORTED (handled in the
     index) and does not stop the other adapters — the surface degrades per
-    source, never empties (§2.3).
+    source, never empties (§2.3). A config that is itself unindexable raises
+    before any adapter runs (`validate_config`).
     """
+    validate_config(config)
     index = Index()
     # Parsed FIRST, before any adapter runs: an unknown binding kind or
     # comparator must fail the build naming the milestone and clause, not

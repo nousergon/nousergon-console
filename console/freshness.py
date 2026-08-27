@@ -29,6 +29,17 @@ UNREADABLE = "unreadable"
 NO_STAMP = "no-freshness-stamp"
 ABSENT = "absent"
 
+#: `alpha-engine-config-I8780`: a `keys_from` row whose OWN registry entry
+#: declares it does not expect a per-cycle write (`cadence: event_driven`) or
+#: declares itself off (`lifecycle: disabled`) is a decision, not a defect.
+#: HEADing it and reading `absent` on a miss collapses both into the same
+#: finding a real gap produces — the pair `observability-policy.md` §8.3
+#: forbids collapsing for Component states (`DISABLED` vs `MISSED`) has the
+#: same failure mode for Artifact values, and Artifacts render a value rather
+#: than a State (§5.1) — so these are new freshness VALUES, not State members.
+NOT_EXPECTED = "not-expected"
+DISABLED = "disabled"
+
 
 def freshness(
     last_modified: str | None,

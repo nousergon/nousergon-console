@@ -254,7 +254,6 @@ def test_run_date_and_last_trading_day_are_different_resolvers():
 
 @pytest.mark.parametrize("entry", [
     {"key": "g/{date}/thing.json", "cadence": "continuous", "interval_minutes": 60},
-    {"key": "g/{date}/thing.json", "cadence": "event_driven"},
     {"key": "g/{ticker}.json", "cadence": "saturday_sf"},
 ])
 def test_an_unresolvable_partition_is_not_looked_at(entry):
@@ -264,6 +263,34 @@ def test_an_unresolvable_partition_is_not_looked_at(entry):
     result = _keys_fetch([entry], {})
     assert result.entities == ()
     assert result.unavailable == ("unresolved-partition:1",)
+
+
+def test_event_driven_rows_render_not_expected_never_absent():
+    """`alpha-engine-config-I8780`: a row that declares `cadence: event_driven`
+    is a decision (it does not expect a per-cycle write), not a defect. It is
+    never HEADed — even one whose key template could not resolve a partition
+    anyway (`{date}` is unresolvable) — and it still renders, as `not-expected`,
+    never `absent` and never dropped from the population."""
+    result = _keys_fetch(
+        [{"key": "g/{date}/thing.json", "cadence": "event_driven"}], {})
+    assert len(result.entities) == 1
+    assert result.entities[0].state == "not-expected"
+    assert result.entities[0].provenance.as_of is None
+    assert result.unavailable == ("not-expected:1",)
+
+
+def test_disabled_rows_render_disabled_never_absent():
+    """A `keys_from` row whose registry entry declares `lifecycle: disabled`
+    is a decision, not a defect (`observability-policy.md` §8.3's DISABLED-vs-
+    MISSED pair). It is never HEADed and still renders, as `disabled`."""
+    result = _keys_fetch(
+        [{"key": "h/latest.json", "cadence": "continuous", "lifecycle": "disabled"}],
+        {"s3://bkt/h/latest.json": "2026-08-01T00:00:00+00:00"},
+    )
+    assert len(result.entities) == 1
+    assert result.entities[0].state == "disabled"
+    assert result.entities[0].provenance.as_of is None
+    assert result.unavailable == ("disabled:1",)
 
 
 def test_a_source_that_raises_is_reported_never_rendered_as_absence():

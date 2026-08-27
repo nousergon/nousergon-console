@@ -73,6 +73,17 @@ stay small: `partition_by_cadence` (which partition a cadence's run writes) and
 rule). Both are measurements the config records; neither is inferable, and
 together they are a dozen lines rather than one line per key.
 
+An entry's own `partition_lag_days` (alpha-engine-config-I8770) is a fourth,
+more specific override, checked before any of the above: "the last complete
+partition is today minus N calendar days," for a row whose declared `cadence`
+this module's calendar machinery genuinely cannot translate — `continuous`
+(an interval, not a calendar position — see `calendar_cadence.resolve_key_
+template`) is the live case, a daily-all-calendar-days GHA cron that has no
+symbol in the fleet's closed, cross-repo-guarded cadence vocabulary
+(`nousergon_lib.artifact_freshness.CADENCE_SYMBOLS`). It is console-only and
+never changes `cadence` itself, so it carries no risk to the freshness-monitor
+Lambda that pages off the same registry row.
+
 A declared ``question`` (`console-policy.md` §4.4, `nousergon-console#61`) is
 carried as a synthetic ``text`` declared field, exactly matching the
 ``s3-records`` adapter's own convention — the two are the right shape to
@@ -371,6 +382,7 @@ def _fetch_declared_keys(
             now=now,
             trading_day_checker=checker,
             date_format=str(entry.get("date_format", date_format)),
+            lag_days=entry.get("partition_lag_days"),
         )
         if key is None:
             # Declared, and not honestly resolvable to a partition. Emitting

@@ -482,6 +482,28 @@ def test_a_continuous_templated_row_is_still_not_looked_at(tmp_path):
     assert "ops/pr_resting_state/{date}.json" not in {e.id for e in result.entities}
 
 
+def test_partition_lag_days_resolves_a_continuous_row(tmp_path):
+    """alpha-engine-config-I8770. A `continuous`-cadenced row that declares
+    its own `partition_lag_days` is looked at — the entry-declared escape
+    hatch for a genuine daily-all-calendar-days cron, which has no symbol in
+    the fleet's closed cadence vocabulary but is not a calendar-position
+    mystery either."""
+    entries = [
+        {"s3_key_template": "ops/pr_resting_state/{date}.json",
+         "cadence": "continuous", "interval_minutes": 30,
+         "partition_lag_days": 1},
+    ]
+    store = {"s3://bkt/ops/pr_resting_state/2026-08-26.json": "2026-08-26T16:31:00+00:00"}
+    _, result = _bound_fetch(tmp_path, store, entries=entries)
+    assert "unresolved-partition:1" not in result.unavailable
+    (ent,) = result.entities
+    assert ent.detail["resolved_key"] == "ops/pr_resting_state/2026-08-26.json"
+    # `partition_lag_days` only resolves WHICH key to HEAD; the row's own
+    # `continuous` staleness math (interval_minutes) is untouched, so a
+    # ~19.5h-old `as_of` against a 30-minute interval is genuinely stale.
+    assert ent.state == "stale"
+
+
 def test_an_unreadable_registry_is_failed_never_a_partial_reading(tmp_path):
     result = object_store.fetch(
         {"bucket": "bkt", "keys_from": {**_BINDING, "path": str(tmp_path / "nope.yaml")}},

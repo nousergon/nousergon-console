@@ -310,6 +310,7 @@ def resolve_key_template(
     now: datetime | None = None,
     trading_day_checker: TradingDayChecker | None = None,
     date_format: str = DEFAULT_DATE_FORMAT,
+    lag_days: int | None = None,
 ) -> str | None:
     """`signals/{trading_day}/signals.json` -> `signals/2026-08-21/signals.json`.
 
@@ -319,14 +320,41 @@ def resolve_key_template(
     partition. `None` means "do not look", which leaves the row declared and
     unobserved: a visible coverage gap, and strictly better than HEADing a key
     the fleet never writes and rendering the 404 as a finding.
+
+    **`lag_days` — the escape hatch for a cadence this module cannot
+    translate into a calendar position** (alpha-engine-config-I8770).
+    `last_expected_run_date` returns `None` for `continuous` BY DESIGN: an
+    interval declares no calendar position, and guessing one would manufacture
+    an absence for a partition that legitimately has not been written yet.
+    Several real registry rows ARE calendar-anchored even though their
+    declared `cadence` is `continuous` — a `cron(0 14 * * *)` GHA workflow
+    writing one `{date}`-keyed object every calendar day, all seven days a
+    week, is a genuine daily cadence with no drift risk, but `daily` is not a
+    member of `nousergon_lib.artifact_freshness.CADENCE_SYMBOLS` (the closed,
+    cross-repo-guarded vocabulary `scripts/check_cadence_symbol_drift.py`
+    enforces — the freshness-monitor Lambda reads the SAME `cadence` field for
+    paging, so widening that vocabulary for a console-only need would be a
+    cross-repo change with a different blast radius than this one).
+
+    So this is a CONSOLE-ONLY, entry-declared override: "the last complete
+    partition is `now`'s calendar date, minus `lag_days` days" — decided
+    BEFORE `cadence`/`resolver` are consulted at all, and it never touches the
+    fleet's cadence vocabulary or the Lambda's paging math. `0` is a legal lag
+    (today's own partition); there is no upper bound, but every day of lag is
+    a day a genuinely missing partition would go unobserved, so callers
+    declare the smallest honest value.
     """
     names = set(_PLACEHOLDER.findall(template))
     if not names:
         return template
     if names - PARTITION_PLACEHOLDERS:
         return None
-    partition = resolve_partition_date(
-        cadence, resolver, now=now, trading_day_checker=trading_day_checker)
+    if lag_days is not None:
+        now = now or datetime.now(timezone.utc)
+        partition = now.date() - timedelta(days=int(lag_days))
+    else:
+        partition = resolve_partition_date(
+            cadence, resolver, now=now, trading_day_checker=trading_day_checker)
     if partition is None:
         return None
     stamp = partition.strftime(date_format)

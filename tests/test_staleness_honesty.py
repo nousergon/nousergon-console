@@ -293,3 +293,21 @@ def test_the_refusal_and_the_exclusions_both_reach_the_wire():
     result = staleness_honesty(idx, now=NOW)
     assert render_json._named_members(result, "violations")["unauditable"]
     assert "comp-unbounded" in _format_number(result)
+
+
+def test_an_inherited_alias_is_excluded_from_the_audited_population():
+    """alpha-engine-config-I8973: an alias with no report of its own carries
+    `detail.alias_state: "inherited"` (`index/graph.py::_apply_alias_
+    inheritance`) — a pointer to an already-audited component, not a second
+    row whose own staleness needs checking. Stale-looking on its own as-of
+    (the parent's, copied across) but excluded from `checked` entirely,
+    never counted as a pass."""
+    inherited_alias = Entity(
+        kind=Kind.COMPONENT, id="comp-old-name", state=State.HEALTHY,
+        provenance=Provenance("checks", as_of=(NOW - timedelta(hours=1)).isoformat()),
+        detail={"cadence_minutes": 5, "alias_of": "comp-parent",
+                "alias_state": "inherited"},
+    )
+    result = staleness_honesty(_index_with(inherited_alias), now=NOW)
+    assert result["computable"] is False  # no other row -> empty population
+    assert "comp-old-name" not in result.get("violations", [])

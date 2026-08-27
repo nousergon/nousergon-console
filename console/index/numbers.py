@@ -152,6 +152,15 @@ def staleness_honesty(
     violations: list[str] = []
     unauditable: dict[str, str] = {}
     for ent in index.all():
+        # alpha-engine-config-I8973: an alias with no report of its own
+        # renders the PARENT's merged state/as-of (`detail.alias_state:
+        # "inherited"`, `index/graph.py::_apply_alias_inheritance`) — it is a
+        # pointer to an already-audited component, not a second row whose
+        # freshness needs its own check. An alias that DID receive its own
+        # report (the #8779 shape) stays in the population and is audited on
+        # its own as-of exactly as before.
+        if ent.detail.get("alias_of") and ent.detail.get("alias_state") == "inherited":
+            continue
         cadence_minutes = ent.detail.get("cadence_minutes")
         as_of_provenance = ent.source_of("as_of")
         as_of = as_of_provenance.as_of or ent.provenance.as_of

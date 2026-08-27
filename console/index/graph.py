@@ -37,6 +37,22 @@ __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
 DECISION_QUEUE_LABELS: frozenset[str] = frozenset({"gate:decision", "triage:session"})
 
 
+def _effective_as_of(ent: Entity) -> str | None:
+    """The as-of that actually won this entity's merge (§5.1), not
+    necessarily `ent.provenance.as_of` — a merged row names its winning
+    claim per field in `field_sources` (`index/merge.py`), and `as_of` is
+    exactly the field alias inheritance needs to carry across."""
+    return ent.field_sources.get("as_of", ent.provenance).as_of
+
+
+def _is_inherited_alias(ent: Entity) -> bool:
+    """alpha-engine-config-I8973 — an alias with no report of its own,
+    rendering the PARENT's state rather than its own silence. Excluded from
+    `transparency_gap` and `staleness_honesty`'s populations: it is a
+    pointer to an already-counted component, not a second silent one."""
+    return bool(ent.detail.get("alias_of")) and ent.detail.get("alias_state") == "inherited"
+
+
 class Index:
     """The derived entity graph. Build once per pass from AdapterResults.
 
@@ -280,6 +296,8 @@ class Index:
             ent = merge(claims)
             ent = self._reconcile(ent, claims)
             self._entities[entity_id] = ent
+        self._apply_alias_inheritance()
+        for ent in self._entities.values():
             self._by_kind[ent.kind].append(ent)
         self._finalized = True
         return self
@@ -339,6 +357,82 @@ class Index:
         # that one requires no discovery claim, this one requires a claim that
         # actually read a window. See `index/cadence_state.py`.
         return resolve_cadence_state(ent, staleness_factor=self._staleness_factor)
+
+    def _apply_alias_inheritance(self) -> None:
+        """alpha-engine-config-I8973 — an alias's rendered state follows
+        whichever of {alias, parent} actually received a report of its own;
+        the other side INHERITS (`detail.alias_state: "inherited"`) rather
+        than rendering a pointer as a silent component.
+
+        Both #8779 and #8973 mint an alias entity carrying `detail.alias_of`
+        (`adapters/yaml_directory.py::_aliases`). The two live shapes differ
+        only in which of the two names the substrate actually reports under:
+
+        - **The alias name is silent** — a RENAME alias (I6838 shape,
+          `alias_ids: [old-name]` on a row now emitted under the new name).
+          The alias carries only the DECLARATION `yaml-directory` mints for
+          it, nothing ever reports under the old name, and `_reconcile`
+          above already left it `UNREPORTED`. It inherits the PARENT's
+          merged state and as-of instead: a pointer to a live component is
+          not itself a silent one, and counting 23 of these inflated
+          `transparency_gap` 14 -> 37 (#8973).
+        - **The alias name is what the substrate emits** — the #8779 shape
+          (`credential_liveness` -> `credential_health`). The alias DOES
+          carry an OBSERVATION/DISCOVERY claim and keeps its own state
+          exactly as PR115 left it. If the PARENT row then has no report of
+          its own — nothing ever arrives under the declared name either —
+          the parent inherits FROM the alias: the observation belongs to
+          the running process, not to whichever of its two names happened
+          to receive the registry row.
+
+        Runs once, after every id's own `_reconcile` — this is a comparison
+        BETWEEN two already-merged entities, the same reason §8.3's
+        MISSED/ABSENT states could not be settled by any single claim
+        either. `population_completeness().of` is untouched (§9.1, PR115's
+        subtraction of every `alias_of` id from the denominator already
+        covers both shapes); this only changes which STATE renders and who
+        is counted in `transparency_gap`/`staleness_honesty`.
+        """
+        alias_pairs = [
+            (alias_id, ent.detail.get("alias_of"))
+            for alias_id, ent in self._entities.items()
+            if ent.detail.get("alias_of")
+        ]
+        for alias_id, parent_id in alias_pairs:
+            parent = self._entities.get(parent_id)
+            if parent is None:
+                continue
+            alias = self._entities[alias_id]
+            if self._has_own_report(alias_id):
+                if not self._has_own_report(parent_id):
+                    self._entities[parent_id] = dataclasses.replace(
+                        parent,
+                        state=alias.state,
+                        provenance=dataclasses.replace(
+                            parent.provenance, as_of=_effective_as_of(alias)
+                        ),
+                        detail={**parent.detail, "alias_state": "inherited"},
+                    )
+            else:
+                self._entities[alias_id] = dataclasses.replace(
+                    alias,
+                    state=parent.state,
+                    provenance=dataclasses.replace(
+                        alias.provenance, as_of=_effective_as_of(parent)
+                    ),
+                    detail={**alias.detail, "alias_state": "inherited"},
+                )
+
+    def _has_own_report(self, entity_id: str) -> bool:
+        """Did this identifier receive an OBSERVATION or DISCOVERY claim of
+        its OWN — never mind which claim class won the merge (§2.5's
+        precedence is irrelevant here; this only asks whether one arrived at
+        all, as opposed to just the DECLARATION `yaml-directory` mints for
+        every alias)."""
+        return any(
+            c.claim_class in (ClaimClass.OBSERVATION, ClaimClass.DISCOVERY)
+            for c in self._claims.get(entity_id, [])
+        )
 
     def _within_discovery_scope(self, ent: Entity) -> bool:
         """Could any successful discovery pass have found this entity?
@@ -485,10 +579,20 @@ class Index:
         BE `UNREPORTED` (Component/Run), never every entity kind (§9's
         original defect: an Artifact or Decision is never a transparency-gap
         candidate, and folding it into the denominator only dilutes it).
+
+        An alias with no report of its own (`detail.alias_state: "inherited"`,
+        alpha-engine-config-I8973) is excluded from BOTH the count and the
+        denominator: `_apply_alias_inheritance` has already given it the
+        parent's state rather than `UNREPORTED`, but it is still a pointer to
+        an already-counted component, not a second population member — 23
+        such rows inflated this number 14 -> 37 before the exclusion existed.
+        An alias that DID receive its own report is counted normally (the
+        #8779 shape).
         """
         self.finalize()
         population = [
-            e for e in self._entities.values() if e.kind in COMPONENT_STATE_KINDS
+            e for e in self._entities.values()
+            if e.kind in COMPONENT_STATE_KINDS and not _is_inherited_alias(e)
         ]
         unreported = [e for e in population if e.state is State.UNREPORTED]
         return {"count": len(unreported), "of": len(population)}

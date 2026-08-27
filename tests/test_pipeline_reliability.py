@@ -770,3 +770,102 @@ def test_existing_weekday_config_is_unaffected_by_the_new_keys():
     assert cycles["2026-08-03"].state == pr.SUCCEEDED
     assert cycles["2026-08-03"].detail["attempts"] == 1
     assert cycles["2026-08-03"].detail["attempts_to_success"] == 1
+
+
+# ===================================================================== #
+# issue #8764 — scheduled-first-attempt-streak (alpha-engine-config#6967 #
+# clause 1 as a number): walk most-recent-to-oldest, skip PENDING and    #
+# HOLIDAY, count consecutive clean-first-attempt cycles.                #
+# ===================================================================== #
+
+
+def test_streak_through_a_pending_today_skips_it_without_breaking():
+    """08-10 is today, still open (mid-day PT), zero executions — PENDING.
+    08-03 is a real break; 08-04/05/07 are clean. PENDING must be skipped, not
+    counted and not treated as a break."""
+    mid_day = datetime(2026, 8, 10, 15, 0, tzinfo=timezone.utc)
+    records = [
+        _exec("run-1", "FAILED", "2026-08-03T13:00:00Z", "2026-08-03T13:05:00Z", role="daily"),
+        _exec("run-2", "SUCCEEDED", "2026-08-04T13:00:00Z", "2026-08-04T13:12:00Z", role="daily"),
+        _exec("run-3", "SUCCEEDED", "2026-08-05T13:00:00Z", "2026-08-05T13:12:00Z", role="daily"),
+        _exec("run-4", "SUCCEEDED", "2026-08-07T13:00:00Z", "2026-08-07T13:12:00Z", role="daily"),
+    ]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=mid_day)
+    cycles = _cycles_by_date(result)
+    assert cycles["2026-08-10"].state == pr.PENDING
+    sig = _signal(result, "scheduled-first-attempt-streak", pipeline="preopen")
+    assert sig.detail["fields"]["consecutive_cycles"]["value"] == 3
+    assert sig.detail["last_break_date"] == "2026-08-03"
+    assert sig.detail["censored"] is False
+    assert sig.detail["window_cycles"] == 5
+
+
+def test_rerun_recovered_day_breaks_the_streak():
+    """A cycle a human rescued via `watch-rerun` is FAILED-recovered, not
+    SUCCEEDED — 'a run that a human started is evidence about the human,' and
+    the streak must end there even though the day eventually completed."""
+    records = [
+        _exec("run-1", "SUCCEEDED", "2026-08-03T13:00:00Z", "2026-08-03T13:12:00Z", role="daily"),
+        _exec("run-2", "SUCCEEDED", "2026-08-04T13:00:00Z", "2026-08-04T13:12:00Z", role="daily"),
+        _exec("run-3", "FAILED", "2026-08-05T13:00:00Z", "2026-08-05T13:05:00Z", role="daily"),
+        _exec("run-4", "SUCCEEDED", "2026-08-05T14:00:00Z", "2026-08-05T14:12:00Z", role="watch-rerun"),
+        _exec("run-5", "SUCCEEDED", "2026-08-07T13:00:00Z", "2026-08-07T13:12:00Z", role="daily"),
+        _exec("run-6", "SUCCEEDED", "2026-08-10T13:00:00Z", "2026-08-10T13:12:00Z", role="daily"),
+    ]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    cycles = _cycles_by_date(result)
+    assert cycles["2026-08-05"].state == pr.FAILED_RECOVERED
+    sig = _signal(result, "scheduled-first-attempt-streak", pipeline="preopen")
+    assert sig.detail["fields"]["consecutive_cycles"]["value"] == 2  # 08-10, 08-07 only
+    assert sig.detail["last_break_date"] == "2026-08-05"
+    assert sig.detail["censored"] is False
+    assert sig.detail["fields"]["consecutive_cycles"]["value"] < sig.detail["window_cycles"]
+
+
+def test_censored_streak_at_the_window_floor():
+    """Every windowed cycle succeeds clean-first-attempt — the walk exhausts
+    the window without finding a break. That is a lower bound, not a count:
+    `censored: true`, `last_break_date: null`."""
+    records = [
+        _exec("run-1", "SUCCEEDED", "2026-08-03T13:00:00Z", "2026-08-03T13:12:00Z", role="daily"),
+        _exec("run-2", "SUCCEEDED", "2026-08-04T13:00:00Z", "2026-08-04T13:12:00Z", role="daily"),
+        _exec("run-3", "SUCCEEDED", "2026-08-05T13:00:00Z", "2026-08-05T13:12:00Z", role="daily"),
+        _exec("run-4", "SUCCEEDED", "2026-08-07T13:00:00Z", "2026-08-07T13:12:00Z", role="daily"),
+        _exec("run-5", "SUCCEEDED", "2026-08-10T13:00:00Z", "2026-08-10T13:12:00Z", role="daily"),
+    ]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    sig = _signal(result, "scheduled-first-attempt-streak", pipeline="preopen")
+    assert sig.detail["fields"]["consecutive_cycles"]["value"] == 5
+    assert sig.detail["window_cycles"] == 5
+    assert sig.detail["censored"] is True
+    assert sig.detail["last_break_date"] is None
+
+
+def test_weekly_cadence_streak_weeks_math():
+    """`cycles_per_week` is `len(cadence_weekdays)` for a `weekday` cadence — 1
+    for a pipeline scheduled on a single Saturday — so `consecutive_weeks`
+    equals `consecutive_cycles` here, not divided by the trading-day 5."""
+    records = [
+        _wexec("run-1", "FAILED", "2026-07-25T09:00:00Z", "2026-07-25T09:13:00Z", role="weekly"),
+        _wexec("run-2", "SUCCEEDED", "2026-08-01T09:00:00Z", "2026-08-01T12:00:00Z", role="weekly"),
+        _wexec("run-3", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T12:00:00Z", role="weekly"),
+    ]
+    result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
+                      trading_day_checker=lambda d: False, now=_now())
+    sig = _signal(result, "scheduled-first-attempt-streak")
+    assert sig.detail["fields"]["consecutive_cycles"]["value"] == 2
+    assert sig.detail["fields"]["consecutive_weeks"]["value"] == 2.0
+    assert sig.detail["last_break_date"] == "2026-07-25"
+    assert sig.detail["censored"] is False
+
+
+def test_scheduled_first_attempt_streak_id_and_evidence():
+    records = [
+        _exec("run-1", "FAILED", "2026-08-10T13:00:00Z", "2026-08-10T13:05:00Z", role="daily"),
+    ]
+    result = pr.fetch(_cfg(), reader=_reader_for(records), trading_day_checker=_checker(), now=_now())
+    sig = _signal(result, "scheduled-first-attempt-streak", pipeline="preopen")
+    assert sig.id == "pipeline-reliability:preopen:scheduled-first-attempt-streak"
+    assert sig.provenance.evidence == (
+        "arn:aws:states:xx-test-1:000000000000:execution:fixture-preopen:run-1"
+    )

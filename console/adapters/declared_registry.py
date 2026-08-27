@@ -47,6 +47,13 @@ verbatim, never the thirteen. `console-policy.md`'s declared-only state guard
 state is free to mean whatever its own domain does — `unobserved` is the
 raw-value sibling of the `UNREPORTED` a Component in this position renders.
 
+**The document walk is shared, deliberately** (`console/registry_document.py`).
+The observation half — `object-store`'s `keys_from:` binding — reads THIS
+document, and the two claims merge only while both walk it identically. A
+private copy of the walk that drifts by one field name does not fail; it
+renders a declared row nothing observed beside an observed row nothing
+declared.
+
 **Why Decision entries need no merge at all.** `OBSERVATION_REGISTRY.yaml`'s
 gate value (gated-off/gated-on/always-on) *is* the fact — nothing else
 observes a rollout's own declared gate, so the lone DECLARATION claim IS the
@@ -64,9 +71,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-import yaml
-
 from .. import calendar_cadence
+from .. import registry_document
 from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -131,19 +137,16 @@ def fetch(
     entries_field = config.get("entries_field")
 
     try:
-        raw = yaml.safe_load(open(path)) or {}
+        raw = registry_document.dig(registry_document.load(path), entries_field)
     except Exception:
         return _failed(config, ("source",))
-
-    if entries_field:
-        raw = _dig(raw, str(entries_field))
 
     entities: list[Entity] = []
     edges: list[Edge] = []
     skipped = 0
 
-    for mapping_key, entry in _entries(raw):
-        eid = _entry_id(entry, mapping_key, id_field)
+    for mapping_key, entry in registry_document.entries(raw):
+        eid = registry_document.entry_id(entry, mapping_key, id_field)
         if not eid:
             skipped += 1
             continue
@@ -185,40 +188,6 @@ def _failed(config: dict[str, Any], unavailable: tuple[str, ...]) -> AdapterResu
         status=AdapterStatus.FAILED,
         unavailable=unavailable,
     )
-
-
-def _dig(raw: Any, dotted: str) -> Any:
-    """Walk a dotted path (`observations.entries`) into a nested document."""
-    cursor = raw
-    for part in dotted.split("."):
-        if not isinstance(cursor, Mapping) or part not in cursor:
-            return []
-        cursor = cursor[part]
-    return cursor
-
-
-def _entries(raw: Any) -> list[tuple[str | None, dict[str, Any]]]:
-    """Both natural top-level shapes are accepted (mirrors
-    `model/descriptor.py`'s "one mapping or a list of them" — a format that
-    rejects a defensible spelling is a format people work around):
-
-    - a list of entry mappings, each carrying its own id
-    - a mapping of id -> entry, the id supplying `_entry_id`'s fallback
-    """
-    if isinstance(raw, list):
-        return [(None, e) for e in raw if isinstance(e, Mapping)]
-    if isinstance(raw, Mapping):
-        return [(k, v) for k, v in raw.items() if isinstance(v, Mapping)]
-    return []
-
-
-def _entry_id(entry: Mapping[str, Any], mapping_key: str | None, id_field: str) -> str | None:
-    val = entry.get(id_field)
-    if val:
-        return str(val)
-    if mapping_key is not None:
-        return str(mapping_key)
-    return None
 
 
 def _entry_state(

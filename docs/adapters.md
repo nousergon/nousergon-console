@@ -26,15 +26,31 @@ under.
 | `OBSERVATION` | telemetry | state, as-of, run history, counts | `checks-envelope`, `state-machine`, `pipeline-reliability`, `git-host`, `object-store`, `sql-source`, `changelog-events`, `changelog-retro-feed`, `s3-records`, `sql-query` |
 
 `object-store` has two access modes, one source shape (the boundary test below,
-step 3): a **prefix listing** matched against `key_pattern`, and a **`keys:`
-list** HEADed one call each. The second is the OBSERVATION half of a
+step 3): a **prefix listing** matched against `key_pattern`, and a **keys mode**
+that HEADs declared keys one call each. The second is the OBSERVATION half of a
 `declared-registry` (alpha-engine-config-I8765) — same identifiers, so the two
 claims merge into one row and the state comes off a real read instead of a
 default. It resolves `{date}` / `{trading_day}` / `{partition}` to the last
 expected partition from the key's declared cadence plus a declared `partition`
 resolver (`run-date` or `last-trading-day-before-run`); a key it cannot resolve
 honestly is **not looked at**, leaving the declaration's `unobserved` standing
-rather than HEADing a key nothing writes and rendering the 404 as a finding.
+rather than HEADing a key nothing writes and rendering the 404 as a finding. A
+key template ending in `/` is a prefix rather than an object and is likewise
+not looked at, counted apart in `unavailable` because its fix is a registry
+edit.
+
+The keys mode takes its list either inline (`keys:`) or, for a registry of any
+size, **bound to the registry document itself** (`keys_from:` — the same
+`path` / `entries_field` / `id_field` the declaration fragment names, walked
+through the one shared `console/registry_document.py` so both halves cannot
+disagree about the document and stop merging). Binding is the default choice:
+a generated copy of the key list drifts, needs a detector to prove it has not,
+and cannot be re-derived at read time — and where the config lives in a
+size-capped parameter store, a 170-key copy simply does not fit. What stays
+declared in config is what cannot be derived: `partition_by_cadence` (which
+partition a cadence's run writes) and `partition_overrides` (the individual
+rows whose producer disagrees with that rule) — both measurements, and a dozen
+lines rather than one per key.
 
 A `declared-registry`'s `default_state` may not be an `EXCEPTION_VALUES` member.
 That default is what every row NOTHING observed carries, so an exception there
@@ -198,7 +214,7 @@ same contract as `declared-registry`'s.
 | **Reads** | An S3-compatible bucket/prefix |
 | **Emits** | `artifact` (and `produces`/`consumed-by` edges when the key pattern names a `component_id`/`consumer_id`) |
 | **Cannot supply** | envelope body fields (status, summary, findings) — it never reads a body at all |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `cadence`, `staleness_factor`, `question` |
+| **Config** | listing mode: `bucket`, `prefix`, `key_pattern`, `cadence`, `staleness_factor`, `question`; keys mode: `keys` **or** `keys_from` (`path`, `entries_field`, `id_field`, `cadence_field`, `bucket_from`), `bucket`, `partition_by_cadence`, `partition_overrides`, `partition`, `date_format`, `staleness_factor`, `max_workers` |
 
 Projects **keys → Artifact entities**. Staleness is derived from last-modified
 versus the configured cadence. Use this when the object *is* the fact (a

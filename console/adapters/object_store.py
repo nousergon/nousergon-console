@@ -71,7 +71,7 @@ from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from ..aws import client as _aws_client
 from ..drivers.context import default_object_stat as _default_stat
-from ..trading_calendar import TradingDayChecker
+from ..trading_calendar import TradingDayChecker, default_trading_day_checker
 
 #: Object listings are an OBSERVATION (§2.5) — what is there and how fresh.
 CLAIM_CLASS = ClaimClass.OBSERVATION
@@ -295,6 +295,10 @@ def _fetch_declared_keys(
             return _failed(config, ("stat",))
 
     now = now or datetime.now(timezone.utc)
+    # Resolved ONCE. `default_trading_day_checker()` builds a calendar and its
+    # own cache per call, and this loop runs it per key — 170 of them on the
+    # fleet's registry, which is a real cost inside a 180s refresh budget.
+    checker = trading_day_checker or default_trading_day_checker()
     default_factor = float(config.get("staleness_factor", 1.5))
     default_resolver = str(config.get("partition", calendar_cadence.RUN_DATE))
     date_format = str(config.get("date_format", calendar_cadence.DEFAULT_DATE_FORMAT))
@@ -307,13 +311,13 @@ def _fetch_declared_keys(
             continue
         detail: dict[str, Any] = {}
         calendar_cadence.apply_declared_cadence(
-            detail, entry, now=now, trading_day_checker=trading_day_checker)
+            detail, entry, now=now, trading_day_checker=checker)
         key = calendar_cadence.resolve_key_template(
             str(entry["key"]),
             cadence=entry.get("cadence"),
             resolver=str(entry.get("partition", default_resolver)),
             now=now,
-            trading_day_checker=trading_day_checker,
+            trading_day_checker=checker,
             date_format=str(entry.get("date_format", date_format)),
         )
         if key is None:

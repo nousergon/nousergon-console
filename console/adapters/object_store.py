@@ -102,7 +102,13 @@ from typing import Any, Callable, Mapping
 
 from .. import calendar_cadence
 from .. import registry_document
-from ..freshness import ABSENT as _ABSENT, NO_STAMP as _NO_STAMP, freshness as _freshness
+from ..freshness import (
+    ABSENT as _ABSENT,
+    DISABLED as _DISABLED,
+    NO_STAMP as _NO_STAMP,
+    NOT_EXPECTED as _NOT_EXPECTED,
+    freshness as _freshness,
+)
 from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -358,8 +364,11 @@ def _fetch_declared_keys(
                  (config.get("partition_overrides") or {}).items()}
 
     resolved: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+    entities: list[Entity] = []
     unresolved = 0
     not_an_object = 0
+    not_expected = 0
+    disabled = 0
     for entry in entries:
         if not isinstance(entry, dict) or not entry.get("key"):
             unresolved += 1
@@ -370,6 +379,25 @@ def _fetch_declared_keys(
             # manufacture an absence out of a key shape. Named separately in
             # `unavailable` because the fix is a registry edit, not a resolver.
             not_an_object += 1
+            continue
+        # `alpha-engine-config-I8780`: a row that DECLARES it will not be
+        # written per-cycle (`cadence: event_driven`) or declares itself off
+        # (`lifecycle: disabled`) is a decision the row's own registry entry
+        # already states — HEADing it and reading a miss as `absent` renders
+        # a declared decision as a defect (§8.3's DISABLED-vs-MISSED pair,
+        # extended to Artifact values). Neither is looked at: no HEAD is
+        # issued, the row still renders (never narrows the denominator,
+        # `alpha-engine-config-I8780`'s constraint), and its state is its
+        # OWN declaration rather than a substrate read.
+        lifecycle = str(entry.get("lifecycle") or "").strip().lower()
+        entry_cadence = str(entry.get("cadence") or "").strip().lower()
+        if lifecycle == "disabled":
+            disabled += 1
+            entities.append(_declared_entity(entry, template, bucket, _DISABLED))
+            continue
+        if entry_cadence == "event_driven":
+            not_expected += 1
+            entities.append(_declared_entity(entry, template, bucket, _NOT_EXPECTED))
             continue
         detail: dict[str, Any] = {}
         calendar_cadence.apply_declared_cadence(
@@ -394,7 +422,6 @@ def _fetch_declared_keys(
     stamps, unreadable = _stat_all(stat, bucket, [k for _, k, _ in resolved],
                                    int(config.get("max_workers", 8)))
 
-    entities: list[Entity] = []
     for entry, key, detail in resolved:
         if key in unreadable:
             # The source could not be read for this key. Skipping is what keeps
@@ -429,6 +456,10 @@ def _fetch_declared_keys(
         unavailable.append(f"unresolved-partition:{unresolved}")
     if not_an_object:
         unavailable.append(f"not-an-object:{not_an_object}")
+    if not_expected:
+        unavailable.append(f"not-expected:{not_expected}")
+    if disabled:
+        unavailable.append(f"disabled:{disabled}")
     if unreadable:
         unavailable.append(f"unreadable-keys:{len(unreadable)}")
     return AdapterResult(
@@ -438,6 +469,36 @@ def _fetch_declared_keys(
         status=AdapterStatus.OK,
         entities=tuple(entities),
         unavailable=tuple(unavailable),
+    )
+
+
+def _declared_entity(
+    entry: dict[str, Any], template: str, bucket: str | None, state: str,
+) -> Entity:
+    """A `keys_from` row rendered from its OWN declaration, never HEADed.
+
+    `alpha-engine-config-I8780`: used for `lifecycle: disabled` and
+    `cadence: event_driven` rows. `as_of=None` is a declared absence of a
+    freshness stamp (`model/entity.py::Provenance`), not a silent default —
+    this row was never read, on purpose, because its own registry entry
+    already answers the question a HEAD would have asked.
+    """
+    detail: dict[str, Any] = {"resolved_key": template}
+    if entry.get("cadence"):
+        detail["declared_cadence"] = entry["cadence"]
+    if entry.get("lifecycle"):
+        detail["declared_lifecycle"] = entry["lifecycle"]
+    return Entity(
+        kind=Kind.ARTIFACT,
+        id=str(entry["key"]),  # the DECLARED key — the merge identifier (§3.2)
+        state=state,
+        provenance=Provenance(
+            source=f"s3://{bucket}/{template}" if bucket else template,
+            as_of=None,
+            evidence=None,
+        ),
+        facets={"repo": bucket} if bucket else {},
+        detail=detail,
     )
 
 

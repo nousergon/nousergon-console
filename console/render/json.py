@@ -32,6 +32,8 @@ from typing import Any
 from ..index.graph import Index
 from ..index.milestones import evaluate as evaluate_milestones
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
+from ..index.numbers import claim_conflicts as _claim_conflicts
+from ..index.numbers import not_healthy as _not_healthy
 from ..model.entity import Edge, Entity
 from ..model.kinds import STATE_FILTER, State
 from ..model.fields import parse as parse_fields
@@ -144,6 +146,13 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
         "age_seconds": info.age_seconds(now),
         "stale_since": info.stale_since,
         "last_error": info.last_error,
+        # alpha-engine-config-I9052 deliverable 2: distinguishes the
+        # deliberate bootstrap window (`Supervisor(defer_first_build=True)`
+        # seeding a raw, adapter-less `Index()` while the first real build
+        # runs) from a build that failed outright — a consumer can retry a
+        # bootstrap read rather than treat its zeroed §9 numbers as fleet
+        # state.
+        "bootstrap": info.bootstrap,
         "sources": [
             {
                 "name": a.name, "status": a.status, "fetched_at": a.fetched_at,
@@ -226,7 +235,7 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
         # count always carries a nonempty member list — is asserted over every
         # §9 number in `tests/test_nine_numbers.py`, not per-number here.
         "population_completeness": index.population_completeness(),   # §9.1
-        "transparency_gap": aggregate(gap["count"], gap["of"]),        # §9.2
+        "transparency_gap": gap,                                       # §9.2
         "index_reachability": index.reachability(),                    # §9.3
         "answer_latency": index.answer_latency(),                      # §9.4
         "orphan_count": index.orphan_counts(),                         # §9.5
@@ -234,7 +243,7 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
             index.staleness_honesty(), "violations"),
         "surface_liveness": index.surface_liveness(),                   # §9.7
         "onboarding_cost": index.onboarding_cost(),                    # §9.8
-        "claim_conflicts": aggregate(len(conflicts), len(entities)),   # §9.9
+        "claim_conflicts": _claim_conflicts(conflicts, entities),      # §9.9
         # Not one of the nine: the coverage number that keeps `unobserved`
         # honest (alpha-engine-config-I8765). A declared registry with no
         # observation half wired renders every row `unobserved`; without this
@@ -243,7 +252,7 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
             _artifact_observation_coverage(index), "unobserved_ids"),
         # Not one of the nine, but the same denominator-inline discipline —
         # kept here rather than dropped, since a prior response reads it.
-        "not_healthy": aggregate(len(exceptions), len(entities)),
+        "not_healthy": _not_healthy(exceptions, entities),
     }
 
 

@@ -69,6 +69,38 @@ def test_9_1_and_9_2_never_render_the_na_not_impl_token():
     assert numbers["transparency_gap"].get("state") != "N/A-NOT-IMPL"
 
 
+def test_no_9_number_renders_a_bare_0_of_0_when_population_is_unestablished():
+    """alpha-engine-config-I9052: `{"count": 0, "of": 0}` reads exactly like a
+    perfect surface — indistinguishable from "nothing wrong" — which is §5.3's
+    forbidden shape regardless of which number does it. `artifact_observation_
+    coverage` and `staleness_honesty` already refuse (`computable: False` +
+    reason) rather than render it; this asserts the CLASS, over every
+    dict-shaped `count`/`of` number on the landing payload, not just the two
+    that already had the treatment plus the three that did not
+    (`transparency_gap`, `not_healthy`, `claim_conflicts`).
+
+    Exercised against a raw, adapter-less `Index()` — the exact shape the
+    fallback build path (`console/index/build.py::Supervisor._blank_stale`)
+    serves for the length of its bootstrap window, or after a build failure,
+    which is precisely the population-unestablished case this guards.
+    """
+    from console.index.graph import Index
+
+    doc = render_json.payload(Index(), resolve("/"))
+    numbers = doc["numbers"]
+    bare_zeros = [
+        key for key, value in numbers.items()
+        if isinstance(value, dict)
+        and value.get("of") == 0
+        and value.get("count") == 0
+        and value.get("computable") is not False
+    ]
+    assert bare_zeros == [], (
+        f"{bare_zeros} render a bare `0 of 0` on an unestablished population "
+        "with no `computable: False` refusal (§5.3)"
+    )
+
+
 class TestSurfaceLiveness:
     """§9.7 — is this surface up, according to something that is not it?
 

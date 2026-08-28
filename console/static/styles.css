@@ -1,7 +1,7 @@
 :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
 body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
 a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offset: 2px; }
-.state-HEALTHY { border-left: .35rem solid #087f23; }
+.state-HEALTHY, .state-ARMED { border-left: .35rem solid #087f23; }
 .state-RUNNING { border-left: .35rem solid #0b5fa5; }
 .state-FAILED, .state-STALLED, .state-MISSED { border-left: .35rem solid #b00020; }
 .state-DEGRADED, .state-UNREPORTED, .state-ABSENT, .state-UNREGISTERED, .state-NEVER_RAN { border-left: .35rem solid #8a4b00; }

@@ -24,6 +24,7 @@ from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
 from .build import AdapterFetch, BuildInfo
 from .cadence_state import resolve_cadence_state
+from .event_trigger import resolve_event_trigger_state
 from .merge import Claim, NamespaceCollision, merge
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
@@ -297,6 +298,11 @@ class Index:
             ent = self._reconcile(ent, claims)
             self._entities[entity_id] = ent
         self._apply_alias_inheritance()
+        # ARMED (§8.3, alpha-engine-config-I7116): a comparison between an
+        # event-driven row and its declared trigger anchor, so — like alias
+        # inheritance just above — it can only run once every id's own
+        # `_reconcile` has produced a merged entity to look up.
+        self._entities = resolve_event_trigger_state(self._entities)
         for ent in self._entities.values():
             self._by_kind[ent.kind].append(ent)
         self._finalized = True

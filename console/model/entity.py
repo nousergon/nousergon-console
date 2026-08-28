@@ -117,7 +117,7 @@ class Entity:
             raise ValueError(
                 f"{self.kind.value} {self.id!r} carries state {self.state!r}: a "
                 "component state must be one of observability-policy.md §8.3's "
-                "thirteen (§5.1). Where the classifier cannot place it, the "
+                "fourteen (§5.1). Where the classifier cannot place it, the "
                 "answer is State.UNREPORTED — loud, not blank."
             )
 

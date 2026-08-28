@@ -594,12 +594,28 @@ class Index:
         such rows inflated this number 14 -> 37 before the exclusion existed.
         An alias that DID receive its own report is counted normally (the
         #8779 shape).
+
+        Refuses (§5.3), matching `artifact_observation_coverage` and
+        `staleness_honesty`, when that population is empty — including the
+        fallback build path (`console/index/build.py::_blank_stale`) that
+        seeds a raw, adapter-less `Index()` while a real build is pending or
+        failed. `{"count": 0, "of": 0}` there reads exactly like a perfectly
+        clean fleet, which is the §5.3 shape those two neighbours already
+        refuse (alpha-engine-config-I9052).
         """
+        from .numbers import _refused
+
         self.finalize()
         population = [
             e for e in self._entities.values()
             if e.kind in COMPONENT_STATE_KINDS and not _is_inherited_alias(e)
         ]
+        if not population:
+            return _refused(
+                "no Component/Run rows in the index — an empty population "
+                "renders `0 of 0`, which reads exactly like a clean "
+                "transparency gap (§5.3)"
+            )
         unreported = [e for e in population if e.state is State.UNREPORTED]
         return {"count": len(unreported), "of": len(population)}
 

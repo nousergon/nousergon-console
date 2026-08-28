@@ -332,6 +332,7 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
             f'<p class="state-MISSED">SURFACE STALE — index built '
             f"{esc(info.built_at)}, {esc(info.staleness_basis())}"
             + (f", {esc(info.last_error)}" if info.last_error else "")
+            + (" (bootstrap window)" if info.bootstrap else "")
             + f". {esc(cadence)}. sources: {esc(sources)}</p>"
         )
     return (
@@ -381,6 +382,12 @@ def landing_page(index: Index) -> str:
         Kind.COMPONENT, State.UNREGISTERED.value,
         completeness.get("unregistered_ids") or ())
     gap = index.transparency_gap()
+    gap_txt = (
+        f'{gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2)'
+        if gap.get("computable", True) is not False
+        else f'transparency gap not computable — '
+             f'{esc(gap.get("reason", "no reason given"))}'
+    )
     from .json import numbers as _numbers
     n = _numbers(index, exceptions, conflicts, gap)
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -389,7 +396,7 @@ def landing_page(index: Index) -> str:
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
-<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2) · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
+<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(index, n)}
 {_table(exceptions)}
 <h2>waiting on Brian</h2>

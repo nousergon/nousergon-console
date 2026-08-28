@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from ..model.entity import Entity
 from ..model.envelope import ClaimClass
 from ..model.kinds import UNOBSERVED_VALUE, Kind, State
 from ..render.panes import orphan_counts as _pane_orphan_counts
@@ -267,3 +268,40 @@ def artifact_observation_coverage(index) -> dict[str, object]:
         "unobserved_ids": unobserved,
         "computable": True,
     }
+
+
+def not_healthy(exceptions: list[Entity], entities: list[Entity]) -> dict[str, object]:
+    """Not one of the §9 nine — kept for the same denominator-inline
+    discipline `render/json.py::numbers` gives every other number, since a
+    prior response reads it.
+
+    Refuses (§5.3), matching `artifact_observation_coverage` and
+    `staleness_honesty`, when the index has no entities at all — the fallback
+    build path (`console/index/build.py::_blank_stale`) seeds exactly that
+    raw, adapter-less `Index()` while a real build is pending or failed, and
+    `{"count": 0, "of": 0}` there reads exactly like an all-healthy fleet
+    (alpha-engine-config-I9052).
+    """
+    if not entities:
+        return _refused(
+            "no entities in the index — an empty population renders `0 of "
+            "0`, which reads exactly like an all-healthy fleet (§5.3)"
+        )
+    return {"count": len(exceptions), "of": len(entities)}
+
+
+def claim_conflicts(conflicts: list[Entity], entities: list[Entity]) -> dict[str, object]:
+    """§9.9 — entities carrying an unresolved equal-rank disagreement, over
+    every entity in the index.
+
+    Refuses (§5.3) on the same empty-index condition as `not_healthy` above,
+    for the same reason: `0 of 0` reads exactly like no conflicts, which is
+    the fallback build path's actual state, not a verified one
+    (alpha-engine-config-I9052).
+    """
+    if not entities:
+        return _refused(
+            "no entities in the index — an empty population renders `0 of "
+            "0`, which reads exactly like no conflicts (§5.3)"
+        )
+    return {"count": len(conflicts), "of": len(entities)}

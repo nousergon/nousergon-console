@@ -86,6 +86,14 @@ class BuildInfo:
     #: freshness while its data was up to ~153s old, and nothing said so
     #: (alpha-engine-config-I7124).
     build_seconds: float | None = None
+    #: True only for the deliberate bootstrap window `Supervisor` seeds when
+    #: `defer_first_build=True` and the first real build has not finished yet
+    #: (§9 below) — never for a build that actually FAILED, which is
+    #: distinguished by `last_error` alone. A consumer reading `0 of 0` off a
+    #: raw, adapter-less `Index()` cannot otherwise tell "retry me, a build is
+    #: in flight" from "this is genuinely the fleet's state" or "something
+    #: broke" (alpha-engine-config-I9052 deliverable 2).
+    bootstrap: bool = False
 
     @property
     def cadence_overrun(self) -> bool:
@@ -206,7 +214,8 @@ class Supervisor:
             # argument that comment makes about a FAILED first build, applied to
             # a SLOW one.
             self._current = self._blank_stale(
-                RuntimeError("first index build has not completed yet")
+                RuntimeError("first index build has not completed yet"),
+                bootstrap=True,
             )
             return
         started = time.monotonic()
@@ -229,12 +238,16 @@ class Supervisor:
                build_seconds=time.monotonic() - started)
         self._built_once = True
 
-    def _blank_stale(self, exc: BaseException):
+    def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False):
         """An empty index carrying the reason it is empty.
 
         Shared by the two cases that have no index to serve yet — the first
         build FAILED, and the first build has not FINISHED. Both want the same
-        thing: a surface that comes up and says what is wrong.
+        thing: a surface that comes up and says what is wrong — but they are
+        different findings (a deliberate, transient window versus a real
+        defect), so `bootstrap` distinguishes them on the payload
+        (alpha-engine-config-I9052 deliverable 2) rather than making a
+        consumer infer the difference from `last_error`'s text.
         """
         # Local import: graph.py imports FROM this module (AdapterFetch,
         # BuildInfo), so a module-level import here would be circular.
@@ -245,6 +258,7 @@ class Supervisor:
             index.build_info,
             built_at=now_iso(self._clock),
             refresh_seconds=self._refresh_seconds,
+            bootstrap=bootstrap,
         )
         _mark_stale(index, self._clock, exc)
         return index

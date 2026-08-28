@@ -128,6 +128,49 @@ def test_event_driven_gets_no_cadence_minutes_at_all(tmp_path):
     assert "cadence_minutes" not in ent.detail
 
 
+def test_event_driven_carries_the_raw_cadence_symbol_in_detail(tmp_path):
+    """§8.3 ARMED (`alpha-engine-config-I7116`) needs to tell "declared
+    event-driven" apart from "no cadence declared at all" — `cadence_minutes`
+    alone cannot, since both are absent. The raw symbol is what
+    `index/event_trigger.py` reads."""
+    ent = _fetch_one(
+        tmp_path,
+        "component_id: comp-event\nlifecycle: in-service\ncadence: event_driven\n",
+    )
+    assert ent.detail.get("cadence") == "event_driven"
+
+
+def test_event_driven_with_no_anchor_declared_carries_no_anchor_key(tmp_path):
+    ent = _fetch_one(
+        tmp_path,
+        "component_id: comp-event\nlifecycle: in-service\ncadence: event_driven\n",
+    )
+    assert "event_trigger_anchor" not in ent.detail
+
+
+def test_event_driven_anchor_is_carried_through(tmp_path):
+    ent = _fetch_one(
+        tmp_path,
+        "component_id: comp-event\nlifecycle: in-service\ncadence: event_driven\n"
+        "event_trigger_anchor: some-repo--some-workflow\n",
+    )
+    assert ent.detail.get("event_trigger_anchor") == "some-repo--some-workflow"
+
+
+def test_non_event_driven_cadence_never_carries_the_anchor_key(tmp_path):
+    """A `weekday_sf` row declaring `event_trigger_anchor` by mistake (or by
+    copy-paste) must not leak it into detail — only `event_driven` rows
+    populate this key, which is what makes it a reliable discriminator for
+    `index/event_trigger.py`."""
+    ent = _fetch_one(
+        tmp_path,
+        "component_id: comp-weekday\nlifecycle: in-service\ncadence: weekday_sf\n"
+        "event_trigger_anchor: some-repo--some-workflow\n",
+    )
+    assert "event_trigger_anchor" not in ent.detail
+    assert "cadence" not in ent.detail
+
+
 def test_continuous_needs_its_interval_minutes(tmp_path):
     """`continuous` with no declared interval is unauditable, not hourly."""
     without = _fetch_one(

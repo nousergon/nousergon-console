@@ -1,6 +1,6 @@
 """The state vocabulary is closed, total, and not ours to widen.
 
-`observability-policy.md` §8.3 is normative for the thirteen states; this console
+`observability-policy.md` §8.3 is normative for the fourteen states; this console
 *renders* that vocabulary and does not define one. These tests are the
 chokepoint for that, because the failure they guard against already happened:
 the first implementation shipped a FORK — it added `UNKNOWN`, `NOT_MEASURED`
@@ -29,7 +29,7 @@ from console.model.kinds import (
 #: observability-policy.md §8.3, transcribed. This literal is the point of the
 #: test: it is a second, independent statement of the vocabulary, so a change to
 #: the enum has to be made twice and the second time is against the policy text.
-POLICY_THIRTEEN = {
+POLICY_FOURTEEN = {
     "HEALTHY",
     "RUNNING",
     "DEGRADED",
@@ -43,6 +43,7 @@ POLICY_THIRTEEN = {
     "ABSENT",
     "UNREGISTERED",
     "UNREPORTED",
+    "ARMED",
 }
 
 #: §8.3 forbids these BY NAME: "UNKNOWN, OTHER, PENDING and N/A are all the
@@ -50,9 +51,9 @@ POLICY_THIRTEEN = {
 FORBIDDEN_FALL_THROUGHS = {"UNKNOWN", "OTHER", "PENDING", "N/A", "NOT_MEASURED"}
 
 
-def test_state_is_exactly_the_policy_thirteen():
-    assert {s.value for s in State} == POLICY_THIRTEEN
-    assert len(State) == 13
+def test_state_is_exactly_the_policy_fourteen():
+    assert {s.value for s in State} == POLICY_FOURTEEN
+    assert len(State) == 14
 
 
 def test_no_fall_through_member_exists():
@@ -86,6 +87,8 @@ def test_the_informative_pairs_all_exist_and_are_distinct():
         (State.DEGRADED, State.FAILED),
         (State.RUNNING, State.STALLED),
         (State.RUNNING, State.HEALTHY),
+        (State.ARMED, State.HEALTHY),
+        (State.ARMED, State.UNREPORTED),
     ):
         assert a is not b
 
@@ -108,7 +111,7 @@ def test_a_component_may_not_carry_a_raw_value_state():
     cannot: construction fails.
     """
     for kind in COMPONENT_STATE_KINDS:
-        with pytest.raises(ValueError, match="thirteen"):
+        with pytest.raises(ValueError, match="fourteen"):
             Entity(
                 kind=kind,
                 id="x",

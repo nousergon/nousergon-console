@@ -235,6 +235,24 @@ def _detail(
     calendar_cadence.apply_declared_cadence(
         detail, row, now=now, trading_day_checker=trading_day_checker,
     )
+    # `cadence: event_driven` translates to no `cadence_minutes` at all
+    # (calendar_cadence.py: "unauditable, never assume fresh") — correct for
+    # staleness_honesty, but it left `index/event_trigger.py` with nothing to
+    # read: a row genuinely declaring itself event-driven and an ordinary
+    # in-service row with no cadence at all were indistinguishable in detail.
+    # Carried through here, curated rather than passed verbatim (unlike
+    # `declared-registry`'s generic `_detail`, alpha-engine-config-I7116),
+    # alongside the trigger anchor — the id of the separately-observed entity
+    # whose own state stands in for "the wiring that would fire this
+    # component still exists". No anchor declared is a row that stays
+    # UNREPORTED exactly as it did before this state existed (§8.3: ARMED is
+    # never granted from the bare declaration).
+    raw_cadence = row.get("cadence")
+    if isinstance(raw_cadence, str) and raw_cadence.strip().lower() == calendar_cadence.EVENT_DRIVEN:
+        detail["cadence"] = calendar_cadence.EVENT_DRIVEN
+        anchor = row.get("event_trigger_anchor")
+        if isinstance(anchor, str) and anchor.strip():
+            detail["event_trigger_anchor"] = anchor.strip()
     return detail
 
 

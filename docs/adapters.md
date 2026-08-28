@@ -212,6 +212,25 @@ nothing, leaving the row excluded from the audit rather than faked fresh.
 `fetch` takes optional `now` and `trading_day_checker` arguments for this,
 same contract as `declared-registry`'s.
 
+**`cadence: event_driven` plus `event_trigger_anchor`** is what makes a
+silent event-driven row resolvable to `ARMED` rather than `UNREPORTED`
+forever (`observability-policy.md` §8.3, `alpha-engine-config-I7116`). A
+component fired by a genuine event — an EventBridge event-pattern rule, a
+merge-triggered CI workflow, a queue consumer — has no cadence to declare, so
+`event_driven` correctly gets no `cadence_minutes` above. Declaring
+`event_trigger_anchor: <component_id>` names a *separately-observed* entity
+whose own state stands in for "the mechanism that would fire this component
+still exists" — the fleet's case is the GitHub Actions workflow component
+`git-host`'s `include_workflow_runs` already emits from the workflow's real
+run history. `index/event_trigger.py::resolve_event_trigger_state` (run once
+per build, after every other claim has merged) grants `ARMED` only when the
+anchor id resolves to a known entity **and** that entity's own state says the
+trigger is intact (`HEALTHY`, `NEVER_RAN` or `RUNNING`) — never from the
+`event_driven` declaration alone, which would be a guard that can never fail
+(`champion-challenger-policy.md` §7.4). No anchor declared, an anchor id that
+resolves to nothing in this build, or an anchor resolved to a broken/disabled
+state all leave the row `UNREPORTED`, exactly as before this state existed.
+
 ## `object-store`
 
 | | |

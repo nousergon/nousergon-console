@@ -281,7 +281,7 @@ def fetch(
             for c in (entry.get("cutovers") or ())
             if isinstance(c, dict) and c.get("date")
         }
-        noop_max_seconds = entry.get("noop_max_duration_seconds")
+        gate_skip_state_names = frozenset(entry.get("gate_skip_state_names") or ())
         rerun_threshold = int(entry.get("rerun_alert_threshold", 1))
         # Per-entry override, defaulting to the adapter-level value
         # (alpha-engine-config-I7068 deliverable 3, window half) — a weekly
@@ -289,7 +289,7 @@ def fetch(
         # instance just to carry its own window length.
         window = int(entry.get("window_trading_days", default_window))
 
-        want_history = bool(degraded_state_names or stage_states)
+        want_history = bool(degraded_state_names or stage_states or gate_skip_state_names)
 
         try:
             records = reader(region, arn)
@@ -322,12 +322,14 @@ def fetch(
                 role_field=role_field,
                 cadence_roles=cadence_roles,
                 recovery_roles=recovery_roles,
-                noop_max_seconds=noop_max_seconds,
+                gate_skip_state_names=gate_skip_state_names,
                 want_degraded_states=bool(degraded_state_names),
                 want_stages=bool(stage_states),
             )
             if subset:
-                attach = history_reader_for(degraded_state_names | frozenset(stage_states))
+                attach = history_reader_for(
+                    degraded_state_names | frozenset(stage_states) | gate_skip_state_names
+                )
                 if attach is not None:
                     attach(region, subset)
                 else:
@@ -347,7 +349,7 @@ def fetch(
             degraded_errors=degraded_errors,
             stage_states=stage_states,
             cutovers=cutovers,
-            noop_max_seconds=noop_max_seconds,
+            gate_skip_state_names=gate_skip_state_names,
             today_local=today_local,
             source=f"pipeline-reliability:{region}:{arn}",
         )
@@ -410,7 +412,7 @@ def _records_needing_history(
     role_field: str,
     cadence_roles: frozenset[str],
     recovery_roles: frozenset[str],
-    noop_max_seconds: float | None,
+    gate_skip_state_names: frozenset[str],
     want_degraded_states: bool,
     want_stages: bool,
 ) -> list[ExecutionRecord]:
@@ -422,8 +424,17 @@ def _records_needing_history(
     and for every `_ok` attempt / later recovery `_is_degraded` short-circuits
     into. Everything else `list_executions` returned stays unfetched
     (config-I7067).
+
+    When `gate_skip_state_names` is declared, every cadence-role record in
+    the window is added unconditionally (alpha-engine-config-I8224): whether
+    a record is a gate-skip is exactly the fact `entered_states` will answer,
+    so pre-filtering candidates with `_is_noop` here — before that fact
+    exists — would silently assume the very answer being fetched. This
+    mirrors the earlier duration-based `_is_noop` in candidate cost, not
+    behaviour: only cadence-role records for this pipeline are ever
+    candidates, the same set duration pre-filtering used to narrow.
     """
-    if not want_degraded_states and not want_stages:
+    if not want_degraded_states and not want_stages and not gate_skip_state_names:
         return []
 
     need: list[ExecutionRecord] = []
@@ -440,10 +451,14 @@ def _records_needing_history(
 
     for d in trading_days:
         day_records = by_date.get(d, [])
+        if gate_skip_state_names:
+            for r in day_records:
+                if _role_of(r, role_field) in cadence_roles:
+                    add(r)
         cadence_today = [
             r for r in day_records
             if _role_of(r, role_field) in cadence_roles
-            and not _is_noop(r, noop_max_seconds)
+            and not _is_noop(r, gate_skip_state_names)
         ]
         if cadence_today and (want_stages or want_degraded_states):
             add(cadence_today[0])
@@ -452,7 +467,7 @@ def _records_needing_history(
         attempts_records = [
             r for r in day_records
             if _role_of(r, role_field) in (cadence_roles | recovery_roles)
-            and not _is_noop(r, noop_max_seconds)
+            and not _is_noop(r, gate_skip_state_names)
         ]
         for r in attempts_records:
             if _ok(r):
@@ -602,34 +617,33 @@ def _is_degraded(
     return _entered_degraded(rec, degraded_state_names)
 
 
-def _duration_seconds(rec: ExecutionRecord) -> float | None:
-    start, stop = _as_of(rec.get("startDate")), _as_of(rec.get("stopDate"))
-    if not start or not stop:
-        return None
-    try:
-        a = datetime.fromisoformat(start.replace("Z", "+00:00"))
-        b = datetime.fromisoformat(stop.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    return (b - a).total_seconds()
-
-
-def _is_noop(rec: ExecutionRecord, noop_max_seconds: float | None) -> bool:
+def _is_noop(rec: ExecutionRecord, gate_skip_state_names: frozenset[str]) -> bool:
     """A cadence execution that self-gated and terminated immediately.
 
     The weekly pipeline's trigger fires on more days than it runs and its own
     run-day gate skip-succeeds in seconds. Counting those as cadence successes
     inflates the numerator with runs that did no work — the mirror image of
-    counting operator reruns, and just as dishonest. Duration-based rather than
-    state-name-based so it needs no execution history; declared per pipeline,
-    never assumed (a pipeline that omits it has every execution counted).
+    counting operator reruns, and just as dishonest.
+
+    State-name-based, NEVER duration-based (alpha-engine-config-I8224, same
+    class as I8057): a duration threshold is wrong in both directions — a
+    real run that fails fast reads as a gate-out, and a slow gate-out reads
+    as work. Measured 2026-08-22: `watch-rerun-2026-08-22-3` ran 871.8s and
+    entered 1 of 16 stages — long, and vacuous; the fleet's shortest genuine
+    run is 12.6s. `entered_states` carries the gate's own verdict (e.g.
+    `WeeklyRunDaySkip`) directly, exactly like the state-name DEGRADED axis
+    this adapter already reads — no clock involved. Declared per pipeline,
+    never assumed (a pipeline that omits `gate_skip_state_names` has every
+    execution counted, same posture as `degraded_state_names`).
     """
-    if not noop_max_seconds:
+    if not gate_skip_state_names:
         return False
     if not _ok(rec):
         return False
-    dur = _duration_seconds(rec)
-    return dur is not None and dur <= float(noop_max_seconds)
+    entered = rec.get("entered_states")
+    if not entered:
+        return False
+    return bool(gate_skip_state_names & set(entered))
 
 
 def _stage_reached(
@@ -669,7 +683,7 @@ def _classify_window(
     degraded_errors: frozenset[str],
     stage_states: tuple[str, ...],
     cutovers: dict[str, dict[str, Any]],
-    noop_max_seconds: float | None,
+    gate_skip_state_names: frozenset[str],
     today_local: str,
     source: str,
 ) -> tuple[list[Entity], list[tuple[str, bool]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -682,11 +696,11 @@ def _classify_window(
         day_records = by_date.get(d, [])
         cadence_today = [
             r for r in day_records
-            if _role_of(r, role_field) in cadence_roles and not _is_noop(r, noop_max_seconds)
+            if _role_of(r, role_field) in cadence_roles and not _is_noop(r, gate_skip_state_names)
         ]
         gate_noops = sum(
             1 for r in day_records
-            if _role_of(r, role_field) in cadence_roles and _is_noop(r, noop_max_seconds)
+            if _role_of(r, role_field) in cadence_roles and _is_noop(r, gate_skip_state_names)
         )
         # Attempts = the scheduled run plus every operator overlay that tried to
         # complete the SAME cycle. Roles outside both sets (the weekly
@@ -696,7 +710,7 @@ def _classify_window(
         attempts_records = [
             r for r in day_records
             if _role_of(r, role_field) in (cadence_roles | recovery_roles)
-            and not _is_noop(r, noop_max_seconds)
+            and not _is_noop(r, gate_skip_state_names)
         ]
         detail: dict[str, Any] = {
             "date": d,

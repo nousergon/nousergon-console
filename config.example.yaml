@@ -420,10 +420,12 @@ adapters:
           pipeline_key: weekly
           cadence: weekday
           cadence_weekdays: [5]
-          # A cadence execution that self-gated and terminated inside this many
-          # seconds did no work and is not an attempt. Declared per pipeline —
-          # a pipeline that omits it has every execution counted.
-          noop_max_duration_seconds: 60
+          # A cadence execution that entered one of these state names self-gated
+          # and did no work — not an attempt. State-name-based, not duration:
+          # a duration threshold misclassifies real data in both directions
+          # (alpha-engine-config-I8224). Declared per pipeline — a pipeline
+          # that omits it has every execution counted.
+          gate_skip_state_names: [WeeklyRunDaySkip]
           # Ordered stage names from THIS pipeline's own definition. Renders how
           # FAR a run got, so a run failing later than the last one reads as
           # progress rather than as another red. Costs one GetExecutionHistory

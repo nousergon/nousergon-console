@@ -604,11 +604,12 @@ def test_roles_outside_cadence_and_recovery_are_not_attempts():
 def test_a_gate_skip_execution_is_not_a_cadence_attempt():
     """The weekly trigger fires on more days than it runs; the run-day gate
     skip-succeeds in seconds. Counting those as cadence successes inflates the
-    numerator with runs that did no work."""
+    numerator with runs that did no work. State-name-based (entered_states),
+    not duration — mirrors the real gate verdict (alpha-engine-config-I8224)."""
     records = [_wexec("skip-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T09:00:02Z",
-                      role="weekly")]
+                      role="weekly", entered=["WeeklyRunDaySkip"])]
     result = pr.fetch(
-        _weekly_cfg(noop_max_duration_seconds=30),
+        _weekly_cfg(gate_skip_state_names=["WeeklyRunDaySkip"]),
         reader=_weekly_reader(records), trading_day_checker=lambda d: False, now=_now(),
     )
     cyc = _wcycles(result)["2026-08-08"]
@@ -618,12 +619,47 @@ def test_a_gate_skip_execution_is_not_a_cadence_attempt():
     assert _signal(result, "first-attempt-success-rate").detail["denominator"] == 0
 
 
-def test_without_the_declared_noop_budget_every_execution_counts():
+def test_without_the_declared_gate_skip_names_every_execution_counts():
     records = [_wexec("skip-1", "SUCCEEDED", "2026-08-08T09:00:00Z", "2026-08-08T09:00:02Z",
-                      role="weekly")]
+                      role="weekly", entered=["WeeklyRunDaySkip"])]
     result = pr.fetch(_weekly_cfg(), reader=_weekly_reader(records),
                       trading_day_checker=lambda d: False, now=_now())
     assert _wcycles(result)["2026-08-08"].state == pr.SUCCEEDED
+
+
+def test_a_short_real_run_is_not_misread_as_a_gate_skip():
+    """alpha-engine-config-I8057/I8224's measured fact: the fleet's shortest
+    genuine weekly execution ran 12.6s (`director-verify-0731-003355Z`,
+    2026-08-03) — well inside the OLD 60s duration threshold, which would have
+    misclassified it as a gate-out. A state-name check does not: a real run
+    never enters `WeeklyRunDaySkip`, however fast it terminates."""
+    records = [_wexec("director-verify-0731-003355Z", "SUCCEEDED",
+                      "2026-08-08T09:00:00Z", "2026-08-08T09:00:12.6Z",
+                      role="weekly", entered=["MorningEnrich"])]
+    result = pr.fetch(
+        _weekly_cfg(gate_skip_state_names=["WeeklyRunDaySkip"]),
+        reader=_weekly_reader(records), trading_day_checker=lambda d: False, now=_now(),
+    )
+    cyc = _wcycles(result)["2026-08-08"]
+    assert cyc.detail["gate_noop_count"] == 0
+    assert cyc.detail["attempts"] == 1
+
+
+def test_a_slow_gate_skip_is_still_not_an_attempt():
+    """Mirror fact: measured 2026-08-22, `watch-rerun-2026-08-22-3` ran 871.8s
+    and entered 1 of 16 stages — long, and vacuous. A duration ceiling would
+    have counted this as work; the state-name verdict does not, regardless of
+    how long the execution ran."""
+    records = [_wexec("watch-rerun-2026-08-22-3", "SUCCEEDED",
+                      "2026-08-08T09:00:00Z", "2026-08-08T09:14:31.8Z",
+                      role="weekly", entered=["WeeklyRunDaySkip"])]
+    result = pr.fetch(
+        _weekly_cfg(gate_skip_state_names=["WeeklyRunDaySkip"]),
+        reader=_weekly_reader(records), trading_day_checker=lambda d: False, now=_now(),
+    )
+    cyc = _wcycles(result)["2026-08-08"]
+    assert cyc.detail["gate_noop_count"] == 1
+    assert cyc.detail["attempts"] == 0
 
 
 # ------------------------------------------------------------ stage depth --

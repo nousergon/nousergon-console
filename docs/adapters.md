@@ -367,7 +367,7 @@ none, so a binding without a reader returns a failed `DriverResult` /
 | **Reads** | The same state-machine ARNs as `state-machine`, plus an injected trading calendar |
 | **Emits** | `cycle` (one per cycle day, seven-value reliability classification), `signal` (window coverage, first-attempt success rate, attempts-to-success, rerun revisit trigger, market-open buffer trend) |
 | **Cannot supply** | `DEGRADED` for a pipeline that declares neither `degraded_state_names` nor a degraded terminal error; stage depth for a pipeline that declares no `stage_states`; buffer trend for a pipeline with no `open_time`/`open_timezone`; a cycle day older than the oldest execution the source returned (dropped, not rendered) |
-| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`, `degraded_error_names`, `cadence`, `cadence_weekdays`, `noop_max_duration_seconds`, `stage_states`, `cutovers`, `rerun_alert_threshold`, `window_trading_days` — overrides the adapter-level default per entry), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
+| **Config** | `region`, `state_machines` (`arn`, `pipeline_key`, `measure_buffer`, `degraded_state_names`, `degraded_error_names`, `cadence`, `cadence_weekdays`, `gate_skip_state_names`, `stage_states`, `cutovers`, `rerun_alert_threshold`, `window_trading_days` — overrides the adapter-level default per entry), `role_field`, `cadence_roles`, `recovery_roles`, `window_trading_days`, `open_time`, `open_timezone` |
 
 Same source shape as `state-machine`, a different projection: one Cycle per
 trading day (id `pipeline-reliability:<pipeline_key>:<date>`), classified
@@ -438,9 +438,11 @@ succeeds on rerun 6 and one that succeeds first time both read as "succeeded"
 without it, and the difference between them is the whole question. `attempts`
 counts the scheduled run plus every operator overlay against the same cycle;
 roles outside `cadence_roles ∪ recovery_roles` land in `execution_count` only.
-`noop_max_duration_seconds` excludes a cadence execution that self-gated and
-terminated immediately — counting a run that did no work as a success inflates
-the numerator the same way counting operator reruns does.
+`gate_skip_state_names` excludes a cadence execution that self-gated and
+entered one of the declared state names — counting a run that did no work as a
+success inflates the numerator the same way counting operator reruns does.
+State-name-based, not duration-based: a duration threshold misclassifies real
+data in both directions (alpha-engine-config-I8224).
 
 **Stage depth renders how far a run got.** `stage_states` is an ordered list of
 state names from that pipeline's own definition; each cycle carries

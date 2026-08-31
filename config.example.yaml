@@ -1296,6 +1296,44 @@ milestones:
         field: correctness_verdict
         op: "=="
         target: PASS
+    # Optional. WITHOUT THIS BLOCK the predicate is a dashboard, not a gate:
+    # every build evaluates it and nothing records what it said, so a clause
+    # going MET -> UNMET is visible only to whoever happens to be looking at
+    # the page that minute. Two clauses of a real exit predicate did exactly
+    # that inside three days, and nothing paged.
+    #
+    # Declared, the console writes ONE object per milestone holding each
+    # clause's status, when it last changed, and a retention-bounded history of
+    # every transition — and notifies ONCE PER EPISODE when a clause leaves
+    # MET, with a symmetric clear when it comes back. The console still renders
+    # rather than owns: this object is the durable home, the pane is a
+    # projection of it, and a build that finds no object baselines silently
+    # instead of paging for everything that was already failing.
+    #
+    #   * an unchanged rebuild writes nothing and notifies nothing — the index
+    #     rebuilds on a cadence and a page refresh is not an observation;
+    #   * `heartbeat_minutes` re-stamps `updated_at` anyway on that cadence, so
+    #     the object's own age stays usable as a liveness signal;
+    #   * a transition is written BEFORE any notification is attempted, and a
+    #     failed delivery is retried on the next build rather than dropped —
+    #     recording is not delivery;
+    #   * an UNREADABLE journal REFUSES to be overwritten (that would destroy
+    #     the history and re-baseline every clause) and says so on the pane.
+    #
+    # Both notify legs are optional and both are deployment topology. With
+    # neither, transitions are recorded and rendered but never announced, and
+    # the journal counts them as undelivered rather than pretending they were
+    # sent.
+    journal:
+      bucket: example-monitoring-bucket
+      key: console/milestones/example-exit-predicate/journal.json
+      retention_days: 400       # how long a transition stays in the journal
+      heartbeat_minutes: 60     # rewrite this often even with nothing to say
+      max_transitions: 500      # hard ceiling, so one object cannot grow forever
+      notify:
+        sns_topic_arn: arn:aws:sns:us-east-1:000000000000:example-alerts
+        event_bus: example-alert-bus   # the machine-readable leg (§7.3)
+        event_source: nousergon.console
 
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing

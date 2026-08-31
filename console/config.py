@@ -266,6 +266,25 @@ def build_index(config: dict[str, Any]) -> Index:
     # Declarations only — evaluation is per query, over the built graph, and
     # nothing about it is cached (§5.6).
     milestone_predicates.attach(index, declared_milestones)
+    # ONE OBSERVATION PER BUILD (§4.4, alpha-engine-config-I9083). `evaluate`
+    # is per QUERY and a page refresh is not an observation, so the clause
+    # journal — the durable record of every clause's status, and the only
+    # thing that makes a MET -> UNMET transition a fact rather than something
+    # a reader reconstructs by remembering last week's number — is written
+    # here, exactly once per build.
+    #
+    # A no-op unless a milestone declares a `journal:` block, so
+    # `config.example.yaml`, the CI build gate and every unit test read and
+    # write nothing. Never fatal: a journal that cannot be read or written is
+    # a defect in the RECORDING of the predicate, and blanking a surface a
+    # dozen working sources are rendering over it would be the larger one
+    # (alpha-engine-config-I8778). It is recorded on the index instead, where
+    # the pane renders it.
+    try:
+        reports = milestone_predicates.journal(index)
+    except Exception as exc:  # noqa: BLE001 - recorded, never swallowed
+        reports = [{"error": f"{type(exc).__name__}: {exc}", "written": False}]
+    milestone_predicates.attach_journal_report(index, reports)
     return index
 
 

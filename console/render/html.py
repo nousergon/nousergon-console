@@ -454,10 +454,12 @@ def milestones_section(index: Index, numbers: dict) -> str:
     declared = evaluate(index, numbers)
     if not declared:
         return ""
-    return "".join(_milestone(m) for m in declared)
+    from ..index.milestones import journal_report
+    recorded = {r.get("milestone_id"): r for r in journal_report(index)}
+    return "".join(_milestone(m, recorded.get(m["id"])) for m in declared)
 
 
-def _milestone(m: dict) -> str:
+def _milestone(m: dict, recorded: dict | None = None) -> str:
     tracker = (
         f' &middot; <a href="{esc(m["tracker"])}">tracker</a>'
         if m.get("tracker") else
@@ -483,10 +485,79 @@ def _milestone(m: dict) -> str:
         f'<p class="pane-question">{esc(_MILESTONE_PANE_QUESTION)} &mdash; '
         f'{esc(m["question"])}</p>'
         f'<p>{m["met"]} of {m["of"]} clauses met{unreported}{holding}{tracker}</p>'
+        f'{_milestone_predicate(m)}'
         "<table><thead><tr><th>clause</th><th>status</th><th>bound to</th>"
         "<th>value</th><th>target</th><th>as-of</th><th>evidence</th>"
         "</tr></thead>"
         f"<tbody>{rows}</tbody></table>"
+        f'{_milestone_history(recorded)}'
+    )
+
+
+def _milestone_predicate(m: dict) -> str:
+    """The whole predicate as the one field a machine reads, rendered so the
+    predicate a sweep evaluates is COPIED OFF THE SURFACE rather than
+    transcribed by hand — a transcribed predicate is the one that ends up
+    malformed and silently never evaluates (gate-taxonomy-policy.md §5)."""
+    state = m.get("exit_state")
+    predicate = (
+        f' &middot; <code>{esc(m["verified_when"])}</code>'
+        if m.get("verified_when") else
+        ' &middot; <em class="absent">no journal declared — this predicate is '
+        'not machine-checkable and no clause transition is recorded</em>'
+    )
+    return (f'<p>exit state: <strong>{esc(str(state))}</strong>'
+            f'{predicate}</p>')
+
+
+def _milestone_history(recorded: dict | None) -> str:
+    """What the durable clause journal recorded, rendered back.
+
+    A transition is a FACT THE CONSOLE HOLDS, not something a reader
+    reconstructs by remembering last week's number — which is precisely how two
+    clauses went MET -> UNMET in three days with nobody noticing
+    (alpha-engine-config-I9083). A journal that could not be read or written
+    renders LOUDLY here: a recorder failing silently is the defect this exists
+    to remove, so its own failure may not be silent either.
+    """
+    if not recorded:
+        return ""
+    if recorded.get("error"):
+        return ('<p class="state-UNREPORTED">clause journal UNREADABLE: '
+                f'{esc(str(recorded["error"]))} &mdash; no transition is being '
+                'recorded, so a clause could regress unannounced</p>')
+    rows = "".join(
+        f'<tr class="milestone-{esc(str(t.get("to")))}">'
+        f'<td>{esc(str(t.get("at")))}</td>'
+        f'<td>{esc(str(t.get("clause")))}</td>'
+        f'<td>{esc(str(t.get("from")))} &rarr; {esc(str(t.get("to")))}'
+        f'{" (baseline)" if t.get("baseline") else ""}</td>'
+        f'<td>{esc(_moved_text(t))}</td></tr>'
+        for t in reversed(recorded.get("recent") or [])
+    )
+    pending = recorded.get("undelivered_notifications")
+    warn = (f'<p class="state-UNREPORTED">{pending} transition notification(s) '
+            "undelivered — recorded, not announced</p>") if pending else ""
+    if not rows:
+        return (f'<p>clause journal: <code>{esc(str(recorded.get("journal")))}'
+                "</code> &middot; no transition recorded yet</p>" + warn)
+    return (
+        f'<p>clause journal: <code>{esc(str(recorded.get("journal")))}</code>'
+        f' &middot; retained {esc(str(recorded.get("retention_hours")))}h</p>'
+        + warn
+        + "<table><thead><tr><th>at</th><th>clause</th><th>transition</th>"
+        "<th>what moved</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _moved_text(transition: dict) -> str:
+    moved = transition.get("moved") or []
+    if not moved:
+        return "—"
+    return "; ".join(
+        f'{m.get("binding")} {m.get("from")} → {m.get("to")}'
+        for m in moved
     )
 
 

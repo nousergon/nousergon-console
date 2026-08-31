@@ -397,3 +397,480 @@ def test_every_clause_status_has_a_stylesheet_selector():
            / "console/static/styles.css").read_text()
     for status in (M.MET, M.UNMET, M.UNREPORTED):
         assert f".milestone-{status}" in css
+
+
+# ============================================================================
+# The clause journal — transitions, episodes, and one notification per episode.
+#
+# The defect these exist for, measured: two clauses of the Crucible phase-2
+# exit predicate went MET -> UNMET inside three days (c3 `unregistered` 0 -> 3,
+# c4 `staleness_honesty` 0 -> 2, live 2026-08-31T15:59Z) and NOTHING paged. The
+# predicate was rendered on a page and read when somebody happened to look,
+# which makes it a dashboard rather than a gate. `alpha-engine-config-I9083`
+# recorded that same regression once, as a symptom; nothing was built that
+# would catch the next one.
+#
+# What each of these asserts is a way the FIX fails, not a way the feature
+# works:
+#
+# - keying on the BUILD instead of the episode. The index rebuilds every ~180s;
+#   a per-build notification is ~480 pages a day for one regression. The fleet
+#   has this exact mistake on record (an hourly timer keyed on the failing RUN:
+#   5 CRITICALs and 5 RESOLVEDs for one condition).
+# - a cold start paging for every clause that was already failing. A first
+#   observation has no before and is not a regression.
+# - announcing UNMET -> UNREPORTED as a recovery. That is a LOSS of
+#   measurement, and calling it a fix is the lie this module exists to prevent.
+# - a delivery failure eating the record. Recording is not delivery (§7.2a):
+#   the transition is durable whether or not the pager worked, and the event is
+#   retried rather than dropped or duplicated.
+# - overwriting a journal that could not be read. That destroys the history AND
+#   re-baselines every clause, silently suppressing the very episode this
+#   catches.
+# ============================================================================
+
+import copy
+import json as _json
+import re
+
+
+JOURNAL_BUCKET = "example-bucket"
+JOURNAL_KEY = "console/milestones/example-exit/journal.json"
+
+
+def _journalled(**overrides) -> list[dict]:
+    """`DECLARATION` plus a journal block. Same clauses, so every assertion
+    below is about the journal and never about the predicate."""
+    decl = copy.deepcopy(DECLARATION)
+    journal = {"bucket": JOURNAL_BUCKET, "key": JOURNAL_KEY,
+               "notify": {"sns_topic_arn": "arn:aws:sns:us-east-1:0:example"}}
+    journal.update(overrides)
+    decl[0]["journal"] = journal
+    return decl
+
+
+class _Store:
+    """An object store that round-trips through JSON, so a test can never pass
+    on a mutation the real S3 writer would not have carried."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], dict] = {}
+        self.writes = 0
+        self.unreadable: str | None = None
+
+    def read(self, bucket: str, obj: str):
+        if self.unreadable:
+            raise M.JournalUnreadable(self.unreadable)
+        stored = self.objects.get((bucket, obj))
+        return copy.deepcopy(stored) if stored is not None else None
+
+    def write(self, bucket: str, obj: str, doc) -> None:
+        self.writes += 1
+        self.objects[(bucket, obj)] = _json.loads(_json.dumps(doc, default=str))
+
+    @property
+    def doc(self) -> dict:
+        return self.objects[(JOURNAL_BUCKET, JOURNAL_KEY)]
+
+
+class _Notifier:
+    def __init__(self, fail_first: int = 0) -> None:
+        self.events: list[dict] = []
+        self.fail_first = fail_first
+        self.attempts = 0
+
+    def __call__(self, event) -> None:
+        self.attempts += 1
+        if self.fail_first > 0:
+            self.fail_first -= 1
+            raise RuntimeError("transport down")
+        self.events.append(copy.deepcopy(dict(event)))
+
+
+def _run(index, store, notifier, now, declaration=None):
+    M.attach(index, M.parse(declaration or _journalled()))
+    numbers = render_json.numbers(
+        index, [], index.conflicts(), index.transparency_gap())
+    return M.journal(index, numbers=numbers, reader=store.read,
+                     writer=store.write, notifier=notifier, now=now)
+
+
+def _mixed(streak: int = 6, verdict: str = "UNKNOWN") -> Index:
+    """c-met MET (streak >= 4), c-unmet UNMET, c-unreported UNREPORTED."""
+    return _index_with(_signal("sig-alpha", streak), _verdict("comp-verdict", verdict))
+
+
+# ------------------------------------------------- the milestone roll-up ----
+
+def test_exit_state_is_holding_when_a_clause_was_measured_and_fails(index):
+    [milestone] = _evaluated(index)
+    assert milestone["exit_state"] == M.HOLDING
+    assert milestone["exit_confirmed"] == 0
+
+
+def test_exit_state_is_unreportable_when_nothing_failed_but_something_could_not_be_read():
+    """A predicate the console could not READ is not a predicate that failed.
+    Collapsing UNREPORTABLE into HOLDING would make an unreadable clause
+    indistinguishable from a measured failing one — the distinction the whole
+    module exists to hold, at the one level where a reader looks first."""
+    idx = _index_with(_signal("sig-alpha", 6), _verdict("comp-verdict", "PASS"))
+    declaration = copy.deepcopy(DECLARATION)
+    M.attach(idx, M.parse(declaration))
+    numbers = render_json.numbers(idx, [], idx.conflicts(),
+                                  idx.transparency_gap())
+    [milestone] = M.evaluate(idx, numbers)
+    assert milestone["unreported"] == 1
+    assert milestone["exit_state"] == M.UNREPORTABLE
+    # And never confirmed: EXITED is reachable ONLY from all-MET, so no
+    # unreadable clause can ever be counted as a clause that passed.
+    assert milestone["exit_confirmed"] == 0
+
+
+def test_exit_state_is_exited_only_when_every_clause_is_met():
+    decl = copy.deepcopy(DECLARATION)
+    decl[0]["clauses"] = [decl[0]["clauses"][0]]
+    idx = _index_with(_signal("sig-alpha", 6))
+    M.attach(idx, M.parse(decl))
+    numbers = render_json.numbers(idx, [], idx.conflicts(),
+                                  idx.transparency_gap())
+    [milestone] = M.evaluate(idx, numbers)
+    assert milestone["exit_state"] == M.EXITED
+    assert milestone["exit_confirmed"] == 1
+
+
+def test_the_verified_when_predicate_parses_under_the_fleet_gate_grammar(index):
+    """`gate_data_sweep._build_ready_when_re` accepts exactly one content form:
+    `field <name> >= <num>`. A predicate written against the STRING
+    `exit_state` would be unconstructible and the sweep would escalate it to
+    the Decision Queue rather than evaluate it — which is how sixteen of
+    nineteen `gate:decision` PRs got there (gate-taxonomy-policy.md §5)."""
+    M.attach(index, M.parse(_journalled()))
+    numbers = render_json.numbers(index, [], index.conflicts(),
+                                  index.transparency_gap())
+    [milestone] = M.evaluate(index, numbers)
+    grammar = re.compile(
+        r"^[\s>*#-]*\**\s*Verified-when\**\s*[:：]\**\s*"
+        r"(s3://\S+)\s+"
+        r"(exists|>=\s*\d+\s*objects?|newer-than\s+\d{4}-\d{2}-\d{2}"
+        r"|field\s+[\w.\-\[\]]+\s*>=\s*\d+(?:\.\d+)?)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    assert grammar.search(f'Verified-when: {milestone["verified_when"]}')
+
+
+# --------------------------------------------- the empty-population refusal --
+
+def test_a_count_over_an_empty_population_refuses_rather_than_reading_met():
+    """`{count: 0, of: 0}` REFUSES (alpha-engine-config-I9052). A fallback
+    build renders every source `ok` over nothing at all, and a gap of `0 of 0`
+    then reads as a perfect surface — which is exactly how a blanked index
+    looked healthy for ten minutes on 2026-08-28. A clause graded MET off that
+    would turn the outage into an exit criterion being met."""
+    idx = Index()
+    M.attach(idx, M.parse([{
+        "id": "m", "question": "q?",
+        "clauses": [{"id": "c", "number": "transparency_gap", "path": "count",
+                     "op": "==", "target": 0}],
+    }]))
+    [milestone] = M.evaluate(idx, {"transparency_gap": {"count": 0, "of": 0}})
+    clause = milestone["clauses"][0]
+    assert clause["status"] == M.UNREPORTED
+    assert "empty or uncomputable denominator" in clause["reason"]
+    # And the same number over a real population still grades normally, so the
+    # guard is a refusal on an empty denominator and not a blanket refusal.
+    [ok] = M.evaluate(idx, {"transparency_gap": {"count": 0, "of": 42}})
+    assert ok["clauses"][0]["status"] == M.MET
+
+
+def test_a_denominator_that_could_not_be_computed_also_refuses():
+    """§9.1 signals uncomputable with `of: None`. A clause bound to its
+    `unregistered` member must not read `0 == 0` off that."""
+    idx = Index()
+    M.attach(idx, M.parse([{
+        "id": "m", "question": "q?",
+        "clauses": [{"id": "c", "number": "population_completeness",
+                     "path": "unregistered", "op": "==", "target": 0}],
+    }]))
+    [milestone] = M.evaluate(
+        idx, {"population_completeness": {"unregistered": 0, "of": None}})
+    assert milestone["clauses"][0]["status"] == M.UNREPORTED
+
+
+def test_the_guard_never_blocks_a_clause_reading_the_refusal_itself():
+    """`requires: {path: computable, equals: true}` is how §9.6's refusal is
+    made honest. If the empty-population guard fired on `computable` too, that
+    precondition could never be evaluated and the mechanism would invert."""
+    idx = Index()
+    M.attach(idx, M.parse([{
+        "id": "m", "question": "q?",
+        "clauses": [{"id": "c", "number": "staleness_honesty", "path": "count",
+                     "op": "==", "target": 0,
+                     "requires": {"path": "computable", "equals": True}}],
+    }]))
+    [milestone] = M.evaluate(idx, {"staleness_honesty": {
+        "computable": False, "count": 0, "of": 0}})
+    clause = milestone["clauses"][0]
+    assert clause["status"] == M.UNREPORTED
+    assert "declined to state a value" in clause["reason"]
+
+
+# ------------------------------------------------------ journal declaration --
+
+def test_a_journal_with_nowhere_to_land_fails_the_build():
+    with pytest.raises(M.MilestoneConfigError, match="both `bucket` and `key`"):
+        M.parse(_journalled(bucket=""))
+
+
+def test_a_journal_key_that_is_a_prefix_fails_the_build():
+    with pytest.raises(M.MilestoneConfigError, match="one object, not a prefix"):
+        M.parse([dict(DECLARATION[0], journal={
+            "bucket": JOURNAL_BUCKET, "key": "console/milestones/"})])
+
+
+def test_no_journal_block_persists_nothing_and_notifies_nothing(index):
+    """The state of `config.example.yaml`, of the CI build gate, and of every
+    console deployment that has not asked for a journal. A milestone pane must
+    not become a thing that writes to somebody's bucket by existing."""
+    store, notifier = _Store(), _Notifier()
+    reports = _run(index, store, notifier, "2026-08-31T12:00:00Z",
+                   declaration=DECLARATION)
+    assert reports == []
+    assert store.writes == 0 and notifier.events == []
+
+
+# ------------------------------------------------------------ the baseline --
+
+def test_the_first_build_records_a_baseline_and_pages_for_nothing():
+    """A cold start has no before. Paging for every clause that was already
+    failing before anyone was watching would make the first deploy the noisiest
+    event in the system, and would train the reader to ignore it."""
+    store, notifier = _Store(), _Notifier()
+    [report] = _run(_mixed(), store, notifier, "2026-08-31T12:00:00Z")
+    assert report["written"] is True
+    assert notifier.events == []
+    assert {t["clause"] for t in report["transitions"]} == {
+        "c-met", "c-unmet", "c-unreported"}
+    assert all(t["baseline"] for t in report["transitions"])
+    # The already-failing clauses hold OPEN episodes, marked as baseline, so
+    # their eventual recovery is not announced as a recovery from a page
+    # nobody received.
+    episodes = store.doc["episodes"]
+    assert set(episodes) == {"c-unmet", "c-unreported"}
+    assert all(e["baseline"] and not e["notified"] for e in episodes.values())
+
+
+# --------------------------------------------- one notification per episode --
+
+def test_a_clause_regressing_notifies_exactly_once_however_often_it_rebuilds():
+    """THE assertion. The index rebuilds every ~180s; a notification keyed on
+    the build is ~480 pages a day for one regression."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    assert notifier.events == []
+
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
+    assert len(notifier.events) == 1
+    [event] = notifier.events
+    assert event["state"] == M.OPENED
+    assert (event["from"], event["to"]) == (M.MET, M.UNMET)
+    assert event["clause_id"] == "c-met"
+    assert event["severity"] == "error"
+    assert event["identity_key"] == "milestone:example-exit:clause:c-met"
+    # The binding that MOVED, with before and after — a page saying only
+    # "c-met is UNMET" sends the reader to another surface to find out why.
+    assert event["moved"] == [{
+        "binding": "entity:sig-alpha.consecutive_cycles",
+        "from": 6, "to": 1, "target": 4, "op": ">="}]
+
+    for minute in range(6, 60, 3):
+        _run(_mixed(streak=1), store, notifier,
+             f"2026-08-31T12:{minute:02d}:00Z")
+    assert len(notifier.events) == 1, "one regression, one notification"
+
+
+def test_an_unchanged_rebuild_writes_nothing_at_all():
+    """Not merely "notifies nothing" — writes nothing. A journal rewritten 480
+    times a day has an `updated_at` that means nothing, and its own age stops
+    being usable as a liveness signal."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(), store, notifier, "2026-08-31T12:00:00Z")
+    writes = store.writes
+    for minute in (3, 6, 9, 12):
+        [report] = _run(_mixed(), store, notifier,
+                        f"2026-08-31T12:{minute:02d}:00Z")
+        assert report["written"] is False
+    assert store.writes == writes
+    assert notifier.events == []
+
+
+def test_the_heartbeat_rewrites_on_its_declared_cadence_without_notifying():
+    """A journal rewritten only on change is indistinguishable, by age, from a
+    journal nothing is writing any more. Absence of a signal is never health."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(), store, notifier, "2026-08-31T12:00:00Z")
+    writes = store.writes
+    _run(_mixed(), store, notifier, "2026-08-31T12:30:00Z")
+    assert store.writes == writes, "inside the cadence: no write"
+    _run(_mixed(), store, notifier, "2026-08-31T13:05:00Z")
+    assert store.writes == writes + 1
+    assert notifier.events == [], "a heartbeat is not a transition"
+
+
+# ------------------------------------------------------- symmetric recovery --
+
+def test_recovery_notifies_once_under_the_same_identity_key():
+    """OB-7.2: recovery notifies symmetrically. The identity key is the same
+    string for the page and its clear, and carries nothing about the build —
+    no timestamp, no index generation — which is what makes the pair joinable
+    by whatever is holding the open condition."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
+    [opened] = notifier.events
+
+    _run(_mixed(streak=9), store, notifier, "2026-08-31T12:06:00Z")
+    assert len(notifier.events) == 2
+    cleared = notifier.events[1]
+    assert cleared["state"] == M.CLEARED
+    assert cleared["close_reason"] == M.RECOVERED
+    assert cleared["identity_key"] == opened["identity_key"]
+    assert cleared["severity"] == "info"
+    assert "RESOLVED" in cleared["subject"]
+    # The episode is closed, so a later rebuild cannot clear it twice.
+    _run(_mixed(streak=9), store, notifier, "2026-08-31T12:09:00Z")
+    assert len(notifier.events) == 2
+    assert "c-met" not in store.doc["episodes"]
+
+
+def test_a_clause_that_stops_being_readable_is_never_announced_as_recovered():
+    """UNMET -> UNREPORTED is a LOSS of measurement, not a fix. Detection
+    blindness outranks the defect it hides, so it is `error` and not `info`,
+    and the clear that retires the previous page says SUPERSEDED."""
+    store, notifier = _Store(), _Notifier()
+    decl = copy.deepcopy(_journalled())
+    decl[0]["clauses"] = [{"id": "c", "label": "the verdict passes",
+                           "entity": "comp-verdict",
+                           "field": "correctness_verdict",
+                           "op": "==", "target": "PASS"}]
+    _run(_index_with(_verdict("comp-verdict", "PASS")), store, notifier,
+         "2026-08-31T12:00:00Z", declaration=decl)
+    _run(_index_with(_verdict("comp-verdict", "FAIL")), store, notifier,
+         "2026-08-31T12:03:00Z", declaration=decl)
+    assert [e["state"] for e in notifier.events] == [M.OPENED]
+
+    # The entity leaves the index entirely: the clause can no longer be read.
+    _run(_index_with(), store, notifier, "2026-08-31T12:06:00Z",
+         declaration=decl)
+    states = [(e["state"], e.get("close_reason"), e["severity"])
+              for e in notifier.events]
+    assert states == [
+        (M.OPENED, None, "error"),
+        (M.CLEARED, M.SUPERSEDED, "info"),
+        (M.OPENED, None, "error"),
+    ]
+    assert "SUPERSEDED" in notifier.events[1]["subject"]
+    assert "did NOT recover" in notifier.events[1]["message"]
+    assert notifier.events[2]["to"] == M.UNREPORTED
+
+
+def test_a_baseline_failure_recovering_clears_nothing_it_never_paged_for():
+    """A clear for a page nobody received is noise, and it is how a recovery
+    feed stops meaning anything."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:00:00Z")
+    assert notifier.events == []
+    _run(_mixed(streak=9), store, notifier, "2026-08-31T12:03:00Z")
+    assert notifier.events == []
+
+
+# ------------------------------------------ recording is not delivery (§7.2a) --
+
+def test_a_failed_delivery_still_records_the_transition_and_retries_it_once():
+    """Suppression is a delivery decision and never a recording one. The
+    regression is durable whether or not the pager worked — and the event is
+    retried rather than dropped, then delivered EXACTLY once in total."""
+    store, notifier = _Store(), _Notifier(fail_first=1)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
+
+    assert notifier.events == [], "the transport was down"
+    recorded = [t for t in store.doc["transitions"] if not t.get("baseline")]
+    assert [(t["from"], t["to"]) for t in recorded] == [(M.MET, M.UNMET)]
+    [pending] = store.doc["pending_notifications"]
+    assert pending["attempts"] == 1 and "transport down" in pending["last_error"]
+
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:06:00Z")
+    assert len(notifier.events) == 1
+    assert store.doc["pending_notifications"] == []
+
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:09:00Z")
+    assert len(notifier.events) == 1, "retry delivered it, once"
+
+
+def test_an_unreadable_journal_refuses_rather_than_overwriting_the_history():
+    """Overwriting it would destroy the recorded history AND re-baseline every
+    clause — which silently suppresses the very episode this catches. Refusing
+    loudly is the only safe move, and the refusal is rendered."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    writes = store.writes
+    store.unreadable = "s3://example-bucket/... is not valid JSON"
+
+    [report] = _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
+    assert store.writes == writes, "nothing was overwritten"
+    assert notifier.events == []
+    assert "not valid JSON" in report["error"]
+
+
+# ------------------------------------------------------------- the surface --
+
+def test_the_journal_is_rendered_on_the_pane_and_served_on_the_wire():
+    """§3.8. A transition is a fact the CONSOLE HOLDS — not something a reader
+    reconstructs by remembering last week's number, which is how two clauses
+    went MET -> UNMET in three days with nobody noticing (I9083)."""
+    store, notifier = _Store(), _Notifier()
+    idx = _mixed(streak=6)
+    _run(idx, store, notifier, "2026-08-31T12:00:00Z")
+    idx = _mixed(streak=1)
+    reports = _run(idx, store, notifier, "2026-08-31T12:03:00Z")
+    M.attach_journal_report(idx, reports)
+
+    payload = render_json.payload(idx, resolve("/", ""))
+    [recorded] = payload["milestone_journal"]
+    assert recorded["milestone_id"] == "example-exit"
+    assert any(t["clause"] == "c-met" and t["to"] == M.UNMET
+               for t in recorded["recent"])
+
+    page = render_html.landing_page(idx)
+    assert "clause journal" in page
+    assert "exit state: <strong>HOLDING</strong>" in page
+    assert "field exit_confirmed &gt;= 1" in page
+    assert "entity:sig-alpha.consecutive_cycles 6 → 1" in page
+
+
+def test_a_journal_that_could_not_be_recorded_says_so_on_the_page():
+    """A recorder failing silently is the defect this module exists to remove,
+    so its own failure may not be silent either."""
+    idx = _mixed()
+    M.attach(idx, M.parse(_journalled()))
+    M.attach_journal_report(idx, [{
+        "milestone_id": "example-exit", "written": False,
+        "error": "AccessDenied: the console cannot write its own journal"}])
+    page = render_html.landing_page(idx)
+    assert "clause journal UNREADABLE" in page
+    assert "could regress unannounced" in page
+
+
+def test_the_build_never_dies_because_the_journal_could_not_be_written():
+    """One bad recorder must not blank a surface a dozen working sources are
+    rendering (alpha-engine-config-I8778). The failure is recorded ON the
+    index, which is louder than a stack trace in a log nobody reads."""
+    idx = build_index({
+        "milestones": _journalled(),
+        "console": {"repo_root": "."},
+    })
+    [report] = M.journal_report(idx)
+    # No credentials in the test environment: the default reader raises, and
+    # the build carried on and said what happened.
+    assert report["written"] is False
+    assert report.get("error") or report.get("transitions") is not None

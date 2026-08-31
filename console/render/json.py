@@ -31,6 +31,7 @@ from typing import Any
 
 from ..index.graph import Index
 from ..index.milestones import evaluate as evaluate_milestones
+from ..index.milestones import journal_report as milestone_journal_report
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
@@ -211,6 +212,14 @@ def _landing(index: Index) -> dict[str, Any]:
     declared_milestones = evaluate_milestones(index, n)
     if declared_milestones:
         doc["milestones"] = declared_milestones
+    # What the clause journal did on THIS build: the transitions it recorded,
+    # the episodes still open, and — loudly — any failure to record at all. A
+    # recorder that stopped working is a fact about the surface's own honesty
+    # and must be readable by the agents that read this view, not only by a
+    # human looking at the page (§3.8).
+    recorded = milestone_journal_report(index)
+    if recorded:
+        doc["milestone_journal"] = [dict(r) for r in recorded]
     return doc
 
 

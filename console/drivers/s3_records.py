@@ -25,6 +25,26 @@ identical fan-out grammar to project one entity per record.
           status_reason: {path: status_reason, render: text}
         cadence_minutes: 1440
 
+A `records` source over a GROWING series additionally declares a bounded
+window (`alpha-engine-config-I9618`), or it mints one entity per record
+forever — `trades/eod_pnl.csv` is 120 trading sessions today and grows ~250 a
+year:
+
+    metrics:
+      - driver: s3-records
+        key: "s3://alpha-engine-research/trades/eod_pnl.csv"
+        format: csv
+        kind: signal
+        limit: 30                       # at most this many entities
+        order: last                     # ...from THIS end of the series
+        id_template: "portfolio-alpha:{date}"
+
+`order` has no default and is required whenever `limit` is set: a `limit: 30`
+that silently took the OLDEST 30 rows would render a true number about a
+window nobody asked for. The grammar lives in `console/records_shape.py`
+alongside the fan-out itself, so the adapter and this driver cannot end up
+with different notions of a bounded window (§2.3).
+
 Filed as `nousergon-console#98` (blocking `alpha-engine-config-I7477`): the
 report-card v2 body (`report_card.json`'s `tiles.*.components`) is exactly the
 adapter's "grouped" shape — a dict-then-array fan-out with the tile name
@@ -56,7 +76,8 @@ from ..model.descriptor import Binding
 from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
 from ..records_shape import (
-    build_fields, flat_context, get_path, project, resolve_id, resolve_state,
+    RecordsSelectorError, build_fields, flat_context, get_path, project,
+    resolve_id, resolve_state,
 )
 from .base import Cost, DriverResult
 
@@ -108,6 +129,17 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
         records, body_root = project(
             raw, fmt, binding.spec.get("records_path"),
             binding.spec.get("array_fields"), binding.spec.get("group_field"),
+            binding.spec.get("limit"), binding.spec.get("order"),
+        )
+    except RecordsSelectorError as exc:
+        # A malformed `limit`/`order` is a defect in the DESCRIPTOR, not a
+        # body that failed to match it. Saying so is the difference between
+        # "fix your document" and "fix your binding" (`console-policy.md`
+        # §3.9 — when something is not on the surface, the surface says why).
+        return DriverResult.failed(
+            binding,
+            f"the bounded-records selector on {key} is not honourable: {exc}",
+            unavailable=("selector",),
         )
     except (TypeError, ValueError, KeyError) as exc:
         return DriverResult.failed(

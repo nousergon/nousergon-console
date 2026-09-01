@@ -57,6 +57,8 @@
         "key": {"type": "string", "description": "For object-shaped sources: the object this component wrote."},
         "cadence_minutes": {"type": "number", "exclusiveMinimum": 0, "description": "How often this is expected to change. The single most valuable optional field: without it, staleness is not computable."},
         "field": {"type": "string", "description": "For record-shaped sources: the FIELD NAME carrying the metric. A name, never a pattern."},
+        "limit": {"type": "integer", "exclusiveMinimum": 0, "description": "For record fan-out sources over a GROWING series: at most this many entities. Without it a `records` binding over a series mints one entity per record forever \u2014 `trades/eod_pnl.csv` is 120 trading sessions today and grows ~250 a year, and every one would become a permanent console entity. Requires `order`: which end of the series a bounded window keeps is declared, never guessed."},
+        "order": {"type": "string", "enum": ["last", "first"], "description": "Which end of the record sequence `limit` keeps. It has NO default \u2014 a `limit: 30` that silently took the OLDEST 30 rows would render a true number about a window nobody asked for. Only meaningful with `limit`; declared alone it is a typo and fails the binding rather than being ignored."},
         "unit": {"type": "string", "description": "Required for a numeric field (observability-policy.md 3.4). A column emitted as a normalized ratio and consumed as raw share volume silently failed 901 of 903 tickers for months."},
         "baseline": {"description": "What it is compared against, or null declared explicitly — green means BETTER THAN THE BASELINE, and where there is no baseline there is no colour (5.4)."},
         "render": {

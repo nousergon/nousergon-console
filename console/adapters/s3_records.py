@@ -225,7 +225,8 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
     grammar itself is shared with the `s3-records` driver (§2.3).
     """
     return project(body, fmt, config.get("records_path"), config.get("array_fields"),
-                    config.get("group_field"))
+                    config.get("group_field"), config.get("limit"),
+                    config.get("order"))
 
 
 def _one_entity(

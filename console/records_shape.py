@@ -45,10 +45,77 @@ def get_path(obj: Any, path: str) -> Any:
     return cur
 
 
+class RecordsSelectorError(ValueError):
+    """A declared `limit`/`order` selector that cannot be honoured.
+
+    A subclass of ValueError so both callers' existing "this body did not
+    match its declared shape" handling still catches it, while a caller that
+    wants to say *the SELECTOR is wrong, not the body* can tell them apart.
+    """
+
+
+def select(records: list[dict], limit: Any, order: Any) -> list[dict]:
+    """Bound a fan-out to `limit` records from one declared end (§2.3).
+
+    `alpha-engine-config-I9618`. Without this, a `records` source over a
+    growing series mints one entity per record forever: `eod_pnl.csv` is 120
+    trading sessions today and grows ~250/year, and every one of them would
+    become a permanent console entity. A binding that cannot say *how many*
+    and *which end* is not bindable at all.
+
+    `order` is REQUIRED whenever `limit` is set, and has no default. Which end
+    of a series a bounded window keeps is not inferable from the fact that it
+    is bounded — a `limit: 30` that silently took the OLDEST 30 sessions would
+    publish a number that is true about a window nobody asked for, which is
+    the failure mode `console-policy.md`'s row contract exists to prevent. So
+    it is declared, and its absence RAISES rather than picking one.
+
+    - `order: "last"`  — the final `limit` records (a trailing window).
+    - `order: "first"` — the leading `limit` records.
+
+    Absent `limit`, the records pass through untouched: the unbounded fan-out
+    stays the default for the bodies that are legitimately fixed-size (a
+    report card's tiles, a leaderboard's arms).
+    """
+    if limit is None:
+        if order is not None:
+            raise RecordsSelectorError(
+                f"`order: {order!r}` declared without a `limit` — an order on "
+                f"an unbounded fan-out selects nothing and is a typo, not a "
+                f"no-op"
+            )
+        return records
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        raise RecordsSelectorError(f"`limit` must be an integer, got {limit!r}") from None
+    if n <= 0:
+        raise RecordsSelectorError(
+            f"`limit` must be a positive integer, got {n} — a binding that "
+            f"declares zero records is a binding that should not be declared"
+        )
+    if order is None:
+        raise RecordsSelectorError(
+            "`limit` requires an explicit `order` of 'last' or 'first' — which "
+            "end of the series a bounded window keeps is declared, never guessed"
+        )
+    if order not in ("last", "first"):
+        raise RecordsSelectorError(
+            f"`order` must be 'last' or 'first', got {order!r}"
+        )
+    return records[-n:] if order == "last" else records[:n]
+
+
 def project(body: Any, fmt: str, records_path: str | None,
             array_fields: list[str] | None,
-            group_field: str | None) -> tuple[list[dict], dict]:
+            group_field: str | None,
+            limit: Any = None, order: Any = None) -> tuple[list[dict], dict]:
     """Turn one body into (records, body_root) per the declared shape.
+
+    `limit`/`order` bound the fan-out — see `select`. They are applied HERE,
+    inside the one grammar both the adapter and the driver read, so neither
+    caller can end up with a different notion of what a bounded window is
+    (§2.3). A caller that omits them gets the unbounded behaviour it had.
 
     ``body_root`` is what field paths resolve against for whole-body /
     body-level fields; each record is merged on top of it per-entity (record
@@ -63,7 +130,7 @@ def project(body: Any, fmt: str, records_path: str | None,
     if fmt == "csv":
         text = body if isinstance(body, str) else body.decode("utf-8")
         rows = list(csv.DictReader(io.StringIO(text)))
-        return rows, {}
+        return select(rows, limit, order), {}
 
     parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
     if not isinstance(parsed, dict):
@@ -72,11 +139,13 @@ def project(body: Any, fmt: str, records_path: str | None,
     if records_path:
         parts = str(records_path).split(".")
         if "*" in parts:
-            return _explode_grouped(parsed, parts, group_field), parsed
+            return select(_explode_grouped(parsed, parts, group_field),
+                          limit, order), parsed
         raw_list = get_path(parsed, records_path)
         if not isinstance(raw_list, list):
             raise TypeError(f"records_path {records_path!r} is not a list")
-        return [r for r in raw_list if isinstance(r, dict)], parsed
+        return select([r for r in raw_list if isinstance(r, dict)],
+                      limit, order), parsed
     if array_fields:
         arrays = [parsed.get(f) for f in array_fields]
         if any(not isinstance(a, list) for a in arrays):
@@ -85,9 +154,11 @@ def project(body: Any, fmt: str, records_path: str | None,
             {field: values[i] for field, values in zip(array_fields, arrays)}
             for i in range(min(len(a) for a in arrays))
         ]
-        return rows, parsed
-    # Whole-body mode: the object IS the one record.
-    return [{}], parsed
+        return select(rows, limit, order), parsed
+    # Whole-body mode: the object IS the one record. A `limit` here is a
+    # declaration about a fan-out that does not exist, so it still validates
+    # (and still raises on a malformed selector) rather than being ignored.
+    return select([{}], limit, order), parsed
 
 
 def _explode_grouped(cur: Any, parts: list[str],

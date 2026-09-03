@@ -268,7 +268,10 @@ def resolve_facets(facets_config: dict[str, Any] | None,
     differently, and inventing the second is a fabricated fact. A literal is
     never omitted; ``{value: null}`` is the one way to declare a facet and
     give it nothing, and it is refused rather than silently dropped, because
-    that is a config typo and not a fact about any record.
+    that is a config typo and not a fact about any record. The same refusal
+    applies to ``{path: null}`` (or any non-string ``path``): ``str(None)``
+    would look up the key ``"None"`` and can wrong-stamp a facet from a
+    coincidental field of that name — a typo, not an absent fact.
 
     One function, two callers (the `s3-records` adapter and driver), per §2.3
     — the same reason the rest of this module exists.
@@ -297,7 +300,17 @@ def resolve_facets(facets_config: dict[str, Any] | None,
             path = spec["path"]
         else:
             path = spec
-        value = get_path(path_root, str(path))
+        if not isinstance(path, str):
+            if path is None:
+                raise ValueError(
+                    f"facet {facet_name!r} declares `path: null` — a path "
+                    f"facet with no path is a typo, not an absent fact"
+                )
+            raise ValueError(
+                f"facet {facet_name!r} declares a non-string `path` "
+                f"({type(path).__name__}) — a path facet must name a string"
+            )
+        value = get_path(path_root, path)
         if value is not None:
             facets[str(facet_name)] = str(value)
     return facets

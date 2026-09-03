@@ -52,3 +52,17 @@ def test_null_literal_is_refused():
 def test_empty_mapping_is_refused():
     with pytest.raises(ValueError, match="neither `path` nor `value`"):
         resolve_facets({"pipeline": {}}, {})
+
+
+def test_null_path_is_refused_not_looked_up_as_None():
+    """Adversarial FAIL: `{path: null}` used to do get_path(..., str(None))
+    → key `"None"`, and with a coincidental field of that name would
+    wrong-stamp. Same typo class as `{value: null}`."""
+    with pytest.raises(ValueError, match="path: null"):
+        resolve_facets({"pipeline": {"path": None}}, {"None": "wrong-stamp"})
+
+
+def test_non_string_path_is_refused():
+    with pytest.raises(ValueError, match="non-string `path`"):
+        resolve_facets({"pipeline": {"path": 123}}, {"123": "nope"})
+

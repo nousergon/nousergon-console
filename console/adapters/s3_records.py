@@ -75,7 +75,8 @@ from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from ..records_shape import (
-    build_fields, flat_context, get_path, project, resolve_id, resolve_state,
+    build_fields, flat_context, get_path, project, resolve_facets, resolve_id,
+    resolve_state,
 )
 from .object_store import _parse_cadence  # second adoption, one repo — see below
 from ..aws import client as _aws_client
@@ -270,14 +271,10 @@ def _one_entity(
     # are a different thing from declared `fields` (§5.8), which are rendered.
     # Folded in from `object-store-records` during the I79 consolidation — it
     # was that adapter's second real capability, alongside its explicit key
-    # list. A facet whose path resolves to nothing is OMITTED rather than
-    # written as an empty string: an absent facet and a facet whose value is ""
-    # filter differently, and inventing the second is a fabricated fact.
-    facets: dict[str, str] = {}
-    for facet_name, facet_path in (config.get("facets") or {}).items():
-        value = get_path(path_root, str(facet_path))
-        if value is not None:
-            facets[str(facet_name)] = str(value)
+    # list. The grammar (path facets, spelled-out `{path:}`, and literal
+    # `{value:}` facets that stamp a source's own identity on every record)
+    # lives in `records_shape.resolve_facets`, shared with the driver (§2.3).
+    facets = resolve_facets(config.get("facets"), path_root)
 
     return Entity(
         kind=kind,

@@ -244,6 +244,65 @@ def build_fields(path_root: dict, fields_config: dict[str, Any] | None,
     return fields_out
 
 
+def resolve_facets(facets_config: dict[str, Any] | None,
+                   path_root: dict) -> dict[str, str]:
+    """Facets (§2.2) for one record, from the declared `facets` map.
+
+    Three declaration shapes, one rule each:
+
+    - ``name: "a.b"`` — a dotted path read off the merged record+body. The
+      original form; unchanged.
+    - ``name: {path: "a.b"}`` — the same, spelled out.
+    - ``name: {value: "…"}`` — a LITERAL stamped on every record this source
+      mints, regardless of the record. This is the form for a facet that is
+      the SOURCE's identity rather than a per-record fact: `alpha-engine-config-
+      I9926` review B3 measured a board whose rows carried ten distinct values
+      of the field that looked like its identity, so a path facet split one
+      board into ten filtered pages and hid the rows whose provenance was
+      elsewhere — including the UNREPORTED rows the board exists to show. No
+      field was constant across the rows; the identity belonged to the
+      adapter, and only a literal can say so.
+
+    A path facet whose path resolves to nothing is OMITTED rather than written
+    as an empty string — an absent facet and a facet whose value is "" filter
+    differently, and inventing the second is a fabricated fact. A literal is
+    never omitted; ``{value: null}`` is the one way to declare a facet and
+    give it nothing, and it is refused rather than silently dropped, because
+    that is a config typo and not a fact about any record.
+
+    One function, two callers (the `s3-records` adapter and driver), per §2.3
+    — the same reason the rest of this module exists.
+    """
+    facets: dict[str, str] = {}
+    for facet_name, spec in (facets_config or {}).items():
+        if isinstance(spec, dict):
+            if "value" in spec and "path" in spec:
+                raise ValueError(
+                    f"facet {facet_name!r} declares both `value` and `path` — a "
+                    f"literal and a lookup cannot both be the answer"
+                )
+            if "value" in spec:
+                if spec["value"] is None:
+                    raise ValueError(
+                        f"facet {facet_name!r} declares `value: null` — a literal "
+                        f"facet with no value is a typo, not an absent fact"
+                    )
+                facets[str(facet_name)] = str(spec["value"])
+                continue
+            if "path" not in spec:
+                raise ValueError(
+                    f"facet {facet_name!r} is a mapping with neither `path` nor "
+                    f"`value` ({sorted(spec)!r})"
+                )
+            path = spec["path"]
+        else:
+            path = spec
+        value = get_path(path_root, str(path))
+        if value is not None:
+            facets[str(facet_name)] = str(value)
+    return facets
+
+
 def resolve_state(
     kind: Kind,
     state_field: str | None,

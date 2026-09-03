@@ -77,7 +77,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
 from ..records_shape import (
     RecordsSelectorError, build_fields, flat_context, get_path, project,
-    resolve_id, resolve_state,
+    resolve_facets, resolve_id, resolve_state,
 )
 from .base import Cost, DriverResult
 
@@ -245,11 +245,8 @@ def _one_entity(
 
     fields_out = build_fields(path_root, spec.get("fields"), spec.get("question"))
 
-    facets: dict[str, str] = {}
-    for facet_name, facet_path in (spec.get("facets") or {}).items():
-        value = get_path(path_root, str(facet_path))
-        if value is not None:
-            facets[str(facet_name)] = str(value)
+    # Same grammar as the adapter, from the one place it is written (§2.3).
+    facets = resolve_facets(spec.get("facets"), path_root)
 
     return Entity(
         kind=kind,

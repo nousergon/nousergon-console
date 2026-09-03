@@ -738,6 +738,50 @@ def test_no_facets_declared_leaves_the_entity_unfaceted_rather_than_failing():
     assert entities["AAA"].facets == {}
 
 
+
+def test_a_literal_value_facet_is_stamped_on_every_row():
+    """`{value: …}` is the source's identity, not a per-record path.
+
+    The FAIL case I9926 review found: before literal support, a dict spec was
+    coerced via `str(facet_path)` into "{'value': 'crucible-board'}", looked up
+    as a path, resolved to None, and the facet was OMITTED — so
+    `/decision?pipeline=crucible-board` filtered to nothing. A literal must
+    stamp on every row, including rows that lack any matching field.
+    """
+    entities = _by_id(_universe_result(facets={"pipeline": {"value": "crucible-board"}}))
+    assert entities["AAA"].facets["pipeline"] == "crucible-board"
+    assert entities["BBB"].facets["pipeline"] == "crucible-board"
+    # CCC has no `sector` field — the regression that omitted a path facet —
+    # but the literal is still present.
+    assert entities["CCC"].facets["pipeline"] == "crucible-board"
+    assert "sector" not in entities["CCC"].facets
+
+
+def test_a_dict_value_spec_used_to_omit_the_facet_and_now_stamps_it():
+    """Demonstrate the pre-fix bug shape against the live resolution rule."""
+    from console.records_shape import resolve_facets
+
+    row = {"id": "phase:phase2", "surface": "crucible/runs"}
+    # Pre-fix behaviour reconstructed: str(dict) is a path that resolves to
+    # nothing, so the facet vanishes.
+    broken = resolve_facets({"pipeline": str({"value": "crucible-board"})}, row)
+    assert "pipeline" not in broken
+    # Post-fix: the dict form stamps the literal on every row.
+    fixed = resolve_facets({"pipeline": {"value": "crucible-board"}}, row)
+    assert fixed == {"pipeline": "crucible-board"}
+
+
+def test_a_path_facet_spelled_as_a_mapping_still_reads_the_record():
+    entities = _by_id(_universe_result(facets={"sector": {"path": "sector"}}))
+    assert entities["AAA"].facets["sector"] == "tech"
+    assert "sector" not in entities["CCC"].facets
+
+
+def test_a_string_facet_path_is_unchanged():
+    entities = _by_id(_universe_result(facets={"sector": "sector"}))
+    assert entities["AAA"].facets["sector"] == "tech"
+
+
 def test_an_explicit_single_key_is_reachable_as_a_key_pattern():
     """The whole of `object-store-records`' `keys:` list capability: a literal
     key is a pattern that matches exactly one thing. This is why that adapter

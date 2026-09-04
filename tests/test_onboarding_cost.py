@@ -145,7 +145,32 @@ def test_uncomputable_when_the_path_has_no_git_history(tmp_path):
 
 
 def test_uncomputable_with_no_registry_paths_configured(repo):
+    """This test's NAME was right and its assertions were not: it enshrined
+    `computable: True` over an empty population, which is §5.3's forbidden
+    aggregate and renders identically to §9.8's target of 0 being met."""
     result = compute_onboarding_cost(str(repo), [], now=NOW)
-    assert result["computable"] is True
+    assert result["computable"] is False
+    assert result["count"] is None
     assert result["of"] == 0
-    assert result["count"] == 0
+    assert result["reason"]
+
+
+def test_uncomputable_when_the_registry_rows_are_not_git_tracked(repo):
+    """The fleet's own deployment: the console runs from a checkout of this
+    repository whose `registry.d/` is delivered out of band from S3 and is
+    untracked (`git status --porcelain` on `i-09b539c844515d549` →
+    `?? registry.d/`). Every row therefore produces no `git log` line, and
+    §9.8 published `{computable: true, count: 0, of: 0}` on 2026-09-04 while
+    291 rows sat in that directory — a measurement of nothing, rendered as
+    the target being met."""
+    reg = repo / "example" / "registry.d"
+    for cid in ("untracked-a", "untracked-b"):
+        with open(reg / f"{cid}.yaml", "w") as fh:
+            yaml.safe_dump({"component_id": cid, "lifecycle": "in-service"}, fh)
+    # deliberately NOT committed
+    result = compute_onboarding_cost(str(repo), ["example/registry.d"], now=NOW)
+    assert result["computable"] is False
+    assert result["count"] is None
+    assert result["of"] == 0
+    assert "none is tracked in the git history" in result["reason"]
+    assert "2 registry row(s)" in result["reason"]

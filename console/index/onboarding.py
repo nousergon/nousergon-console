@@ -76,17 +76,31 @@ def _component_id(fpath: Path, id_field: str) -> str | None:
     return str(cid) if cid else None
 
 
-def discover_recent_additions(
+def discover_recent_additions_detail(
     repo_root: str,
     registry_paths: list[str],
     id_field: str = "component_id",
     since_days: int = 90,
     now: datetime | None = None,
-) -> dict[str, dict[str, str]] | None:
-    """component_id → ``{"added_at": iso, "commit": sha}``, for rows added
-    within the trailing ``since_days``. ``None`` when git history is
-    unavailable at all (distinct from an empty dict, which honestly means
-    "available, and nothing was added recently")."""
+) -> dict[str, Any] | None:
+    """``discover_recent_additions`` plus the two census counts that decide
+    whether an empty result is a finding or a fact.
+
+    ``{"additions": …, "rows_seen": int, "rows_with_history": int}``, or
+    ``None`` when git history is unavailable at all.
+
+    **Why the counts exist.** An empty ``additions`` has two indistinguishable
+    causes, and only one of them is "nothing was onboarded recently". The
+    other is that the registry rows are not in this repository's history at
+    all — the fleet's own deployment is exactly that shape: the console runs
+    from a checkout whose ``registry.d/`` is delivered out of band and is
+    untracked (``git status --porcelain`` → ``?? registry.d/``), so all 291
+    rows produce no ``git log`` line and §9.8 reported
+    ``{computable: true, count: 0, of: 0}`` — an aggregate over an empty
+    population rendered indistinguishably from the target being met. That is
+    the shape `Index.broken_registries` already guards §9.1 and §9.6 against
+    (`alpha-engine-config-I7126`); this is the same guard on §9.8.
+    """
     if _git(repo_root, ["rev-parse", "--is-inside-work-tree"]) is None:
         return None
     # A shallow clone (`actions/checkout`'s default, and any `git clone
@@ -103,6 +117,8 @@ def discover_recent_additions(
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=since_days)
     additions: dict[str, dict[str, str]] = {}
+    rows_seen = 0
+    rows_with_history = 0
     for reg_path in registry_paths:
         p = Path(reg_path)
         if not p.is_absolute():
@@ -116,6 +132,7 @@ def discover_recent_additions(
             cid = _component_id(fpath, id_field)
             if not cid:
                 continue
+            rows_seen += 1
             log = _git(repo_root, [
                 "log", "--diff-filter=A", "--follow", "--format=%H%x09%aI", "--",
                 str(fpath),
@@ -123,6 +140,7 @@ def discover_recent_additions(
             lines = [l for l in (log or "").strip().splitlines() if l]
             if not lines:
                 continue  # never committed — nothing to discover from
+            rows_with_history += 1
             # `git log` is newest-first; with --follow the LAST line is the
             # original addition of the file's earliest-known name.
             commit, _, added_at = lines[-1].partition("\t")
@@ -132,7 +150,29 @@ def discover_recent_additions(
                 continue
             if ts >= cutoff:
                 additions[cid] = {"added_at": added_at, "commit": commit}
-    return additions
+    return {
+        "additions": additions,
+        "rows_seen": rows_seen,
+        "rows_with_history": rows_with_history,
+    }
+
+
+def discover_recent_additions(
+    repo_root: str,
+    registry_paths: list[str],
+    id_field: str = "component_id",
+    since_days: int = 90,
+    now: datetime | None = None,
+) -> dict[str, dict[str, str]] | None:
+    """component_id → ``{"added_at": iso, "commit": sha}``, for rows added
+    within the trailing ``since_days``. ``None`` when git history is
+    unavailable at all (distinct from an empty dict, which means "available,
+    and nothing was added recently" — a distinction
+    ``discover_recent_additions_detail`` is needed to make safely)."""
+    detail = discover_recent_additions_detail(
+        repo_root, registry_paths, id_field, since_days, now
+    )
+    return None if detail is None else detail["additions"]
 
 
 def count_edits_in_commit(
@@ -178,12 +218,17 @@ def compute_onboarding_cost(
     """§9.8's published number.
 
     ``computable: False`` (never the reserved N/A-NOT-IMPL token — that is
-    §11's carve-out and this number is not exempt from needing a reason) when
-    the registry path(s) carry no discoverable git history at all.
+    §11's carve-out and this number is not exempt from needing a reason) in
+    each of the three ways there is nothing to discover from: no git history
+    at repo_root at all, no registry rows under the configured path(s), and
+    rows present but none of them git-tracked. The third is the one the
+    fleet's own deployment hits, and it previously fell through to
+    ``{count: 0, of: 0, computable: true}`` — §5.3's forbidden aggregate over
+    an empty population, reading exactly like the target being met.
     """
-    additions = discover_recent_additions(repo_root, registry_paths, id_field,
-                                          since_days, now)
-    if additions is None:
+    detail = discover_recent_additions_detail(repo_root, registry_paths,
+                                              id_field, since_days, now)
+    if detail is None:
         return {
             "count": None, "of": 0, "computable": False,
             "reason": (
@@ -192,6 +237,30 @@ def compute_onboarding_cost(
                 "only a git-tracked registry can supply"
             ),
         }
+    if detail["rows_seen"] == 0:
+        return {
+            "count": None, "of": 0, "computable": False,
+            "reason": (
+                "no registry rows found under the configured registry "
+                f"path(s) {sorted(registry_paths)!r} — §9.8's population is "
+                "the components that entered the registry, and there is no "
+                "registry here to have entered"
+            ),
+        }
+    if detail["rows_with_history"] == 0:
+        return {
+            "count": None, "of": 0, "computable": False,
+            "reason": (
+                f"{detail['rows_seen']} registry row(s) were read under "
+                f"{sorted(registry_paths)!r}, but none is tracked in the git "
+                f"history at {repo_root!r} — the rows are delivered out of "
+                "band, so no addition date is discoverable and §9.8 has no "
+                "population to measure. Point `repo_root` at the repository "
+                "the registry is committed to, or accept the number as "
+                "uncomputable here"
+            ),
+        }
+    additions = detail["additions"]
     components = []
     total_edits = 0
     for cid, info in sorted(additions.items()):

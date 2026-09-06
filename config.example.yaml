@@ -690,6 +690,86 @@ adapters:
       key: changelog/retro_candidates.json
       cadence: 1d                     # emitted daily by the docs aggregator
 
+  # ── Per-deploy cost and resource signal (alpha-engine-config-I10075) ──────
+  #
+  # NOT a new adapter, deliberately. `docs/adapters.md`'s boundary test stops
+  # at step 2: both prefixes below are "an S3 prefix whose objects carry one or
+  # many per-instance records, each projected onto a configured entity kind",
+  # which is exactly `s3-records`' source shape, differing only in which bucket
+  # and prefix they point at. A different instance is never a different shape
+  # (§2.7) — four sibling adapters were built for this shape within an hour on
+  # 2026-08-10 and consolidated by Brian's 2026-08-11 ruling (#79).
+  #
+  # The PRODUCER declares the vocabulary these map from (`deploy_state`,
+  # `reconcile_state`), so the console maps a declared value onto §8.3's closed
+  # states rather than inferring one from a number.
+  - name: deploy-cost
+    kind: s3-records
+    enabled: false
+    produces: [run]
+    config:
+      bucket: your-research-bucket
+      prefix: changelog/deploy_cost/
+      kind: run                       # one Run per push-to-main deploy
+      question: >-
+        What did each merge cost — CI minutes, on which runner backend, in
+        CodeBuild dollars — and did every workflow on its SHA pass?
+      key_pattern: "changelog/deploy_cost/(?P<day>\\d{4}-\\d{2}-\\d{2})/(?P<event_id>[^/]+)\\.json$"
+      id_template: "{event_id}"       # the SAME id `changelog-events` mints,
+                                      # so the cost claim and the event claim
+                                      # merge onto one entity (§2.5)
+      as_of_field: ts_utc
+      cadence: 1d                     # written per merge; read daily
+      state_field: deploy_state
+      state_map:
+        clean: HEALTHY
+        red_after_merge: DEGRADED     # a red workflow AFTER the merge button
+      facets:
+        repo: repo                    # per-repo deploys/day is a facet walk
+        runner_mode: runner_mode
+        day: day
+      fields:
+        ci_jobs: {path: ci_jobs, render: count}
+        ci_minutes_billable_est: {path: ci_minutes_billable_est, render: count}
+        codebuild_usd: {path: codebuild_usd, unit: usd}
+        checks_failed: {path: checks_failed, render: count}
+        runner_mode: {path: runner_mode, render: text}
+        aws_writes: {path: aws_writes, render: value}
+        pr_number: {path: pr_number, render: value}
+
+  # The model against the bill. One Signal per (day, repo): the estimate, the
+  # billing endpoint's `quantity`, and the delta between them. `unmeasurable`
+  # is a real value here — the billing endpoint settles over days, and an
+  # unsettled day rendered as 0 would be no-data painted green.
+  - name: deploy-cost-reconcile
+    kind: s3-records
+    enabled: false
+    produces: [signal]
+    config:
+      bucket: your-research-bucket
+      prefix: changelog/deploy_cost_reconcile/
+      kind: signal                    # one Signal per (day, repo)
+      question: >-
+        Does the per-deploy minutes estimate agree with what GitHub actually
+        billed, per repo per day, and by how much?
+      key_pattern: "changelog/deploy_cost_reconcile/(?P<day>\\d{4}-\\d{2}-\\d{2})\\.json$"
+      records_path: repos             # fan the per-repo rows out of the day doc
+      id_template: "{day}:{repo}"
+      as_of_field: generated_at
+      cadence: 1d                     # the reconcile arm is a daily cron
+      state_field: reconcile_state    # within_tolerance | over_tolerance |
+                                      # unmeasurable — carried verbatim, since
+                                      # Signal is not a component-state kind
+      facets:
+        repo: repo
+        day: date
+      fields:
+        deploys: {path: deploys, render: count}
+        estimated_minutes: {path: estimated_minutes, render: count}
+        billed_minutes: {path: billed_minutes, render: count}
+        delta_minutes: {path: delta_minutes, render: count}
+        delta_pct: {path: delta_pct, unit: pct, baseline: 15.0}
+
   # `declared-registry` generalises `yaml-directory` to "one YAML document,
   # many entries, any kind" — for a registry that is not shaped one-file-per-
   # component. Two example bindings below: a declared inventory of Artifacts

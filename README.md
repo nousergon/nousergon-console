@@ -1,5 +1,9 @@
 # nousergon-console
 
+[![CI](https://github.com/nousergon/nousergon-console/actions/workflows/test.yml/badge.svg)](https://github.com/nousergon/nousergon-console/actions/workflows/test.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/nousergon/nousergon-console/badges/coverage.json)](https://github.com/nousergon/nousergon-console/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/nousergon/nousergon-console)](LICENSE)
+
 **A read-only fleet index that persists nothing and reports what it cannot see.**
 
 Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answer to the questions its author had at authoring time — but monitoring is the business of being asked questions nobody anticipated: *why is this stale · what else touched that artifact · what did this cycle cost · which of these has never run · who breaks if this one does.* Each of those is a traversal, not a tile.
@@ -191,6 +195,31 @@ Every rendered fact carries four fields — **state · source · as-of · eviden
 4. The seven self-grading numbers, published on the surface itself.
 
 The implementation stack is Python + stdlib server — decided in [docs/stack-decision.md](docs/stack-decision.md).
+
+## Development & testing
+
+**What it is.** A local checkout of the same package the published `nousergon-console` entry point installs — no separate dev build, no compiled step.
+
+**Why it exists.** The console is read-only and persists nothing (see above), so the test suite is the only place its correctness claims — the closed state vocabulary, the driver/adapter contract, the JSON/HTML parity, `doctor`'s broken-link diagnosis — are actually checked; nothing about them is visible from running the server against real data once.
+
+**How to run it.**
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[test]"
+.venv/bin/python3 -m console               # serves locally against config.example.yaml
+```
+
+**How to test it.**
+
+```bash
+.venv/bin/python3 -m pytest tests/ -q --cov=console --cov-report=term-missing
+.venv/bin/ruff check --select F821 .       # the undefined-name class that once merged green
+.venv/bin/python3 -m console index --config config.example.yaml       # build-time namespace gate
+```
+
+`pytest` exits non-zero below the coverage floor in [`pyproject.toml`](pyproject.toml) `[tool.coverage.report]`; the badge above renders the figure CI last measured on `main`, from the same `.coverage` file the gate reads.
+
+**Where the deeper docs are.** [CONTRIBUTING.md](CONTRIBUTING.md) for the rules every change is held to and how to propose one; [docs/adapters.md](docs/adapters.md) for the adapter/driver contract; [docs/stack-decision.md](docs/stack-decision.md) for why this is Python + stdlib with no framework.
 
 ## Contributing
 

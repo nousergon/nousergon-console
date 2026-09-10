@@ -1,0 +1,49 @@
+version: 2
+updates:
+  # No uv.lock is tracked here — dependencies resolve straight from
+  # pyproject.toml, so `pip` is the correct ecosystem (repository-baseline-
+  # policy.md §4.3, alpha-engine-config-I10348: a `uv` project on `pip`
+  # dependabot gets version-update PRs that fail `uv lock --check` before a
+  # dependency is graded — this repo has no lockfile to fail that check on).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "deps"
+    groups:
+      aws:
+        patterns:
+          - "boto3"
+          - "botocore"
+      tooling:
+        patterns:
+          - "pytest*"
+          - "ruff*"
+          - "coverage*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci"
+    groups:
+      # Bundle all GitHub Actions bumps into one PR per week instead of one
+      # PR per action. Routine version bumps don't benefit from per-dep
+      # isolation; CI gates the whole bundle the same way.
+      actions:
+        patterns: ["*"]

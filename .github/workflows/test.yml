@@ -11,6 +11,11 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    # The badge-publish step below writes `coverage.json` on the orphan
+    # `badges` branch through the contents API. Nothing else in this job
+    # writes, and the token is scoped no wider than that.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,7 +42,24 @@ jobs:
         run: ruff check --select F821 .
 
       - name: Test
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --cov=console --cov-report=term-missing
+
+      # repository-baseline-policy.md §5.1 — a badge whose value is written by
+      # a human is forbidden: it renders identically to a real one and becomes
+      # false the moment reality moves without anyone editing a file. This
+      # repo carried no coverage badge and no enforced floor at all
+      # (alpha-engine-config-I10432 RB-4.2-C2/RB-5.1). The README badge now
+      # renders whatever this step last published, derived from the same
+      # `.coverage` file the pyproject.toml gate reads.
+      #
+      # Pushes to main only: a pull-request run measures a tree that is not
+      # yet what a reader of the README is looking at.
+      - name: Publish coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/publish_coverage_badge.sh
+
       - name: Build the index against the example config (§3.6 build-time gate)
         # nousergon-console-I4, ruled 2026-08-10: a namespace collision is
         # supposed to "fail the build loudly" — this is that build. Runs the

@@ -103,11 +103,26 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 "<head>", '<head><link rel="stylesheet" href="/styles.css">', 1
             )
         payload = body.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            # The client hung up before the response finished writing — a
+            # `box_health.sh` probe that gave up at its 3s timeout while a
+            # rebuild held the GIL (alpha-engine-config-I10615) is the
+            # measured case, but any reader that disconnects early lands
+            # here. The response was built correctly; there is simply
+            # nowhere left to deliver it, which is not a server fault, so
+            # this is one line — never the full traceback the socketserver
+            # machinery would otherwise print to the journal on every
+            # abandoned probe.
+            self.log_error(
+                "client disconnected during response to %s (%s): %s",
+                self.path, type(exc).__name__, exc,
+            )
 
     def log_message(self, *args) -> None:  # keep stdout clean; telemetry is §9
         pass

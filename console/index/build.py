@@ -187,14 +187,28 @@ class Supervisor:
         clock: Callable[[], datetime] | None = None,
         *,
         defer_first_build: bool = False,
+        monotonic: Callable[[], float] | None = None,
+        wait: Callable[[float], bool] | None = None,
     ) -> None:
         self._builder = builder
         self._refresh_seconds = refresh_seconds
         self._clock = clock or _utc_now
+        # Injectable so the fixed-period scheduling in `_loop` is testable
+        # without a real clock or a real sleep (alpha-engine-config-I9003):
+        # `monotonic` drives both build-duration measurement and scheduling,
+        # `wait` stands in for `self._stop.wait` (returns True to stop, like
+        # `Event.wait`'s own contract).
+        self._monotonic = monotonic or time.monotonic
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._wait = wait or self._stop.wait
         self._thread: threading.Thread | None = None
         self._built_once = False
+        # When the most recent build STARTED (not finished) — the anchor
+        # `_loop` schedules the next one from (alpha-engine-config-I9003).
+        # `None` only in the `defer_first_build` window before any real build
+        # has run.
+        self._last_build_started: float | None = None
         if defer_first_build:
             # The first build is the caller's LATENCY, not just its data. On the
             # live box a full pass over six adapters takes 93.5 seconds
@@ -218,7 +232,8 @@ class Supervisor:
                 bootstrap=True,
             )
             return
-        started = time.monotonic()
+        started = self._monotonic()
+        self._last_build_started = started
         try:
             self._current = builder()
         except Exception as exc:  # noqa: BLE001 - symmetric with refresh_once
@@ -235,7 +250,7 @@ class Supervisor:
             self._current = self._blank_stale(exc)
             return
         _stamp(self._current, self._clock, refresh_seconds,
-               build_seconds=time.monotonic() - started)
+               build_seconds=self._monotonic() - started)
         self._built_once = True
 
     def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False):
@@ -276,7 +291,8 @@ class Supervisor:
         goes on the marker rather than to a log nobody reads — the person who
         needs it is looking at the page.
         """
-        started = time.monotonic()
+        started = self._monotonic()
+        self._last_build_started = started
         try:
             fresh = self._builder()
         except Exception as exc:  # noqa: BLE001 - the marker IS the handling
@@ -284,7 +300,7 @@ class Supervisor:
                 _mark_stale(self._current, self._clock, exc)
             return False
         _stamp(fresh, self._clock, self._refresh_seconds,
-               build_seconds=time.monotonic() - started)
+               build_seconds=self._monotonic() - started)
         with self._lock:
             self._current = fresh
             self._built_once = True
@@ -302,7 +318,7 @@ class Supervisor:
             self._thread.join(timeout=5)
             self._thread = None
 
-    def _loop(self) -> None:  # pragma: no cover - exercised via refresh_once
+    def _loop(self) -> None:
         # Build IMMEDIATELY when __init__ deferred it, rather than after the
         # first cadence wait. Waiting would leave the surface blank for
         # refresh_seconds on top of the build itself, which trades a port that
@@ -310,8 +326,34 @@ class Supervisor:
         # the second one looks healthy.
         if not self._built_once:
             self.refresh_once()
-        while not self._stop.wait(self._refresh_seconds):
+        # Fixed-period scheduling, not build-then-wait (alpha-engine-config-
+        # I9003): `next_start` is anchored on the START of the last build
+        # (`_last_build_started`, set by whichever build actually ran — the
+        # synchronous one in `__init__` or the one just above) and advances by
+        # exactly `refresh_seconds` each pass, so a build shorter than the
+        # cadence reproduces the declared cadence exactly instead of the old
+        # `build_seconds + refresh_seconds` (measured live: 208-240s build +
+        # 180s wait = ~330-420s between builds against a declared 180s cadence
+        # — build+refresh, not the declared cadence, is this issue's title).
+        # When a build overruns the cadence, `cadence_overrun` on the index
+        # already says so (BuildInfo.cadence_overrun); the loop's own job is
+        # to never fire a "catch-up" burst of back-to-back rebuilds for the
+        # missed periods — that would look like a hang, not a fix — so it
+        # skips forward to the next boundary still in the future.
+        anchor = self._last_build_started
+        if anchor is None:  # pragma: no cover - defensive; refresh_once above always sets it
+            anchor = self._monotonic()
+        next_start = anchor + self._refresh_seconds
+        while True:
+            wait_for = max(next_start - self._monotonic(), 0.0)
+            if self._wait(wait_for):
+                return
             self.refresh_once()
+            next_start += self._refresh_seconds
+            now = self._monotonic()
+            if next_start <= now:
+                periods_missed = int((now - next_start) // self._refresh_seconds) + 1
+                next_start += periods_missed * self._refresh_seconds
 
 
 def _stamp(index, clock, refresh_seconds: float,

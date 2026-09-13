@@ -1157,6 +1157,23 @@ def _default_reader() -> ExecutionReader | None:
     return reader
 
 
+#: `GetExecutionHistory` has no bulk/batch form — one call (paginated) per
+#: execution ARN is the only API AWS offers. Concurrency bound for fetching
+#: several executions' histories at once (alpha-engine-config-I9003): high
+#: enough to collapse a ~20-30 record window's fully-serial ~90-130s into a
+#: few seconds (each call is a network round trip, GIL-released during I/O,
+#: so this is genuine wall-clock parallelism, not CPU-bound fan-out), low
+#: enough to stay well inside Step Functions' read-API throttling — AND
+#: inside the service's memory cap. MEASURED 2026-09-13 on i-09b539c844515d549:
+#: at 8 workers the first build after deploy peaked at 327 MB against
+#: `MemoryHigh=300M` (254 MB before the fan-out) and box_health paged
+#: `cgroup throttle ... MemoryHigh ... reclaim stall` within three minutes;
+#: each in-flight worker holds a decoded 1000-event history page. Three
+#: workers keep ~3x the serial throughput on an I/O-bound loop while holding
+#: at most three pages at once.
+_HISTORY_FETCH_WORKERS = 3
+
+
 def history_reader_for(
     degraded_state_names: frozenset[str],
 ) -> Callable[[str, list[ExecutionRecord]], None] | None:
@@ -1165,6 +1182,14 @@ def history_reader_for(
     `degraded_state_names` and/or `stage_states`, and only for the subset
     `_records_needing_history` selected (config-I7067) — never for every
     execution `list_executions` returned.
+
+    **Fetched concurrently, not one-at-a-time (alpha-engine-config-I9003).**
+    Measured live 2026-09-13 (`i-09b539c844515d549`): `pipeline-reliability`
+    and `pipeline-reliability-weekly` — both callers of this function — cost
+    89.3s and 127.0s of a 240.8s build, 89.8% of it, entirely inside this
+    serial per-execution loop. There is no bulk `GetExecutionHistory`, so the
+    fix is fan-out over a bounded thread pool rather than batching a call AWS
+    does not offer.
     """
     if not degraded_state_names:
         return None
@@ -1174,30 +1199,52 @@ def history_reader_for(
     except ImportError:
         return None
 
+    def _fetch_entered_states(client: Any, arn: str) -> list[str] | None:
+        entered: list[str] = []
+        token: str | None = None
+        try:
+            while True:
+                kwargs: dict[str, Any] = {"executionArn": arn, "maxResults": 1000}
+                if token:
+                    kwargs["nextToken"] = token
+                page = client.get_execution_history(**kwargs)
+                for event in page.get("events") or []:
+                    details = event.get("stateEnteredEventDetails")
+                    if details and details.get("name"):
+                        entered.append(details["name"])
+                token = page.get("nextToken")
+                if not token:
+                    break
+        except (BotoCoreError, ClientError):
+            return None  # entered_states stays unset — DEGRADED not derivable this run
+        return entered
+
     def attach(region: str, records: list[ExecutionRecord]) -> None:
         client = _aws_client("stepfunctions", region)
-        for rec in records:
-            arn = rec.get("executionArn")
-            if not arn:
-                continue
-            entered: list[str] = []
-            token: str | None = None
-            try:
-                while True:
-                    kwargs: dict[str, Any] = {"executionArn": arn, "maxResults": 1000}
-                    if token:
-                        kwargs["nextToken"] = token
-                    page = client.get_execution_history(**kwargs)
-                    for event in page.get("events") or []:
-                        details = event.get("stateEnteredEventDetails")
-                        if details and details.get("name"):
-                            entered.append(details["name"])
-                    token = page.get("nextToken")
-                    if not token:
-                        break
-            except (BotoCoreError, ClientError):
-                continue  # entered_states stays unset — DEGRADED simply not derivable this run
-            rec["entered_states"] = entered
+        targets = [
+            (rec, arn) for rec in records
+            if (arn := rec.get("executionArn"))
+        ]
+        if not targets:
+            return
+        # A boto3 client is thread-safe for concurrent calls (botocore's own
+        # documented contract); one client shared across the pool avoids
+        # re-establishing a session per worker for what is otherwise an
+        # embarrassingly parallel set of independent reads.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=min(_HISTORY_FETCH_WORKERS, len(targets))
+        ) as pool:
+            futures = {
+                pool.submit(_fetch_entered_states, client, arn): rec
+                for rec, arn in targets
+            }
+            for future in futures:
+                rec = futures[future]
+                entered = future.result()
+                if entered is not None:
+                    rec["entered_states"] = entered
 
     return attach
 

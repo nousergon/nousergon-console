@@ -1163,8 +1163,15 @@ def _default_reader() -> ExecutionReader | None:
 #: enough to collapse a ~20-30 record window's fully-serial ~90-130s into a
 #: few seconds (each call is a network round trip, GIL-released during I/O,
 #: so this is genuine wall-clock parallelism, not CPU-bound fan-out), low
-#: enough to stay well inside Step Functions' read-API throttling.
-_HISTORY_FETCH_WORKERS = 8
+#: enough to stay well inside Step Functions' read-API throttling — AND
+#: inside the service's memory cap. MEASURED 2026-09-13 on i-09b539c844515d549:
+#: at 8 workers the first build after deploy peaked at 327 MB against
+#: `MemoryHigh=300M` (254 MB before the fan-out) and box_health paged
+#: `cgroup throttle ... MemoryHigh ... reclaim stall` within three minutes;
+#: each in-flight worker holds a decoded 1000-event history page. Three
+#: workers keep ~3x the serial throughput on an I/O-bound loop while holding
+#: at most three pages at once.
+_HISTORY_FETCH_WORKERS = 3
 
 
 def history_reader_for(

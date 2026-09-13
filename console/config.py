@@ -285,6 +285,17 @@ def build_index(config: dict[str, Any]) -> Index:
     except Exception as exc:  # noqa: BLE001 - recorded, never swallowed
         reports = [{"error": f"{type(exc).__name__}: {exc}", "written": False}]
     milestone_predicates.attach_journal_report(index, reports)
+    # §4.3's landing view, computed ONCE here — on the supervisor thread, at
+    # the very end of the build the milestone journal write above already
+    # depends on — rather than once per request (alpha-engine-config-I10615).
+    # The build already costs ~150s on the box; this adds a few seconds to
+    # that, never to a request. Must run after `attach_journal_report`: the
+    # model's milestone pane reads the SAME journal report this build just
+    # wrote, not a re-read of a file that may not exist until this call
+    # returns.
+    from .index.landing import build as _build_landing_model
+
+    index.set_landing_model(_build_landing_model(index))
     return index
 
 

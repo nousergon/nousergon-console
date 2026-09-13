@@ -30,8 +30,6 @@ from decimal import Decimal
 from typing import Any
 
 from ..index.graph import Index
-from ..index.milestones import evaluate as evaluate_milestones
-from ..index.milestones import journal_report as milestone_journal_report
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
@@ -172,24 +170,21 @@ def _landing(index: Index) -> dict[str, Any]:
     """The exception-first default (§4.3), and the numbers that grade it (§9).
 
     An agent asking "is anything wrong" gets the same answer, in the same
-    order, as a human looking at the page.
+    order, as a human looking at the page — and, since alpha-engine-config-
+    I10615, the same COMPUTATION `render.html.landing_page` reads: both read
+    `index.landing_model()`, computed once per `Index` rather than once per
+    request (`index/landing.py`).
     """
-    from ..render.html import landing_exceptions
-
-    entities = index.all()
-    exceptions = landing_exceptions(index)
-    conflicts = index.conflicts()
-    gap = index.transparency_gap()
-    n = numbers(index, exceptions, conflicts, gap)
+    model = index.landing_model()
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "registry_pages": index.registry_coverage(),
+        "registry_pages": model.registries,
         "view": "landing",
-        "exceptions": [entity(e) for e in exceptions],
+        "exceptions": [entity(e) for e in model.exceptions],
         # §4.3's third element: what is waiting on Brian. Same query the HTML
         # renders (§3.8) — `Index.decision_queue()`, filtered to
         # `decision-queue-policy.md` §2's own labels, not every open Decision.
-        "decision_queue": [entity(e) for e in index.decision_queue()],
+        "decision_queue": [entity(e) for e in model.queue],
         # console-policy.md §9 — the nine numbers, all published, all stating
         # their denominator inline (§5.3). A number this build could not
         # compute renders `state: N/A-NOT-IMPL` with the cycle it is expected
@@ -198,28 +193,26 @@ def _landing(index: Index) -> dict[str, Any]:
         # `of`/`ratio` both `None` (not wrapped in `aggregate()`, which would
         # reject a missing denominator outright), and §9.2 always has a real
         # denominator (the component population), so it never needs to.
-        "numbers": n,
+        "numbers": model.numbers,
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
-    # renders (`render.html.milestones_section` calls the same `evaluate` over
-    # the same `numbers` dict), so the two representations of this URL cannot
-    # answer the predicate differently.
+    # renders (`render.html.milestones_section` reads the SAME `model.
+    # milestones` list rather than calling `evaluate` a second time), so the
+    # two representations of this URL cannot answer the predicate differently.
     #
     # The key is ABSENT when nothing is declared, rather than an empty list: a
     # deployment that declares no milestone has no milestone pane, and an empty
     # `milestones: []` reads to a consumer like a declared predicate with no
     # clauses — which `parse` refuses to build in the first place.
-    declared_milestones = evaluate_milestones(index, n)
-    if declared_milestones:
-        doc["milestones"] = declared_milestones
+    if model.milestones:
+        doc["milestones"] = model.milestones
     # What the clause journal did on THIS build: the transitions it recorded,
     # the episodes still open, and — loudly — any failure to record at all. A
     # recorder that stopped working is a fact about the surface's own honesty
     # and must be readable by the agents that read this view, not only by a
     # human looking at the page (§3.8).
-    recorded = milestone_journal_report(index)
-    if recorded:
-        doc["milestone_journal"] = [dict(r) for r in recorded]
+    if model.milestone_journal:
+        doc["milestone_journal"] = model.milestone_journal
     return doc
 
 
@@ -229,10 +222,21 @@ def _landing(index: Index) -> dict[str, Any]:
 #: number be named and the cycle it is expected by stated, not silently
 #: omitted — this is that statement.
 def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
-           gap: dict[str, Any]) -> dict[str, Any]:
+           gap: dict[str, Any], *,
+           reachability: dict[str, Any] | None = None,
+           population_completeness: dict[str, Any] | None = None) -> dict[str, Any]:
     """console-policy.md §9 — all nine numbers, one dict, one place they are
     assembled for both representations (§3.8: the HTML numbers section reads
-    the same shape via `render.html.landing_numbers`)."""
+    the same shape via `render.html.landing_numbers`).
+
+    `reachability`/`population_completeness` are accepted pre-computed,
+    exactly as `gap` already was: `index/landing.py::build` computes both once
+    per index build and passes them through here rather than paying for
+    `index.reachability()` (§9.3's own §3.1 traversal is the dominant per-page
+    cost measured on the box — alpha-engine-config-I10615) a second time in
+    the same pass. `None` (every other caller, including every test that
+    calls this directly) computes them here exactly as before.
+    """
     entities = index.all()
     return {
         # §9.1 already NAMES its members at the index (`unregistered_ids` /
@@ -243,9 +247,13 @@ def numbers(index: Index, exceptions: list[Entity], conflicts: list[Entity],
         # `_landing` comment above). The invariant both paths owe — a nonzero
         # count always carries a nonempty member list — is asserted over every
         # §9 number in `tests/test_nine_numbers.py`, not per-number here.
-        "population_completeness": index.population_completeness(),   # §9.1
+        "population_completeness": (
+            population_completeness if population_completeness is not None
+            else index.population_completeness()),                     # §9.1
         "transparency_gap": gap,                                       # §9.2
-        "index_reachability": index.reachability(),                    # §9.3
+        "index_reachability": (
+            reachability if reachability is not None
+            else index.reachability()),                                # §9.3
         "answer_latency": index.answer_latency(),                      # §9.4
         "orphan_count": index.orphan_counts(),                         # §9.5
         "staleness_honesty": _named_members(                            # §9.6

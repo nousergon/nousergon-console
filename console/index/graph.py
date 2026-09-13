@@ -109,6 +109,19 @@ class Index:
             "reason": "not computed for this build — built directly via Index() "
                       "rather than console.config.build_index",
         }
+        # §4.3's landing view, computed ONCE per build rather than once per
+        # request (alpha-engine-config-I10615): both `render.html.landing_page`
+        # and `render.json.payload`'s landing view are pure functions of one
+        # already-built `Index`, so recomputing the model per request bought
+        # nothing but 2.3-6.8s of per-request latency that tripped
+        # `box_health.sh`'s 3s probe whenever a rebuild held the GIL. `None`
+        # here is "not computed yet" — `config.build_index` sets it once, at
+        # the end of the real build, on the supervisor thread (warm; the
+        # build already costs ~150s so a few more seconds is invisible there).
+        # An `Index` built directly (tests, `console index --dump`) has no
+        # such call, so `landing_model()` memoises lazily on first read
+        # instead — still exactly one computation per `Index` instance.
+        self._landing_model = None
 
     def set_staleness_factor(self, factor: float) -> None:
         """The multiplier on a declared cadence before silence is a defect.
@@ -120,25 +133,67 @@ class Index:
         """
         self._staleness_factor = float(factor)
         self._finalized = False
+        self._landing_model = None
 
     def declare_registry(self, name: str) -> None:
         """Record a configured registry even when its adapter cannot build it."""
         self._declared_registries.add(name)
+        self._landing_model = None
 
     def render_registry(self, name: str) -> None:
         self._rendered_registries.add(name)
+        self._landing_model = None
 
     def record_registry_rows(self, name: str, count: int, ok: bool) -> None:
         """§9.1's per-registry denominator: how many rows this registry
         offered this pass, and whether the adapter could read it at all."""
         self._registry_rows[name] = {"count": count, "ok": ok}
+        self._landing_model = None
 
     def set_answer_latency(self, value: dict[str, object]) -> None:
         self._answer_latency = value
+        self._landing_model = None
 
     def answer_latency(self) -> dict[str, object]:
         """§9.4 — the last question-set run against this build."""
         return self._answer_latency
+
+    def set_landing_model(self, model: object) -> None:
+        """Record the §4.3 landing view's computed facts for this build
+        (`console.config.build_index`, `console/index/landing.py::build`).
+
+        Overwrites rather than merges — `add_result`/`set_staleness_factor`
+        both invalidate `_finalized` for exactly this reason: a claim or a
+        tolerance that lands after this was set would make the cached model
+        stale relative to the index it is attached to, and §5.6 forbids a
+        console-held fact that can drift from its source. Nothing calls this
+        twice on one `Index` in practice (`config.build_index` sets it once,
+        at the very end); if something did, the later call wins, matching
+        `set_answer_latency`/`set_onboarding_cost`.
+        """
+        self._landing_model = model
+
+    def landing_model(self):
+        """The §4.3 landing view's facts, computed exactly once per `Index`
+        instance (alpha-engine-config-I10615) — never once per request, and
+        never carried across a rebuild: a fresh `Index` starts with
+        `_landing_model = None` in `__init__`, so a caller holding a stale
+        `Index` after a swap gets that index's own (still-cached) answer,
+        and the new `Index` computes its own on first read.
+
+        `config.build_index` calls `set_landing_model` once, on the
+        supervisor thread, before the built index is ever exposed to a
+        request — the normal path, under which this is a plain accessor. An
+        `Index` built directly (every test, `console index --dump`) never
+        gets that call, so this memoises lazily here instead: still one
+        computation, just deferred to first read rather than paid at build
+        time.
+        """
+        if self._landing_model is None:
+            from .landing import build as _build_landing_model
+
+            self._landing_model = _build_landing_model(self)
+        return self._landing_model
 
     def set_liveness_watcher(self, component_id: str | None) -> None:
         """Declare which component watches this surface from outside it (§9.7).
@@ -148,6 +203,7 @@ class Index:
         out of this repo.
         """
         self._liveness_watcher = component_id
+        self._landing_model = None
 
     def surface_liveness(self) -> dict[str, object]:
         """§9.7 — is this surface up, according to something that is not it?
@@ -204,6 +260,7 @@ class Index:
 
     def set_onboarding_cost(self, value: dict[str, object]) -> None:
         self._onboarding_cost = value
+        self._landing_model = None
 
     def onboarding_cost(self) -> dict[str, object]:
         """§9.8 — the last onboarding-cost computation for this build."""
@@ -250,6 +307,9 @@ class Index:
         # adapter added after a query silently never appears, which is the
         # quietest possible way to lose a source.
         self._finalized = False
+        # ... and the same claim would leave a stale landing model attached to
+        # an index that now carries a claim the model never saw.
+        self._landing_model = None
         # Every source's read is recorded whether it worked or not — an
         # adapter that failed is a fact about the surface's completeness, and
         # dropping it here would make the failure invisible on the page.

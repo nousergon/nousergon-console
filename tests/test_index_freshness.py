@@ -387,3 +387,96 @@ def test_every_source_read_is_recorded_including_the_failed_ones():
 ])
 def test_the_json_freshness_block_is_complete(field):
     assert field in json_freshness(_index(cadence=60), T0)
+
+
+# ---------------------------------- fixed-period scheduling (I9003) ---
+
+
+class _FakeMonotonic:
+    """A controllable monotonic clock: `wait()` fast-forwards it rather than
+    actually sleeping, so a multi-hour rebuild cadence tests in microseconds.
+    """
+
+    def __init__(self, start: float = 0.0):
+        self.t = start
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def _driven_supervisor(builder, *, refresh_seconds, mono, stop_after):
+    """A `Supervisor` whose `_loop` can be run synchronously (no thread, no
+    real sleep): `wait()` advances the fake clock by the requested amount and
+    reports "stop" once `stop_after` builds have happened, so the test
+    controls exactly how many cadence periods it observes.
+    """
+    calls = {"builds": 0}
+
+    def counting_builder():
+        calls["builds"] += 1
+        return builder()
+
+    def fake_wait(seconds: float) -> bool:
+        mono.advance(seconds)
+        return calls["builds"] >= stop_after
+
+    return Supervisor(
+        counting_builder, refresh_seconds=refresh_seconds, clock=_clock([0]),
+        defer_first_build=True, monotonic=mono, wait=fake_wait,
+    )
+
+
+def test_the_rebuild_period_matches_refresh_seconds_when_the_build_is_faster():
+    """The old loop waited `refresh_seconds` AFTER each build finished, so a
+    180s cadence with a 150s build rebuilt every 330s — build + refresh, not
+    the declared cadence, which is this issue's title defect. Scheduling from
+    each build's START fixes the period to exactly `refresh_seconds`."""
+    mono = _FakeMonotonic()
+    starts: list[float] = []
+
+    def builder():
+        starts.append(mono.t)
+        mono.advance(5.0)  # a build well under the 60s cadence
+        return _index(cadence=60)
+
+    sup = _driven_supervisor(builder, refresh_seconds=60, mono=mono, stop_after=4)
+    sup._loop()
+
+    assert len(starts) == 4
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert gaps == pytest.approx([60.0, 60.0, 60.0])
+
+
+def test_cadence_overrun_is_true_and_the_loop_skips_forward_when_the_build_is_slower():
+    """When a build takes longer than the cadence, `cadence_overrun` on the
+    built index says so by how much (BuildInfo.cadence_overrun,
+    build_seconds vs refresh_seconds) — and the loop does not fire a
+    back-to-back "catch-up" burst for the periods it missed, which would look
+    like a hang rather than an honestly-declared overrun."""
+    mono = _FakeMonotonic()
+    starts: list[float] = []
+
+    def builder():
+        starts.append(mono.t)
+        mono.advance(140.0)  # a build well over the 60s cadence
+        return _index(cadence=60)
+
+    sup = _driven_supervisor(builder, refresh_seconds=60, mono=mono, stop_after=6)
+    sup._loop()
+
+    assert len(starts) == 6
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    # No gap is ever shorter than the build itself — no back-to-back
+    # "catch-up" burst for the periods a slow build missed.
+    assert all(g >= 140.0 for g in gaps)
+    # The schedule converges to firing every whole number of cadence periods
+    # that covers the build (ceil(140/60) * 60s = 180s), rather than drifting
+    # or free-running on however long each build happens to take.
+    assert gaps[-2:] == pytest.approx([180.0, 180.0])
+
+    assert sup.current.build_info.cadence_overrun is True
+    assert sup.current.build_info.build_seconds == pytest.approx(140.0)
+    assert sup.current.build_info.refresh_seconds == 60.0

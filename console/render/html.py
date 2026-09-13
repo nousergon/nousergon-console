@@ -352,21 +352,28 @@ def landing_page(index: Index) -> str:
     there because "is the thing we are building finished" is the question a
     reader brings to this page second, immediately after "is anything on fire",
     and it was previously answerable only by hand off five other surfaces.
+
+    Every fact rendered below is read from `index.landing_model()` — computed
+    once per `Index`, never recomputed here (alpha-engine-config-I10615). The
+    JSON representation of this same URL (`render.json._landing`) reads the
+    identical model, so the two representations cannot disagree about what
+    they were computed from, only about how they render it.
     """
-    exceptions = landing_exceptions(index)
-    conflicts = index.conflicts()
-    reach = index.reachability()
+    model = index.landing_model()
+    exceptions = model.exceptions
+    conflicts = model.conflicts
+    reach = model.reachability
     ratio = reach["ratio"]
     ratio_txt = (
         f'{reach["reachable_all_three"]} / {reach["total"]}'
         if ratio is not None else "no entities yet"
     )
-    registries = index.registry_coverage()
+    registries = model.registries
     registry_txt = f'{registries["count"]} / {registries["of"]}'
     missing = (f' · missing: {esc(", ".join(registries["missing"]))}'
                if registries["missing"] else "")
-    queue = index.decision_queue()
-    completeness = index.population_completeness()
+    queue = model.queue
+    completeness = model.completeness
     completeness_txt = (
         f'{completeness["rendered"]} / {completeness["of"]} '
         f'({completeness["ratio"]:.0%})'
@@ -381,15 +388,14 @@ def landing_page(index: Index) -> str:
     unregistered_links = _member_links(
         Kind.COMPONENT, State.UNREGISTERED.value,
         completeness.get("unregistered_ids") or ())
-    gap = index.transparency_gap()
+    gap = model.gap
     gap_txt = (
         f'{gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2)'
         if gap.get("computable", True) is not False
         else f'transparency gap not computable — '
              f'{esc(gap.get("reason", "no reason given"))}'
     )
-    from .json import numbers as _numbers
-    n = _numbers(index, exceptions, conflicts, gap)
+    n = model.numbers
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
@@ -397,7 +403,7 @@ def landing_page(index: Index) -> str:
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
-{milestones_section(index, n)}
+{milestones_section(model.milestones, model.milestone_journal)}
 {_table(exceptions)}
 <h2>waiting on Brian</h2>
 {_table(queue)}
@@ -435,7 +441,7 @@ _MILESTONE_PANE_QUESTION = (
 )
 
 
-def milestones_section(index: Index, numbers: dict) -> str:
+def milestones_section(declared: list[dict], recorded_journal: list[dict]) -> str:
     """console-policy.md §4.4's milestone pane — declared predicates, evaluated.
 
     Renders nothing at all when no milestone is declared. That is not §5.5's
@@ -448,14 +454,16 @@ def milestones_section(index: Index, numbers: dict) -> str:
     Every clause carries §5.1's four fields plus the target it is measured
     against, and an UNREPORTED clause carries the reason it could not be read —
     never a blank cell, and never counted toward `met`.
-    """
-    from ..index.milestones import MET, UNREPORTED, evaluate
 
-    declared = evaluate(index, numbers)
+    Takes the already-evaluated predicate and the already-read journal rather
+    than an `Index` — both come from `index.landing_model()` now
+    (alpha-engine-config-I10615), so this function only formats; it never
+    re-runs `milestone_predicates.evaluate`/`journal_report` a second time in
+    the same request.
+    """
     if not declared:
         return ""
-    from ..index.milestones import journal_report
-    recorded = {r.get("milestone_id"): r for r in journal_report(index)}
+    recorded = {r.get("milestone_id"): r for r in recorded_journal}
     return "".join(_milestone(m, recorded.get(m["id"])) for m in declared)
 
 

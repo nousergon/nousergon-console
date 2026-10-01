@@ -40,6 +40,11 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
     Pane("search", "where is X", None),
     Pane("doctor", "why is X not on the surface", None),
     Pane("registry", "what does this registry declare", None),
+    # The navigation index (§3.1's structure path, §4.1's Domain tier): every
+    # dashboard the rows declare, every milestone, every registry and every
+    # kind list, one click from any page. Distinct from `landing`, which
+    # answers "is anything wrong"; this answers "where is X kept".
+    Pane("dashboards", "which dashboards and lists exist, and what state is each in", None),
     # §4.4: the question no other pane answers. `landing` answers "is anything
     # wrong right now"; this answers "is the thing we said we were building
     # finished, and which clause is holding it" — a different question, asked at

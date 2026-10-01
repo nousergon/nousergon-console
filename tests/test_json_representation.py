@@ -68,7 +68,7 @@ def test_every_route_serves_both_representations(index):
     which is the same defect this clause exists to prevent one layer up."""
     from console.server.app import _html
 
-    routes = ["/", "/search?q=comp"] + [f"/{k.route}" for k in Kind]
+    routes = ["/", "/dashboards", "/search?q=comp"] + [f"/{k.route}" for k in Kind]
     routes += [e.route for e in index.all()]
 
     for route in routes:

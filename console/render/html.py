@@ -444,7 +444,6 @@ def landing_page(index: Index) -> str:
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
-{dashboards_section(model.dashboards)}
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(model.milestones, model.milestone_journal)}
 {_table(exceptions)}
@@ -456,23 +455,69 @@ def landing_page(index: Index) -> str:
 </body></html>"""
 
 
-def dashboards_section(entries: list[dict]) -> str:
-    """The dashboard index: every `pane` facet value the rows carry, linked.
+#: The question the dashboards pane answers, rendered on it (§4.4) and held
+#: beside the renderer so the registry entry and the heading cannot drift.
+_DASHBOARDS_PANE_QUESTION = (
+    "which dashboards and lists exist, and what state is each in"
+)
 
-    console-policy.md §3.1 requires a navigation path to every entity, and a
-    dashboard reachable only by typing its filtered URL is §3.1's "hidden
-    URL". The list is derived from the rows (`index.landing.dashboards`), so
-    it cannot drift from what the dashboards actually hold (§3.5).
+
+def dashboards_page(index: Index) -> str:
+    """The navigation index: every dashboard, milestone, registry and list.
+
+    console-policy.md §3.1 requires a navigation path to every entity; a
+    dashboard reachable only by typing its filtered URL is §3.1's hidden URL.
+    Everything here is derived from the index on each build (§3.5) — a
+    dashboard is a `pane` facet value on its rows, so a new one appears here
+    with no edit to the console. The landing view stays the exception list
+    (§4.3); this page is one click from every page via `with_site_nav`.
     """
-    if not entries:
-        return ('<h2>dashboards</h2><ul><li class="absent">none declared — '
-                'no row carries a pane facet</li></ul>')
-    items = "".join(
+    model = index.landing_model()
+    dashboards = "".join(
         f'<li><a href="{esc(d["url"])}">{esc(d["pane"])}</a> · '
-        f'{d["rows"]} {esc(d["kind"])} rows · {d["not_healthy"]} not healthy</li>'
-        for d in entries
+        f'{d["rows"]} {esc(d["kind"])} rows · '
+        + (f'<span class="state-DEGRADED">{d["not_healthy"]} not healthy</span>'
+           if d["not_healthy"] else "all healthy")
+        + "</li>"
+        for d in model.dashboards
+    ) or '<li class="absent">none declared — no row carries a pane facet</li>'
+    milestones = "".join(
+        f'<li><a href="/#milestone-{esc(m["id"])}">{esc(m["id"])}</a> · '
+        f'{m["met"]} of {m["of"]} clauses met'
+        + (f' · <span class="state-UNREPORTED">{m["unreported"]} UNREPORTED</span>'
+           if m.get("unreported") else "")
+        + "</li>"
+        for m in model.milestones
+    ) or '<li class="absent">none declared</li>'
+    registries = "".join(
+        f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>'
+        for name in index.registry_names()
+    ) or '<li class="absent">none declared</li>'
+    lists = "".join(
+        f'<li><a href="/{esc(k.route)}">{esc(k.value)}s</a> · '
+        f'{len(index.of_kind(k))} rows</li>'
+        for k in Kind
     )
-    return f"<h2>dashboards</h2><ul>{items}</ul>"
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>dashboards</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; dashboards</nav>
+<h1>dashboards</h1>
+<p class="pane-question">{esc(_DASHBOARDS_PANE_QUESTION)}</p>
+{index_freshness(index)}
+<h2>dashboards</h2><ul>{dashboards}</ul>
+<h2>milestones</h2><ul>{milestones}</ul>
+<h2>registries</h2><ul>{registries}</ul>
+<h2>all lists</h2><ul>{lists}</ul>
+</body></html>"""
+
+
+def with_site_nav(page: str) -> str:
+    """Prepend the one site menu to a rendered page: home · dashboards ·
+    search. Applied once, at the server, so no page can ship without it."""
+    nav = ('<nav class="site-nav"><a href="/">home</a> · '
+           '<a href="/dashboards">dashboards</a> · '
+           '<a href="/search">search</a></nav>')
+    return page.replace("<body>", "<body>" + nav, 1)
 
 
 def _member_links(kind: Kind, state: str, member_ids) -> str:
@@ -549,7 +594,7 @@ def _milestone(m: dict, recorded: dict | None = None) -> str:
     )
     rows = "".join(_milestone_rows(c) for c in m["clauses"])
     return (
-        f'<h2>milestone: {esc(m["id"])}</h2>'
+        f'<h2 id="milestone-{esc(m["id"])}">milestone: {esc(m["id"])}</h2>'
         # §4.4: the question sentence is rendered on the pane, not left in a
         # registry a reader never opens.
         f'<p class="pane-question">{esc(_MILESTONE_PANE_QUESTION)} &mdash; '

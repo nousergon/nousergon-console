@@ -136,8 +136,14 @@ def _html(index: Index, req) -> str:
     and not the other, `test_every_route_serves_both_representations` fails,
     because it enumerates routes rather than listing them by hand.
     """
+    return render_html.with_site_nav(_page(index, req))
+
+
+def _page(index: Index, req) -> str:
     if req.view == "landing":
         return render_html.landing_page(index)
+    if req.view == "dashboards":
+        return render_html.dashboards_page(index)
     if req.view == "list":
         return render_html.list_page(index, req.kind, req.facets, req.page)
     if req.view == "entity":

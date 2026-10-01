@@ -34,7 +34,7 @@ from ..index.numbers import artifact_observation_coverage as _artifact_observati
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
 from ..model.entity import Edge, Entity
-from ..model.kinds import STATE_FILTER, State
+from ..model.kinds import STATE_FILTER, Kind, State
 from ..model.fields import parse as parse_fields
 from ..search.resolve import search
 from ..server.router import Resolved
@@ -98,6 +98,16 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = _landing(index)
     elif req.view == "list":
         doc = _list(index, req)
+    elif req.view == "dashboards":
+        model = index.landing_model()
+        doc = {"schema_version": SCHEMA_VERSION, "view": "dashboards",
+               "dashboards": model.dashboards,
+               "milestones": [{"id": m["id"], "met": m["met"], "of": m["of"],
+                               "unreported": m.get("unreported", 0)}
+                              for m in model.milestones],
+               "registries": index.registry_names(),
+               "kinds": [{"kind": k.route, "url": f"/{k.route}",
+                          "rows": len(index.of_kind(k))} for k in Kind]}
     elif req.view == "entity":
         ent = index.entity(req.entity_id or "")
         if ent is None:  # pragma: no cover - app.py 404s before reaching here
@@ -194,10 +204,6 @@ def _landing(index: Index) -> dict[str, Any]:
         # reject a missing denominator outright), and §9.2 always has a real
         # denominator (the component population), so it never needs to.
         "numbers": model.numbers,
-        # The dashboard index the HTML renders under the registries (§3.8):
-        # one entry per `pane` facet value and kind, with its list URL. Always
-        # present; an empty list means no row declares a dashboard.
-        "dashboards": model.dashboards,
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
     # renders (`render.html.milestones_section` reads the SAME `model.

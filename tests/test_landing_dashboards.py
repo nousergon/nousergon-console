@@ -85,11 +85,11 @@ def test_a_filtered_list_shows_each_rows_declared_fields():
                                            "render": "count"}}},
     )
     page = render_html.list_page(_index(ent), Kind.RUN, {"pane": "cost"})
-    assert "<th>fields</th>" in page
-    assert "mtd_minutes 504 min" in page
+    assert "<th>mtd_minutes</th>" in page
+    assert "<td>504 min</td>" in page
 
 
-def test_the_fields_cell_keeps_declared_order_and_drops_the_question():
+def test_declared_fields_are_columns_in_declared_order_without_the_question():
     ent = Entity(
         kind=Kind.INCIDENT, id="ops-I1", state=State.HEALTHY, provenance=PROV,
         facets={"pane": "incidents"},
@@ -101,15 +101,27 @@ def test_the_fields_cell_keeps_declared_order_and_drops_the_question():
         }},
     )
     page = render_html.list_page(_index(ent), Kind.INCIDENT, {"pane": "incidents"})
-    cell = page.split("<td>sev ", 1)[1].split("</td>", 1)[0]
-    assert cell.startswith("SEV2 · summary Box shut itself down · age_days 3 days")
+    head = page.split("<thead>", 1)[1].split("</thead>", 1)[0]
+    assert head.index("<th>state</th>") < head.index("<th>sev</th>") \
+        < head.index("<th>summary</th>") < head.index("<th>age_days</th>") < head.index("<th>source</th>")
+    assert "<td>SEV2</td><td>Box shut itself down</td><td>3 days</td>" in page
     assert "Which incidents are open?" not in page
+
+
+def test_a_row_missing_a_declared_field_renders_it_absent():
+    a = Entity(kind=Kind.RUN, id="a", state=State.HEALTHY, provenance=PROV, facets={"pane": "p"},
+               detail={"fields": {"x": {"value": 1, "render": "count"}}})
+    b = Entity(kind=Kind.RUN, id="b", state=State.HEALTHY, provenance=PROV, facets={"pane": "p"},
+               detail={"fields": {"y": {"value": 2, "render": "count"}}})
+    page = render_html.list_page(_index(a, b), Kind.RUN, {"pane": "p"})
+    assert "<th>x</th><th>y</th>" in page
+    assert page.count('<em class="absent">—</em>') == 2
 
 
 def test_a_list_with_no_fields_keeps_the_four_field_table():
     page = render_html.list_page(
         _index(_run("plain-run", State.HEALTHY)), Kind.RUN, {})
-    assert "<th>fields</th>" not in page
+    assert page.count("<th>") == 5  # id, state, source, as-of, evidence
 
 
 def test_every_dashboard_link_filters_when_resolved_through_the_router():

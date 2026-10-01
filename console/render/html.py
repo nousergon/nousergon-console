@@ -100,12 +100,13 @@ def esc(s: object) -> str:
     return html.escape(str(s), quote=True)
 
 
-def row(ent: Entity, with_fields: bool = False) -> str:
-    """One four-field row: state · source · as-of · evidence (§5.1).
+def row(ent: Entity, columns: list[str] | None = None) -> str:
+    """One row: id, state, then any declared field columns, then the rest of
+    §5.1's four fields (source · as-of · evidence).
 
-    ``with_fields`` adds the row's declared fields as one compact cell, so a
-    filtered list such as a dashboard shows its numbers without a click per
-    row. Rendered by `format_value` alone, the same path as the entity page
+    ``columns`` names the declared fields a filtered list such as a dashboard
+    shows, one column each, so its rows read without a click per row. Values
+    are rendered by `format_value` alone, the same path as the entity page
     (§5.8): nothing here knows who emitted a field.
     """
     p = ent.provenance
@@ -118,34 +119,43 @@ def row(ent: Entity, with_fields: bool = False) -> str:
         f'<tr class="state-{esc(ent.state_value)}">'
         f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(ent.id)}</a></td>'
         f"<td>{esc(ent.state_value)}</td>"
-        f"<td>{esc(p.source)}</td>"
+        + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or []))
+        + f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"
         f"<td>{evidence}</td>"
-        + (f"<td>{_fields_cell(ent)}</td>" if with_fields else "")
-        + "</tr>"
+        "</tr>"
     )
 
 
-def _fields_cell(ent: Entity) -> str:
-    """The compact cell, in the order the fragment DECLARES its fields.
+def _field_cells(ent: Entity, columns: list[str]) -> list[str]:
+    by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))}
+    out = []
+    for name in columns:
+        f = by_name.get(name)
+        if f is None:
+            out.append('<em class="absent">—</em>')
+        else:
+            out.append(esc(format_value(f)) + (f" {esc(f.unit)}" if f.unit else ""))
+    return out
+
+
+def _field_columns(entities: list[Entity]) -> list[str]:
+    """The declared fields a list shows as columns, in DECLARATION order.
 
     Declaration order is the author's priority (a SEV and a summary first, the
-    detail after), so it reads better than the alphabetical order `parse`
-    keeps for the entity page. `question` is the pane's own question, the
-    same on every row, so it is left to the entity page rather than repeated
-    in each row.
+    detail after), so the union of every row's names keeps first-seen order
+    rather than the alphabetical order `parse` keeps for the entity page.
+    `question` is the pane's own question, the same on every row, so it stays
+    on the entity page rather than taking a column.
     """
-    raw = ent.detail.get("fields")
-    by_name = {f.name: f for f in parse_fields(raw)}
-    order = [str(n) for n in raw] if isinstance(raw, dict) else list(by_name)
-    declared = [by_name[n] for n in order if n != "question" and n in by_name]
-    if not declared:
-        return '<em class="absent">no fields</em>'
-    return " · ".join(
-        f"{esc(f.name)} {esc(format_value(f))}"
-        + (f" {esc(f.unit)}" if f.unit else "")
-        for f in declared
-    )
+    seen: dict[str, None] = {}
+    for e in entities:
+        raw = e.detail.get("fields")
+        if isinstance(raw, dict):
+            for n in raw:
+                if str(n) != "question":
+                    seen.setdefault(str(n), None)
+    return list(seen)
 
 
 def _table(entities: list[Entity], with_fields: bool = False) -> str:
@@ -153,11 +163,13 @@ def _table(entities: list[Entity], with_fields: bool = False) -> str:
         # Absence renders as itself — an empty state is a rendered fact, not
         # a blank region (§5.5).
         return '<p class="absent">No entities — the source reported none.</p>'
-    rows = "".join(row(e, with_fields) for e in entities)
+    columns = _field_columns(entities) if with_fields else []
+    rows = "".join(row(e, columns) for e in entities)
     return (
         "<table><thead><tr>"
-        "<th>id</th><th>state</th><th>source</th><th>as-of</th><th>evidence</th>"
-        + ("<th>fields</th>" if with_fields else "")
+        "<th>id</th><th>state</th>"
+        + "".join(f"<th>{esc(c)}</th>" for c in columns)
+        + "<th>source</th><th>as-of</th><th>evidence</th>"
         + f"</tr></thead><tbody>{rows}</tbody></table>"
     )
 

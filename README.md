@@ -10,7 +10,7 @@ Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answe
 
 This is an **index over a typed entity graph** instead. Point it at the artifacts you already have; it builds a catalog you can search, link to, and walk.
 
-> **Status: initial implementation.** The contract below is settled and normative; the adapter layer, the entity index, search and the server are implemented. The implementation stack is Python + stdlib server — see [docs/stack-decision.md](docs/stack-decision.md) and the [Roadmap](#roadmap).
+> **Status: initial implementation.** The contract is settled and normative — [docs/contract.md](docs/contract.md) is its single normative copy, and the sections below summarise it; the adapter layer, the entity index, search and the server are implemented. The implementation stack is Python + stdlib server — see [docs/stack-decision.md](docs/stack-decision.md) and the [Roadmap](#roadmap).
 
 ## What makes it different
 
@@ -219,7 +219,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[test]"
 
 `pytest` exits non-zero below the coverage floor in [`pyproject.toml`](pyproject.toml) `[tool.coverage.report]`; the badge above renders the figure CI last measured on `main`, from the same `.coverage` file the gate reads.
 
-**Where the deeper docs are.** [CONTRIBUTING.md](CONTRIBUTING.md) for the rules every change is held to and how to propose one; [docs/adapters.md](docs/adapters.md) for the adapter/driver contract; [docs/stack-decision.md](docs/stack-decision.md) for why this is Python + stdlib with no framework.
+**Where the deeper docs are.** [CONTRIBUTING.md](CONTRIBUTING.md) for the rules every change is held to and how to propose one; [docs/contract.md](docs/contract.md) for the normative contracts (adapters, drivers, descriptors, claim merge, the emission envelope, the JSON API); [docs/adapters.md](docs/adapters.md) for the per-adapter and per-driver reference; [docs/stack-decision.md](docs/stack-decision.md) for why this is Python + stdlib with no framework.
 
 ## Contributing
 

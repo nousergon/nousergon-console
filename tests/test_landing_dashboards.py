@@ -58,23 +58,42 @@ def test_a_pane_spanning_two_kinds_gets_one_link_per_kind():
     assert urls == ["/component?pane=cost", "/run?pane=cost"]
 
 
-def test_the_landing_page_links_every_dashboard():
+def test_the_dashboards_page_links_every_dashboard():
     index = _index(_run("cost-ci:gha", State.HEALTHY, pane="cost"))
-    page = render_html.landing_page(index)
-    assert "<h2>dashboards</h2>" in page
+    page = render_html.dashboards_page(index)
     assert '<a href="/run?pane=cost">cost</a>' in page
+    assert "which dashboards and lists exist" in page  # §4.4 question rendered
 
 
 def test_no_dashboards_renders_as_itself_not_a_blank_region():
     index = _index(_run("plain-run", State.HEALTHY))
-    page = render_html.landing_page(index)
+    page = render_html.dashboards_page(index)
     assert "none declared" in page.split("<h2>dashboards</h2>", 1)[1]
 
 
-def test_the_json_landing_carries_the_same_index():
+def test_the_json_dashboards_view_carries_the_same_index():
     index = _index(_run("cost-ci:gha", State.HEALTHY, pane="cost"))
-    doc = render_json.payload(index, resolve("/"))
+    doc = render_json.payload(index, resolve("/dashboards"))
+    assert doc["view"] == "dashboards"
     assert doc["dashboards"] == index.landing_model().dashboards
+    assert {"kind": "run", "url": "/run", "rows": 1} in doc["kinds"]
+
+
+def test_the_landing_view_stays_the_exception_list():
+    """§4.3: the landing view is exceptions-first; the index is its own pane
+    (§4.4 — one question, one place), reached from the site menu."""
+    index = _index(_run("cost-ci:gha", State.HEALTHY, pane="cost"))
+    assert "<h2>dashboards</h2>" not in render_html.landing_page(index)
+
+
+def test_every_page_carries_the_site_menu():
+    from console.server.app import _html
+    index = _index(_run("cost-ci:gha", State.HEALTHY, pane="cost"))
+    for route in ("/", "/dashboards", "/run?pane=cost", "/run/cost-ci:gha",
+                  "/search?q=cost"):
+        path, _, query = route.partition("?")
+        page = _html(index, resolve(path, query))
+        assert '<a href="/dashboards">dashboards</a>' in page, route
 
 
 def test_a_filtered_list_shows_each_rows_declared_fields():

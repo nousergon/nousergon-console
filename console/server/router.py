@@ -67,6 +67,9 @@ def resolve(path: str, query_string: str = "") -> Resolved:
     if not segments:
         return Resolved(view="landing")
 
+    if segments[0] == "dashboards" and len(segments) == 1:
+        return Resolved(view="dashboards")
+
     if segments[0] == "search":
         return Resolved(view="search", query=params.get("q", ""))
 

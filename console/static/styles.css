@@ -18,3 +18,5 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 .milestone-UNMET { border-left: .35rem solid #b00020; }
 .milestone-UNREPORTED { border-left: .35rem solid #8a4b00; }
 .pane-question { color: #4c5563; font-style: italic; }
+/* The one site menu (`render/html.py::with_site_nav`), on every page. */
+.site-nav { padding-bottom: .5rem; margin-bottom: 1rem; border-bottom: 1px solid #4c5563; font-weight: 600; }

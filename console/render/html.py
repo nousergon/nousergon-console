@@ -100,7 +100,7 @@ def esc(s: object) -> str:
     return html.escape(str(s), quote=True)
 
 
-def row(ent: Entity, columns: list[str] | None = None) -> str:
+def row(ent: Entity, columns: list[str] | None = None, label: str | None = None) -> str:
     """One row: id, state, then any declared field columns, then the rest of
     §5.1's four fields (source · as-of · evidence).
 
@@ -117,7 +117,7 @@ def row(ent: Entity, columns: list[str] | None = None) -> str:
     )
     return (
         f'<tr class="state-{esc(ent.state_value)}">'
-        f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(ent.id)}</a></td>'
+        f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(label or ent.id)}</a></td>'
         f"<td>{esc(ent.state_value)}</td>"
         + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or []))
         + f"<td>{esc(p.source)}</td>"
@@ -158,13 +158,15 @@ def _field_columns(entities: list[Entity]) -> list[str]:
     return list(seen)
 
 
-def _table(entities: list[Entity], with_fields: bool = False) -> str:
+def _table(entities: list[Entity], with_fields: bool = False,
+           labels: dict[str, str] | None = None) -> str:
     if not entities:
         # Absence renders as itself — an empty state is a rendered fact, not
         # a blank region (§5.5).
         return '<p class="absent">No entities — the source reported none.</p>'
     columns = _field_columns(entities) if with_fields else []
-    rows = "".join(row(e, columns) for e in entities)
+    labels = labels or {}
+    rows = "".join(row(e, columns, labels.get(e.id)) for e in entities)
     return (
         "<table><thead><tr>"
         "<th>id</th><th>state</th>"
@@ -318,27 +320,47 @@ def history_page(index: Index, ent: Entity, window_hours: int) -> str:
     return f'<!doctype html><html><head><meta charset="utf-8"><title>history · {esc(ent.id)}</title></head><body><h1>history: {esc(ent.id)}</h1>{index_freshness(index)}{body}</body></html>'
 
 
-def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1) -> str:
+def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
+              all_runs: bool = False) -> str:
     """A filtered list — the facets are in the URL, so this reproduces cold (§3.4)."""
-    # One filter implementation, shared with the JSON representation (§3.8:
-    # the same query, both renderings). The hand-rolled loop this replaces
-    # matched `e.facets` ONLY, so the two representations of the same URL
-    # already disagreed on baseline-comparison filters — and would have
-    # disagreed again on `state=` (alpha-engine-config-I7107).
-    from .json import filter_entities
+    # One filter-collapse-order implementation, shared with the JSON
+    # representation (§3.8: the same query, both renderings) —
+    # `render.json.list_rows`, alpha-engine-config-I7107 / I11805.
+    from ..server.router import RUNS_PARAM, Resolved
+    from .json import list_rows
 
-    entities = filter_entities(index.of_kind(kind), facets)
-    total = len(index.of_kind(kind))
+    listing = list_rows(index, Resolved(view="list", kind=kind, facets=facets,
+                                        page=page, all_runs=all_runs))
+    entities = listing.rows
     start = (page - 1) * 50
     visible = entities[start:start + 50]
-    shown = f"<p>showing {len(visible)} of {total} · {len(entities)} filtered · page {page}</p>"
+    shown = (f"<p>showing {len(visible)} of {listing.total} · "
+             f"{len(entities)} filtered · page {page}</p>")
+    summary = " · ".join(
+        f'<span class="state-{esc(state)}">{n} {esc(state)}</span>'
+        for state, n in listing.summary.items()
+    ) or '<span class="absent">no rows</span>'
+    noun = "jobs" if listing.collapsed else f"{kind.value}s"
+    summary_line = f'<p class="list-summary">{len(entities)} {noun} · {summary}</p>'
+    toggle = ""
+    if kind is Kind.RUN:
+        if listing.collapsed:
+            toggle = (f'<p>newest run per job — {len(entities)} jobs from '
+                      f'{listing.filtered_runs} runs · <a href="'
+                      f'{esc(path_for_list(kind, {**facets, RUNS_PARAM: "all"}))}">'
+                      "show every run</a></p>")
+        else:
+            toggle = (f'<p>every run · <a href="{esc(path_for_list(kind, facets))}">'
+                      "show newest run per job</a></p>")
     title = f"{kind.value}s"
+    table = _table(visible, with_fields=any(e.detail.get("fields") for e in visible),
+                   labels=listing.labels)
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
 <h1>{esc(title)}</h1>
-{index_freshness(index)}{shown}
-{_table(visible, with_fields=any(e.detail.get("fields") for e in visible))}
+{index_freshness(index)}{summary_line}{toggle}{shown}
+{table}
 </body></html>"""
 
 

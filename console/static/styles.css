@@ -20,3 +20,4 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 .pane-question { color: #4c5563; font-style: italic; }
 /* The one site menu (`render/html.py::with_site_nav`), on every page. */
 .site-nav { padding-bottom: .5rem; margin-bottom: 1rem; border-bottom: 1px solid #4c5563; font-weight: 600; }
+.list-summary span { padding-left: .4rem; margin-right: .4rem; }

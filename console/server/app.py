@@ -145,7 +145,8 @@ def _page(index: Index, req) -> str:
     if req.view == "dashboards":
         return render_html.dashboards_page(index)
     if req.view == "list":
-        return render_html.list_page(index, req.kind, req.facets, req.page)
+        return render_html.list_page(index, req.kind, req.facets, req.page,
+                                     all_runs=req.all_runs)
     if req.view == "entity":
         return render_html.entity_page(index, index.entity(req.entity_id))
     if req.view == "history":

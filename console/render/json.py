@@ -25,6 +25,7 @@ sniffs.
 from __future__ import annotations
 
 import json as _json
+from dataclasses import dataclass, field as dc_field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -321,11 +322,10 @@ def _named_members(d: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _list(index: Index, req: Resolved) -> dict[str, Any]:
-    total = index.of_kind(req.kind)
-    filtered = filter_entities(total, req.facets)
+    listing = list_rows(index, req)
     start = (req.page - 1) * 50
-    shown = filtered[start:start + 50]
-    return {
+    shown = listing.rows[start:start + 50]
+    doc = {
         "schema_version": SCHEMA_VERSION,
         "view": "list",
         "kind": req.kind.value,
@@ -334,10 +334,64 @@ def _list(index: Index, req: Resolved) -> dict[str, Any]:
         # §3.4: a list showing a subset says so. A consumer that reads only
         # `entities` and never `showing`/`of` would make the same mistake a
         # reader makes with a top-10 that does not say it is a top-10.
-        "showing": len(shown), "filtered": len(filtered),
-        "of": len(total),
+        "showing": len(shown), "filtered": len(listing.rows),
+        "of": listing.total,
+        "summary": listing.summary,
         "entities": [entity(e) for e in shown],
     }
+    if listing.collapsed:
+        # The run list's default projection, declared rather than implied
+        # (§3.4): newest run per job, with how many runs it stands for.
+        doc["latest_per_job"] = {"jobs": len(listing.rows),
+                                 "runs": listing.filtered_runs}
+        doc["labels"] = {e.id: listing.labels[e.id] for e in shown}
+    return doc
+
+
+@dataclass(frozen=True)
+class Listing:
+    """One list view's rows, computed once for both representations (§3.8)."""
+
+    rows: list[Entity]
+    total: int
+    summary: dict[str, int]
+    collapsed: bool = False
+    filtered_runs: int = 0
+    labels: dict[str, str] = dc_field(default_factory=dict)
+
+
+def list_rows(index: Index, req: Resolved) -> Listing:
+    """Filter, collapse and order a list (alpha-engine-config-I11805).
+
+    A run list shows the newest run per job unless the URL says `runs=all`:
+    434 timestamped rows answered "what ran, ever", not "what state is each
+    job in", which is the question a list is opened with. Rows that are not
+    healthy sort first, keeping source order otherwise, and `summary` counts
+    the rows by state so a reader sees the shape before the table.
+    """
+    from .html import is_exception
+
+    total = index.of_kind(req.kind)
+    filtered = filter_entities(total, req.facets)
+    collapsed = req.kind is Kind.RUN and not req.all_runs
+    labels: dict[str, str] = {}
+    rows = filtered
+    if collapsed:
+        job_of = {e.source: e.target for e in index.edges() if e.rel == "belongs-to"}
+        newest: dict[str, Entity] = {}
+        for ent in filtered:
+            job = job_of.get(ent.id) or ent.id.split("@", 1)[0]
+            kept = newest.get(job)
+            if kept is None or (ent.provenance.as_of or "") > (kept.provenance.as_of or ""):
+                newest[job] = ent
+        rows = list(newest.values())
+        labels = {ent.id: job for job, ent in newest.items()}
+    rows = sorted(rows, key=lambda e: not is_exception(e))
+    summary: dict[str, int] = {}
+    for ent in rows:
+        summary[ent.state_value] = summary.get(ent.state_value, 0) + 1
+    return Listing(rows=rows, total=len(total), summary=dict(sorted(summary.items())),
+                   collapsed=collapsed, filtered_runs=len(filtered), labels=labels)
 
 
 def filter_entities(entities: list[Entity], facets: dict[str, str]) -> list[Entity]:

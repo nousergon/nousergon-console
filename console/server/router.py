@@ -48,10 +48,19 @@ class Resolved:
     query: str | None = None
     page: int = 1
     window_hours: int | None = None
+    #: Run lists only: True shows every historical run instead of the newest
+    #: run per job (`?runs=all`, alpha-engine-config-I11805). Carried in the
+    #: URL, so both views of a run list reproduce cold (§3.2, §3.4).
+    all_runs: bool = False
 
 
 class UnknownRoute(Exception):
     """A path that names no view — surfaced as a 404, never a blank page."""
+
+
+#: The run-list history switch: `?runs=all` lists every run, absent lists
+#: the newest run per job.
+RUNS_PARAM = "runs"
 
 
 def resolve(path: str, query_string: str = "") -> Resolved:
@@ -110,7 +119,8 @@ def resolve(path: str, query_string: str = "") -> Resolved:
             page = max(1, int(params.get("page", "1")))
         except ValueError:
             page = 1
-        return Resolved(view="list", kind=kind, facets=facets, page=page)
+        return Resolved(view="list", kind=kind, facets=facets, page=page,
+                        all_runs=params.get(RUNS_PARAM) == "all")
 
     # An entity page: /<kind>/<id>. The id is everything after the kind
     # segment, NOT a single segment — identifiers legitimately contain slashes

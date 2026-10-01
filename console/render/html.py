@@ -100,8 +100,14 @@ def esc(s: object) -> str:
     return html.escape(str(s), quote=True)
 
 
-def row(ent: Entity) -> str:
-    """One four-field row: state · source · as-of · evidence (§5.1)."""
+def row(ent: Entity, with_fields: bool = False) -> str:
+    """One four-field row: state · source · as-of · evidence (§5.1).
+
+    ``with_fields`` adds the row's declared fields as one compact cell, so a
+    filtered list such as a dashboard shows its numbers without a click per
+    row. Rendered by `format_value` alone, the same path as the entity page
+    (§5.8): nothing here knows who emitted a field.
+    """
     p = ent.provenance
     as_of = esc(p.as_of) if p.as_of else '<em class="absent">no freshness stamp</em>'
     evidence = (
@@ -115,20 +121,33 @@ def row(ent: Entity) -> str:
         f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"
         f"<td>{evidence}</td>"
-        f"</tr>"
+        + (f"<td>{_fields_cell(ent)}</td>" if with_fields else "")
+        + "</tr>"
     )
 
 
-def _table(entities: list[Entity]) -> str:
+def _fields_cell(ent: Entity) -> str:
+    declared = parse_fields(ent.detail.get("fields"))
+    if not declared:
+        return '<em class="absent">no fields</em>'
+    return " · ".join(
+        f"{esc(f.name)} {esc(format_value(f))}"
+        + (f" {esc(f.unit)}" if f.unit else "")
+        for f in declared
+    )
+
+
+def _table(entities: list[Entity], with_fields: bool = False) -> str:
     if not entities:
         # Absence renders as itself — an empty state is a rendered fact, not
         # a blank region (§5.5).
         return '<p class="absent">No entities — the source reported none.</p>'
-    rows = "".join(row(e) for e in entities)
+    rows = "".join(row(e, with_fields) for e in entities)
     return (
         "<table><thead><tr>"
         "<th>id</th><th>state</th><th>source</th><th>as-of</th><th>evidence</th>"
-        f"</tr></thead><tbody>{rows}</tbody></table>"
+        + ("<th>fields</th>" if with_fields else "")
+        + f"</tr></thead><tbody>{rows}</tbody></table>"
     )
 
 
@@ -296,7 +315,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1) -
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
 <h1>{esc(title)}</h1>
 {index_freshness(index)}{shown}
-{_table(visible)}
+{_table(visible, with_fields=any(e.detail.get("fields") for e in visible))}
 </body></html>"""
 
 
@@ -402,6 +421,7 @@ def landing_page(index: Index) -> str:
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
+{dashboards_section(model.dashboards)}
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(model.milestones, model.milestone_journal)}
 {_table(exceptions)}
@@ -411,6 +431,25 @@ def landing_page(index: Index) -> str:
 {observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}
 </body></html>"""
+
+
+def dashboards_section(entries: list[dict]) -> str:
+    """The dashboard index: every `pane` facet value the rows carry, linked.
+
+    console-policy.md §3.1 requires a navigation path to every entity, and a
+    dashboard reachable only by typing its filtered URL is §3.1's "hidden
+    URL". The list is derived from the rows (`index.landing.dashboards`), so
+    it cannot drift from what the dashboards actually hold (§3.5).
+    """
+    if not entries:
+        return ('<h2>dashboards</h2><ul><li class="absent">none declared — '
+                'no row carries a pane facet</li></ul>')
+    items = "".join(
+        f'<li><a href="{esc(d["url"])}">{esc(d["pane"])}</a> · '
+        f'{d["rows"]} {esc(d["kind"])} rows · {d["not_healthy"]} not healthy</li>'
+        for d in entries
+    )
+    return f"<h2>dashboards</h2><ul>{items}</ul>"
 
 
 def _member_links(kind: Kind, state: str, member_ids) -> str:

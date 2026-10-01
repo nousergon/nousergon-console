@@ -127,7 +127,18 @@ def row(ent: Entity, with_fields: bool = False) -> str:
 
 
 def _fields_cell(ent: Entity) -> str:
-    declared = parse_fields(ent.detail.get("fields"))
+    """The compact cell, in the order the fragment DECLARES its fields.
+
+    Declaration order is the author's priority (a SEV and a summary first, the
+    detail after), so it reads better than the alphabetical order `parse`
+    keeps for the entity page. `question` is the pane's own question, the
+    same on every row, so it is left to the entity page rather than repeated
+    in each row.
+    """
+    raw = ent.detail.get("fields")
+    by_name = {f.name: f for f in parse_fields(raw)}
+    order = [str(n) for n in raw] if isinstance(raw, dict) else list(by_name)
+    declared = [by_name[n] for n in order if n != "question" and n in by_name]
     if not declared:
         return '<em class="absent">no fields</em>'
     return " · ".join(

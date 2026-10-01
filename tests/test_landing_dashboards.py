@@ -89,6 +89,23 @@ def test_a_filtered_list_shows_each_rows_declared_fields():
     assert "mtd_minutes 504 min" in page
 
 
+def test_the_fields_cell_keeps_declared_order_and_drops_the_question():
+    ent = Entity(
+        kind=Kind.INCIDENT, id="ops-I1", state=State.HEALTHY, provenance=PROV,
+        facets={"pane": "incidents"},
+        detail={"fields": {
+            "question": {"value": "Which incidents are open?", "render": "text"},
+            "sev": {"value": "SEV2", "render": "value"},
+            "summary": {"value": "Box shut itself down", "render": "text"},
+            "age_days": {"value": 3, "unit": "days", "render": "count"},
+        }},
+    )
+    page = render_html.list_page(_index(ent), Kind.INCIDENT, {"pane": "incidents"})
+    cell = page.split("<td>sev ", 1)[1].split("</td>", 1)[0]
+    assert cell.startswith("SEV2 · summary Box shut itself down · age_days 3 days")
+    assert "Which incidents are open?" not in page
+
+
 def test_a_list_with_no_fields_keeps_the_four_field_table():
     page = render_html.list_page(
         _index(_run("plain-run", State.HEALTHY)), Kind.RUN, {})

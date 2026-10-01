@@ -194,6 +194,10 @@ def _landing(index: Index) -> dict[str, Any]:
         # reject a missing denominator outright), and §9.2 always has a real
         # denominator (the component population), so it never needs to.
         "numbers": model.numbers,
+        # The dashboard index the HTML renders under the registries (§3.8):
+        # one entry per `pane` facet value and kind, with its list URL. Always
+        # present; an empty list means no row declares a dashboard.
+        "dashboards": model.dashboards,
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
     # renders (`render.html.milestones_section` reads the SAME `model.

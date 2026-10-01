@@ -28,6 +28,11 @@ from typing import Any
 
 from ..model.entity import Entity
 
+#: The facet that groups rows into a dashboard (console-policy.md §4.1's
+#: Domain tier, "generated from facets, not hand-cut"). A row joins the
+#: dashboard named by its value; no list of dashboards exists anywhere else.
+PANE_FACET = "pane"
+
 
 @dataclasses.dataclass(frozen=True)
 class LandingModel:
@@ -50,6 +55,39 @@ class LandingModel:
     numbers: dict[str, Any]
     milestones: list[dict[str, Any]]
     milestone_journal: list[dict[str, Any]]
+    dashboards: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+
+def dashboards(index: Any) -> list[dict[str, Any]]:
+    """Every dashboard the index's rows declare, with the link to its list.
+
+    One entry per (`pane` value, kind): the filtered list URL is per kind, so
+    a pane whose rows span two kinds is two links rather than one link that
+    silently drops half its rows. Derived from the rows on every build
+    (§3.5): onboarding a dashboard is stamping the facet, never editing a
+    menu, and a dashboard whose rows all vanish leaves this list with them.
+    """
+    from ..render.html import is_exception
+    from ..server.router import path_for_list
+
+    groups: dict[tuple[str, str], list[Entity]] = {}
+    kinds: dict[str, Any] = {}
+    for ent in index.all():
+        pane = ent.facets.get(PANE_FACET)
+        if not pane:
+            continue
+        groups.setdefault((pane, ent.kind.route), []).append(ent)
+        kinds[ent.kind.route] = ent.kind
+    return [
+        {
+            "pane": pane,
+            "kind": route,
+            "url": path_for_list(kinds[route], {PANE_FACET: pane}),
+            "rows": len(rows),
+            "not_healthy": sum(1 for e in rows if is_exception(e)),
+        }
+        for (pane, route), rows in sorted(groups.items())
+    ]
 
 
 def build(index: Any) -> LandingModel:
@@ -90,4 +128,5 @@ def build(index: Any) -> LandingModel:
         numbers=n,
         milestones=milestones,
         milestone_journal=recorded,
+        dashboards=dashboards(index),
     )

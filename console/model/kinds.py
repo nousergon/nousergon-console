@@ -54,6 +54,10 @@ FACETS: tuple[str, ...] = (
     "authority_tier",
     "lifecycle",
     "pipeline",
+    # The dashboard a row belongs to (§4.1's Domain tier, generated from
+    # facets). The landing view's dashboard index links `/<kind>?pane=<v>`
+    # (`index/landing.py::dashboards`), so this name must survive the router.
+    "pane",
 )
 
 

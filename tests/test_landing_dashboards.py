@@ -93,3 +93,19 @@ def test_a_list_with_no_fields_keeps_the_four_field_table():
     page = render_html.list_page(
         _index(_run("plain-run", State.HEALTHY)), Kind.RUN, {})
     assert "<th>fields</th>" not in page
+
+
+def test_every_dashboard_link_filters_when_resolved_through_the_router():
+    """The link must survive the real request path, not only `list_page`
+    called directly: the router admits only declared facets, and a dropped
+    `pane` renders the whole unfiltered kind under the dashboard's link."""
+    index = _index(
+        _run("cost-ci:gha", State.HEALTHY, pane="cost"),
+        _run("ae-preflight-sweep", State.FAILED),
+    )
+    for d in index.landing_model().dashboards:
+        path, _, query = d["url"].partition("?")
+        req = resolve(path, query)
+        page = render_html.list_page(index, req.kind, req.facets)
+        assert "cost-ci:gha" in page
+        assert "ae-preflight-sweep" not in page

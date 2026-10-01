@@ -24,3 +24,7 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 /* Part-of-whole bars (`of:` fields). Uncoloured on purpose: a relation, not a
    verdict (§5.4); the numbers and percentage sit beside it in text (§5.7). */
 progress { width: 6rem; height: .7rem; vertical-align: middle; accent-color: #4c5563; }
+
+/* Landing exception groups and per-source list groups (I11805). */
+details > summary { font-weight: 600; margin: 0.8em 0 0.3em; cursor: pointer; }
+h2.list-group { margin-top: 1.4em; }

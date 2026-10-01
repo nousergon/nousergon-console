@@ -201,6 +201,55 @@ def _table(entities: list[Entity], with_fields: bool = False,
     )
 
 
+def _grouped_tables(entities: list[Entity],
+                    labels: dict[str, str] | None = None) -> str:
+    """One table per source when the rows come from more than one (I11805).
+
+    A dashboard is a pane filter, so it can gather rows from several sources
+    that declare different fields (spend per provider, CI minutes, the Claude
+    plan). One table over all of them is the union of every source's columns,
+    and most cells read "—". A table per source shows only that source's own
+    fields. Order is kept: groups follow the first row of each, and the list is
+    already not-healthy first, so the group needing attention leads.
+    """
+    if not any(e.detail.get("fields") for e in entities):
+        return _table(entities, labels=labels)
+    groups: dict[str, list[Entity]] = {}
+    for e in entities:
+        groups.setdefault(e.provenance.source or "", []).append(e)
+    if len(groups) == 1:
+        return _table(entities, with_fields=True, labels=labels)
+    parts = []
+    for source, rows in groups.items():
+        not_healthy = sum(1 for e in rows if is_exception(e))
+        note = f" · {not_healthy} not healthy" if not_healthy else ""
+        heading = _group_question(rows) or source or "no source"
+        parts.append(
+            f'<h2 class="list-group">{esc(heading)}</h2>'
+            f'<p class="list-summary">{len(rows)} rows{note} · {esc(source)}</p>'
+            + _table(rows, with_fields=any(e.detail.get("fields") for e in rows),
+                     labels=labels)
+        )
+    return "\n".join(parts)
+
+
+def _group_question(rows: list[Entity]) -> str | None:
+    """The question a group's rows answer, when they all declare the same one.
+
+    A pane fragment stamps its question on every row it emits (§4.4), so a
+    group from one fragment can be headed by what it answers rather than by an
+    artifact path.
+    """
+    questions = set()
+    for e in rows:
+        raw = e.detail.get("fields")
+        q = raw.get("question") if isinstance(raw, dict) else None
+        if isinstance(q, dict):
+            q = q.get("value")
+        questions.add(q if isinstance(q, str) and q else None)
+    return questions.pop() if len(questions) == 1 else None
+
+
 def fields_section(ent: Entity) -> str:
     """A module's own data, rendered from its descriptors alone (§5.8).
 
@@ -379,8 +428,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
             toggle = (f'<p>every run · <a href="{esc(path_for_list(kind, facets))}">'
                       "show newest run per job</a></p>")
     title = f"{kind.value}s"
-    table = _table(visible, with_fields=any(e.detail.get("fields") for e in visible),
-                   labels=listing.labels)
+    table = _grouped_tables(visible, labels=listing.labels)
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
@@ -430,6 +478,48 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
         f"{esc(cadence)} · {esc(info.staleness_basis())} · "
         f"sources: {esc(sources)}</p>"
     )
+
+
+#: The order the landing view's exception groups render in: the states that
+#: mean something broke first, then the ones that mean nobody can tell (I11805).
+_SEVERITY_ORDER = (
+    State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN,
+    State.DEGRADED, State.UNREPORTED, State.ABSENT, State.UNREGISTERED,
+)
+#: Groups that open by default. The rest render collapsed, still in the page,
+#: so a reader sees what broke before scrolling past what is merely unreported.
+_OPEN_STATES = frozenset({State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN})
+
+
+def exceptions_by_state(exceptions: list[Entity]) -> str:
+    """The §4.3 exception list, grouped by state, worst first (I11805).
+
+    The same rows as one flat table, newest first within a group; nothing is
+    filtered. A flat list of a few hundred rows in id order put a stale probe
+    from August above today's failure, so the reader could not tell what to
+    look at. A count line links to each group.
+    """
+    if not exceptions:
+        return '<h2>not healthy</h2><p class="absent">No exceptions — every row is HEALTHY.</p>'
+    groups: dict[str, list[Entity]] = {}
+    newest_first = sorted(exceptions, key=lambda e: e.provenance.as_of or "", reverse=True)
+    for e in newest_first:
+        groups.setdefault(e.state_value, []).append(e)
+    known = [s.value for s in _SEVERITY_ORDER]
+    order = [v for v in known if v in groups] + sorted(v for v in groups if v not in known)
+    counts = " · ".join(
+        f'<a class="state-{esc(v)}" href="#not-healthy-{esc(v)}">{len(groups[v])} {esc(v)}</a>'
+        for v in order
+    )
+    open_values = {s.value for s in _OPEN_STATES}
+    sections = "".join(
+        f'<details id="not-healthy-{esc(v)}"{" open" if v in open_values else ""}>'
+        f'<summary class="state-{esc(v)}">{esc(v)} · {len(groups[v])}</summary>'
+        f"{_table(groups[v])}</details>"
+        for v in order
+    )
+    return (f"<h2>not healthy</h2>"
+            f'<p class="list-summary">{len(exceptions)} rows · {counts}</p>{sections}')
 
 
 def landing_page(index: Index) -> str:
@@ -494,7 +584,7 @@ def landing_page(index: Index) -> str:
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(model.milestones, model.milestone_journal)}
-{_table(exceptions)}
+{exceptions_by_state(exceptions)}
 <h2>waiting on Brian</h2>
 {_table(queue)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>

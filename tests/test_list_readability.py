@@ -92,3 +92,46 @@ def test_non_run_lists_are_not_collapsed():
                     provenance=Provenance(source="fixture")) for i in range(2)]
     page = render_html.list_page(_index(comps), Kind.COMPONENT, {})
     assert "2 components" in page and "newest run per job" not in page
+
+
+def _fielded(rid: str, source: str, question: str, fields: dict) -> Entity:
+    return Entity(
+        kind=Kind.RUN, id=rid, state=State.HEALTHY,
+        provenance=Provenance(source=source, as_of="2026-10-01T03:00:00Z"),
+        detail={"fields": {"question": {"value": question, "render": "text"},
+                           **fields}},
+    )
+
+
+def test_a_list_from_several_sources_renders_a_table_per_source():
+    spend = _fielded("cost-spend:aws", "s3://b/spend", "Is spend on track?",
+                     {"mtd_usd": {"value": 3.0, "unit": "usd", "baseline": None}})
+    ci = _fielded("cost-ci:gha", "s3://b/ci", "Are CI minutes on track?",
+                  {"mtd_minutes": {"value": 9, "unit": "minutes", "baseline": None}})
+    page = _page(_index([spend, ci]), "/run")
+    assert page.count("<table>") == 2
+    assert "<h2 class=\"list-group\">Is spend on track?</h2>" in page
+    assert "<h2 class=\"list-group\">Are CI minutes on track?</h2>" in page
+    spend_table = page.split("Is spend on track?</h2>")[1].split("</table>")[0]
+    assert "mtd_usd" in spend_table and "mtd_minutes" not in spend_table
+
+
+def test_a_list_from_one_source_stays_one_table_without_a_heading():
+    a = _fielded("cost-spend:aws", "s3://b/spend", "q", {"x": {"value": "1", "render": "text"}})
+    b = _fielded("cost-spend:neon", "s3://b/spend", "q", {"x": {"value": "2", "render": "text"}})
+    page = _page(_index([a, b]), "/run")
+    assert page.count("<table>") == 1 and "list-group" not in page
+
+
+def test_the_landing_view_groups_exceptions_by_state_worst_first():
+    rows = [
+        _run("old-probe", State.UNREPORTED, "2026-08-01T00:00:00Z"),
+        _run("fresh-fail", State.FAILED, "2026-10-01T05:00:00Z"),
+        _run("older-fail", State.FAILED, "2026-09-01T05:00:00Z"),
+        _run("ok", State.HEALTHY, "2026-10-01T05:00:00Z"),
+    ]
+    page = _page(_index(rows), "/")
+    assert "3 rows" in page and 'href="#not-healthy-FAILED">2 FAILED</a>' in page
+    assert '<details id="not-healthy-FAILED" open>' in page
+    assert '<details id="not-healthy-UNREPORTED">' in page  # collapsed, still present
+    assert page.index("fresh-fail") < page.index("older-fail") < page.index("old-probe")

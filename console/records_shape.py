@@ -240,6 +240,10 @@ def build_fields(path_root: dict, fields_config: dict[str, Any] | None,
             entry["unit"] = spec["unit"]
         if "baseline" in spec:
             entry["baseline"] = spec["baseline"]
+        if spec.get("of"):
+            # A part-of-whole pairing (alpha-engine-config-I11805): this field
+            # is measured against the named sibling, e.g. spend `of` budget.
+            entry["of"] = str(spec["of"])
         fields_out[fname] = entry
     return fields_out
 

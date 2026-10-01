@@ -77,6 +77,10 @@ class Field:
     baseline: Any = None
     baseline_declared: bool = False
     render: Render = Render.VALUE
+    #: The sibling field this one is a part of (spend `of` budget, minutes
+    #: `of` target). Renders as a bar plus "value / whole (pct)"; never a
+    #: verdict, so it carries no colour (§5.4, §5.7).
+    of: str | None = None
     #: Why this field is not fully declared, or None when it is. Rendered on the
     #: field itself rather than logged: the emitter is the only one who can fix
     #: it, and they will never read the console's logs.
@@ -150,11 +154,21 @@ def _one(name: str, spec: Any) -> Field:
         baseline_declared=baseline_declared,
         render=hint,
         defect=defect,
+        of=str(spec["of"]) if spec.get("of") else None,
     )
 
 
 def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def part_of_whole(field: Field, whole: Field | None) -> tuple[float, float] | None:
+    """(value, whole) when `field` declares `of` and both sides are numbers."""
+    if not field.of or whole is None:
+        return None
+    if not (_is_number(field.value) and _is_number(whole.value)):
+        return None
+    return float(field.value), float(whole.value)
 
 
 def format_value(field: Field) -> str:

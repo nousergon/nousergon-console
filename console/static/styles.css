@@ -21,3 +21,6 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 /* The one site menu (`render/html.py::with_site_nav`), on every page. */
 .site-nav { padding-bottom: .5rem; margin-bottom: 1rem; border-bottom: 1px solid #4c5563; font-weight: 600; }
 .list-summary span { padding-left: .4rem; margin-right: .4rem; }
+/* Part-of-whole bars (`of:` fields). Uncoloured on purpose: a relation, not a
+   verdict (§5.4); the numbers and percentage sit beside it in text (§5.7). */
+progress { width: 6rem; height: .7rem; vertical-align: middle; accent-color: #4c5563; }

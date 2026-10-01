@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from ..index.graph import Index
 from ..model.entity import Entity
-from ..model.fields import Field, format_value, parse as parse_fields
+from ..model.fields import Field, format_value, parse as parse_fields, part_of_whole
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
     EXCEPTION_VALUES,
@@ -135,8 +135,33 @@ def _field_cells(ent: Entity, columns: list[str]) -> list[str]:
         if f is None:
             out.append('<em class="absent">—</em>')
         else:
-            out.append(esc(format_value(f)) + (f" {esc(f.unit)}" if f.unit else ""))
+            out.append(_value_html(f, by_name))
     return out
+
+
+def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True) -> str:
+    """A field's rendered value; a part-of-whole field adds a bar (I11805).
+
+    The bar is a native `<progress>` capped at the whole, with the numbers and
+    percentage beside it in text, so nothing is carried by length alone
+    (§5.7). It is uncoloured: `of` declares a relation, not a baseline, and
+    §5.4 colours only a declared baseline.
+    """
+    unit = f" {esc(f.unit)}" if f.unit and with_unit else ""
+    pair = part_of_whole(f, by_name.get(f.of or ""))
+    if pair is None:
+        return esc(format_value(f)) + unit
+    value, whole = pair
+    whole_txt = esc(format_value(by_name[f.of]))  # type: ignore[index]
+    if whole <= 0:
+        pct_txt = "no budget" if value <= 0 else "over a zero budget"
+        bar_value, bar_max = (1, 1) if value > 0 else (0, 1)
+    else:
+        pct = value / whole
+        pct_txt = f"{pct:.0%}" + (" — over" if pct > 1 else "")
+        bar_value, bar_max = min(value, whole), whole
+    return (f'<progress value="{bar_value:g}" max="{bar_max:g}"></progress> '
+            f"{esc(format_value(f))} / {whole_txt}{unit} ({esc(pct_txt)})")
 
 
 def _field_columns(entities: list[Entity]) -> list[str]:
@@ -188,7 +213,8 @@ def fields_section(ent: Entity) -> str:
     if not declared:
         return ""
     undeclared = [f for f in declared if not f.declared]
-    rows = "".join(_field_row(f) for f in declared)
+    by_name = {f.name: f for f in declared}
+    rows = "".join(_field_row(f, by_name) for f in declared)
     # §5.8: an undeclared field renders opaque and is COUNTED. A dropped field
     # is a fact the emitter believes is on the surface and is not, and it fails
     # on their side of a boundary they cannot see.
@@ -206,7 +232,7 @@ def fields_section(ent: Entity) -> str:
     )
 
 
-def _field_row(f: Field) -> str:
+def _field_row(f: Field, by_name: dict[str, Field] | None = None) -> str:
     """One field. Colour appears only where a baseline was declared (§5.4)."""
     unit = esc(f.unit) if f.unit else '<em class="absent">no unit</em>'
     if f.comparable:
@@ -226,7 +252,7 @@ def _field_row(f: Field) -> str:
     return (
         f'<tr class="{css} render-{esc(f.render.value)}">'
         f"<td>{esc(f.name)}{defect}</td>"
-        f"<td>{esc(format_value(f))}</td>"
+        f"<td>{_value_html(f, by_name or {}, with_unit=False)}</td>"
         f"<td>{unit}</td><td>{baseline}</td></tr>"
     )
 

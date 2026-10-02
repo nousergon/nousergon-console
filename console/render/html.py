@@ -522,6 +522,24 @@ def exceptions_by_state(exceptions: list[Entity]) -> str:
             f'<p class="list-summary">{len(exceptions)} rows · {counts}</p>{sections}')
 
 
+def dashboard_links(dashboards: list[dict]) -> str:
+    """One line of links to every dashboard, at the top of the landing view.
+
+    Navigation, not tiles (§4.3): the landing view stays the exception list,
+    and this line saves the reader a click to /dashboards for the one they
+    came for. Generated from the same `pane` facets as /dashboards (§3.5).
+    """
+    if not dashboards:
+        return ""
+    links = " · ".join(
+        f'<a href="{esc(d["url"])}">{esc(d["pane"])}</a>'
+        + (f' <span class="state-DEGRADED">({d["not_healthy"]} not healthy)</span>'
+           if d["not_healthy"] else "")
+        for d in dashboards
+    )
+    return f'<p class="dashboard-links">dashboards: {links} · <a href="/dashboards">all</a></p>'
+
+
 def landing_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
     state and age · the transparency-gap count · what is waiting on Brian
@@ -579,6 +597,7 @@ def landing_page(index: Index) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
 <h1>fleet — exceptions</h1>
+{dashboard_links(model.dashboards)}
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>

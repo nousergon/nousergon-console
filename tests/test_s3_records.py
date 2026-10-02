@@ -812,3 +812,72 @@ def test_a_field_matching_nothing_renders_None_rather_than_vanishing():
     the same shape."""
     entities = _by_id(_universe_result(fields={"nope": {"render": "value"}}))
     assert entities["AAA"].detail["fields"]["nope"]["value"] is None
+
+
+# ---------------------------------------------------------------------------
+# `format: object` — the listing entry is the record; no body is read
+# (alpha-engine-config-I11816)
+# ---------------------------------------------------------------------------
+
+def _object_cfg(**extra):
+    return {
+        "bucket": BUCKET,
+        "prefix": "summaries/",
+        "kind": "run",
+        "format": "object",
+        "key_pattern": r"summaries/(?:(?P<record>run)-)?(?P<cycle>\d{4}-\d{2}-\d{2})\.md$",
+        "id_template": "summary:{record}@{cycle}",
+        "state_default": "HEALTHY",
+        "facets": {"pane": {"value": "daily"}},
+        "fields": {"cycle": {"render": "text"}, "key": {"render": "text"}},
+        **extra,
+    }
+
+
+_OBJECT_KEYS = [
+    ("summaries/run-2026-08-08.md", "2026-08-09T06:20:00+00:00"),
+    ("summaries/run-2026-08-09.md", "2026-08-10T06:20:00+00:00"),
+    ("summaries/notes.txt", "2026-08-10T06:20:00+00:00"),
+]
+
+
+def _never_read(bucket, key):
+    raise AssertionError(f"format: object must not read a body ({key})")
+
+
+def test_object_format_mints_one_record_per_key_without_reading_a_body():
+    res = s3_records.fetch(_object_cfg(), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, now=NOW)
+    assert res.status is AdapterStatus.OK
+    assert res.unavailable == ()
+    by_id = _by_id(res)
+    assert set(by_id) == {"summary:run@2026-08-08", "summary:run@2026-08-09"}
+    ent = by_id["summary:run@2026-08-09"]
+    assert ent.kind is Kind.RUN
+    assert ent.state is State.HEALTHY
+    assert ent.facets == {"pane": "daily"}
+    assert ent.provenance.as_of == "2026-08-10T06:20:00+00:00"
+    assert ent.provenance.evidence == f"s3://{BUCKET}/summaries/run-2026-08-09.md"
+    assert ent.detail["fields"]["cycle"]["value"] == "2026-08-09"
+    assert ent.detail["fields"]["key"]["value"] == "summaries/run-2026-08-09.md"
+
+
+def test_object_format_state_can_come_from_a_named_group():
+    cfg = _object_cfg(
+        key_pattern=r"summaries/(?P<record>run)-(?P<cycle>\d{4}-\d{2}-\d{2})\.(?P<ext>md|started)$",
+        id_template="summary:{record}-{ext}@{cycle}",
+        state_field="ext", state_map={"md": "HEALTHY", "started": "RUNNING"},
+    )
+    cfg.pop("state_default")
+    keys = [("summaries/run-2026-08-09.started", "2026-08-10T04:50:00+00:00")]
+    res = s3_records.fetch(cfg, lister=lambda b, p: keys, reader=_never_read, now=NOW)
+    (ent,) = res.entities
+    assert ent.state is State.RUNNING
+
+
+def test_object_format_refuses_a_fan_out_it_cannot_read():
+    for extra in ({"records_path": "rows"}, {"array_fields": ["a", "b"]}):
+        res = s3_records.fetch(_object_cfg(**extra), lister=lambda b, p: _OBJECT_KEYS,
+                               reader=_never_read, now=NOW)
+        assert res.status is AdapterStatus.FAILED
+        assert res.unavailable == ("format",)

@@ -169,3 +169,17 @@ def test_the_landing_view_links_every_dashboard_in_one_line():
     assert 'href="/incident?pane=incidents">incidents</a>' in out
     assert 'href="/dashboards">all</a>' in out
     assert render_html.dashboard_links([]) == ""
+
+
+def test_a_raw_valued_row_mapped_to_an_exception_state_counts_as_not_healthy():
+    """Milestone ladder rows are kind decision, so they carry the fragment's
+    mapped value as a string. FAILED/DEGRADED there were tallied healthy on
+    /dashboards (2026-10-02). An open decision still is not."""
+    def decision(did: str, state: str) -> Entity:
+        return Entity(kind=Kind.DECISION, id=did, state=state, provenance=PROV,
+                      facets={"pane": "data-collector"})
+
+    index = _index(decision("d:a", "FAILED"), decision("d:b", "DEGRADED"),
+                   decision("d:c", "HEALTHY"), decision("d:d", "open"))
+    [entry] = index.landing_model().dashboards
+    assert entry["rows"] == 4 and entry["not_healthy"] == 2

@@ -27,6 +27,7 @@ import dataclasses
 from typing import Any
 
 from ..model.entity import Entity
+from ..model.kinds import State
 
 #: The facet that groups rows into a dashboard (console-policy.md §4.1's
 #: Domain tier, "generated from facets, not hand-cut"). A row joins the
@@ -58,6 +59,27 @@ class LandingModel:
     dashboards: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
+def _dashboard_unhealthy(ent: Entity, is_exception: Any) -> bool:
+    """Whether a row counts against its dashboard's health tally.
+
+    `is_exception` answers the landing view's question, where a raw-valued
+    kind (Decision, Signal, ...) carries its source's own value and an open
+    decision is deliberately not an exception. A dashboard tally is narrower:
+    when a raw-valued row's fragment maps its source to a component-state
+    name (`state_map: {...: FAILED}`), that row is saying FAILED, and counting
+    it as healthy hides it. Measured 2026-10-02: milestone ladder rows (kind
+    decision) reading FAILED and DEGRADED were tallied as healthy on
+    /dashboards.
+    """
+    if is_exception(ent):
+        return True
+    if isinstance(ent.state, State):
+        return False
+    from ..render.html import EXCEPTION_STATES
+
+    return str(ent.state).strip().upper() in {n for s in EXCEPTION_STATES for n in (s.name, str(s.value).upper())}
+
+
 def dashboards(index: Any) -> list[dict[str, Any]]:
     """Every dashboard the index's rows declare, with the link to its list.
 
@@ -84,7 +106,7 @@ def dashboards(index: Any) -> list[dict[str, Any]]:
             "kind": route,
             "url": path_for_list(kinds[route], {PANE_FACET: pane}),
             "rows": len(rows),
-            "not_healthy": sum(1 for e in rows if is_exception(e)),
+            "not_healthy": sum(1 for e in rows if _dashboard_unhealthy(e, is_exception)),
         }
         for (pane, route), rows in sorted(groups.items())
     ]

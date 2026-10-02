@@ -33,6 +33,10 @@ different ways a body expresses that:
 - **CSV** (``format: csv``): each row is a record (`trades_full.csv` → one Run
   per trade). The whole file is a record list; ``records_path``/``array_fields``
   do not apply.
+- **Listing only** (``format: object``): the body is never read; the key, its
+  last-modified stamp and the key pattern's named groups are the one record
+  (a dated markdown report → one Run per date). ``records_path``/
+  ``array_fields`` are refused.
 
 Every field beyond id/state/provenance is declared in config (§5.8) — a
 ``{field_name: {path, unit, render, baseline}}`` map resolved against the
@@ -124,6 +128,10 @@ def fetch(
 
     regex = re.compile(pattern)
     fmt = config.get("format", "json")
+    if fmt == OBJECT_FORMAT and (config.get("records_path") or config.get("array_fields")):
+        # A listing entry is ONE record. A fan-out over a body this format
+        # never reads is a config typo, not something to guess around.
+        return _failed(config, ("format",))
     staleness_factor = float(config.get("staleness_factor", 1.5))
     cadence_seconds = _parse_cadence(config.get("cadence"))
     now = now or datetime.now(timezone.utc)
@@ -146,11 +154,15 @@ def fetch(
         if not m:
             continue
         groups = {k: v for k, v in m.groupdict().items() if v is not None}
-        try:
-            body = reader(bucket, key)
-        except Exception:
-            partial = True
-            continue
+        if fmt == OBJECT_FORMAT:
+            # The listing entry IS the record: no body is fetched or parsed.
+            body = _listing_record(key, last_modified, groups)
+        else:
+            try:
+                body = reader(bucket, key)
+            except Exception:
+                partial = True
+                continue
 
         try:
             records, body_root = _project(body, fmt, config)
@@ -203,6 +215,30 @@ def fetch(
     )
 
 
+#: `format: object` (alpha-engine-config-I11816). The record is the LISTING
+#: entry — the key, its last-modified stamp and the key pattern's named groups
+#: — and the body is never read. This is for a source whose body is not a
+#: record at all (a markdown report, a run log), where what a row can honestly
+#: say is "this was published, for this date, at this time", and the reader
+#: follows the evidence link for the content. Without it the default reader
+#: `json.loads` such a body, fails, and the key is dropped as unreadable.
+#:
+#: `object-store` already lists without reading, but it mints an Artifact per
+#: key with a fixed facet set and a cadence-staleness state, so every past
+#: day's report would render `stale` forever. Here the kind, id, state and
+#: facets stay config declarations like every other s3-records source, so a
+#: dated series can be a Run per `job@date` and collapse to its newest row.
+OBJECT_FORMAT = "object"
+
+
+def _listing_record(key: str, last_modified: str | None,
+                    groups: dict[str, str]) -> dict[str, Any]:
+    """The one record a `format: object` key carries. Named groups win over
+    the two listing fields only if a pattern names a group `key` or
+    `last_modified`, which is the pattern author's explicit choice."""
+    return {"key": key, "last_modified": last_modified, **groups}
+
+
 def _failed(config: dict[str, Any], missing: tuple[str, ...]) -> AdapterResult:
     return AdapterResult(
         claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=config.get("_name", name),
@@ -225,6 +261,9 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
     adapter's only job is picking the config keys off ITS config dict; the
     grammar itself is shared with the `s3-records` driver (§2.3).
     """
+    if fmt == OBJECT_FORMAT:
+        # A whole-body projection of the synthetic listing record.
+        fmt = "json"
     return project(body, fmt, config.get("records_path"), config.get("array_fields"),
                     config.get("group_field"), config.get("limit"),
                     config.get("order"))

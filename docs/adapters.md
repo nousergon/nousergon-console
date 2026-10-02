@@ -626,7 +626,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv`, `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object`, `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets` |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -674,6 +674,15 @@ csv` ignores both — the whole file is the record list):
   index-wise into one record per index — a source with no per-instance object
   at all, only parallel arrays (`tickers`, `target_weights`, …).
 - **`format: csv`**: each row is a record.
+- **`format: object`** (alpha-engine-config-I11816): the body is never read.
+  The listing entry is the one record: `key`, `last_modified` and the key
+  pattern's named groups, all reachable by `path`. Use it for a body that
+  is not a record at all, such as a dated markdown report. The row then says
+  that the report was published, for which date and when, and links to the
+  content. `records_path`/`array_fields` are refused, because there is no
+  body to fan out. Kind, id, state and facets stay declarations: a
+  `job@date` Run id collapses a dated series to its newest row, which
+  `object-store`'s per-key Artifact with a cadence-staleness state cannot do.
 
 `id_template` is a Python format string resolved against regex named groups
 ∪ body-level scalars ∪ the current record (record wins on collision) — e.g.

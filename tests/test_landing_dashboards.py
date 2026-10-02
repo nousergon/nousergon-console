@@ -157,3 +157,15 @@ def test_every_dashboard_link_filters_when_resolved_through_the_router():
         page = render_html.list_page(index, req.kind, req.facets)
         assert "cost-ci:gha" in page
         assert "ae-preflight-sweep" not in page
+
+
+def test_the_landing_view_links_every_dashboard_in_one_line():
+    from console.render import html as render_html
+    out = render_html.dashboard_links([
+        {"pane": "cost", "kind": "run", "url": "/run?pane=cost", "rows": 3, "not_healthy": 2},
+        {"pane": "incidents", "kind": "incident", "url": "/incident?pane=incidents", "rows": 5, "not_healthy": 0},
+    ])
+    assert 'href="/run?pane=cost">cost</a>' in out and "(2 not healthy)" in out
+    assert 'href="/incident?pane=incidents">incidents</a>' in out
+    assert 'href="/dashboards">all</a>' in out
+    assert render_html.dashboard_links([]) == ""

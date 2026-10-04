@@ -267,6 +267,20 @@ def resolve_facets(facets_config: dict[str, Any] | None,
       field was constant across the rows; the identity belonged to the
       adapter, and only a literal can say so.
 
+    - ``name: {path: "a.b", map: {raw: facet_value, ...}}`` — a path facet
+      whose value is TRANSLATED through a declared map, and omitted when the
+      record's value is not a key of it. This is the form for putting a
+      declared SUBSET of one source's records on a pane: a board of 767
+      clause rows whose seven phase-1 run clauses and three standing streaks
+      grade a dashboard's dated milestones (`unit_id` ``phase1`` /
+      ``standing``) can stamp ``pane`` on exactly those rows, from the one
+      source that already mints them. A second adapter over the same key
+      would mint the same ids with different declared fields, which the
+      index reads as an equal-rank conflict and renders DEGRADED (§2.5); a
+      literal would bury the pane under every row. An unmapped value is
+      omitted, never passed through, because a facet the map did not name
+      is not a fact the declaration made.
+
     A path facet whose path resolves to nothing is OMITTED rather than written
     as an empty string — an absent facet and a facet whose value is "" filter
     differently, and inventing the second is a fabricated fact. A literal is
@@ -282,7 +296,10 @@ def resolve_facets(facets_config: dict[str, Any] | None,
     """
     facets: dict[str, str] = {}
     for facet_name, spec in (facets_config or {}).items():
+        value_map: dict[str, str] | None = None
         if isinstance(spec, dict):
+            if "map" in spec:
+                value_map = _facet_value_map(facet_name, spec)
             if "value" in spec and "path" in spec:
                 raise ValueError(
                     f"facet {facet_name!r} declares both `value` and `path` — a "
@@ -315,9 +332,43 @@ def resolve_facets(facets_config: dict[str, Any] | None,
                 f"({type(path).__name__}) — a path facet must name a string"
             )
         value = get_path(path_root, path)
-        if value is not None:
+        if value is None:
+            continue
+        if value_map is None:
             facets[str(facet_name)] = str(value)
+        elif str(value) in value_map:
+            facets[str(facet_name)] = value_map[str(value)]
     return facets
+
+
+def _facet_value_map(facet_name: Any, spec: dict[str, Any]) -> dict[str, str]:
+    """The declared `map` of a path facet, validated — or a refusal.
+
+    Refused rather than ignored: `map` beside a literal `value` (a literal is
+    never looked up, so there is nothing to translate), a `map` that is not a
+    non-empty mapping, and a map entry whose target is null or empty (the same
+    typo class as `{value: null}` — it would stamp a facet with no value).
+    """
+    if "value" in spec:
+        raise ValueError(
+            f"facet {facet_name!r} declares `map` beside a literal `value` — a "
+            f"literal is never looked up, so there is nothing to translate"
+        )
+    raw = spec["map"]
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(
+            f"facet {facet_name!r} declares `map` that is not a non-empty "
+            f"mapping of record value -> facet value"
+        )
+    out: dict[str, str] = {}
+    for key, target in raw.items():
+        if target is None or str(target) == "":
+            raise ValueError(
+                f"facet {facet_name!r} maps {key!r} to an empty value — a "
+                f"mapped facet with no value is a typo, not an absent fact"
+            )
+        out[str(key)] = str(target)
+    return out
 
 
 def resolve_state(

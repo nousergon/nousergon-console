@@ -66,3 +66,48 @@ def test_non_string_path_is_refused():
     with pytest.raises(ValueError, match="non-string `path`"):
         resolve_facets({"pipeline": {"path": 123}}, {"123": "nope"})
 
+
+
+# --- `map`: a path facet translated through a declared map -----------------
+
+
+def test_mapped_path_translates_a_mapped_value():
+    spec = {"pane": {"path": "unit_id", "map": {"standing": "data-collector"}}}
+    assert resolve_facets(spec, {"unit_id": "standing"}) == {"pane": "data-collector"}
+
+
+def test_mapped_path_omits_an_unmapped_value_rather_than_passing_it_through():
+    """The FAIL shape the map exists to prevent: a pass-through would stamp
+    `pane=D01` on every clause row and split one board into dozens of panes."""
+    spec = {"pane": {"path": "unit_id", "map": {"standing": "data-collector"}}}
+    assert resolve_facets(spec, {"unit_id": "D01"}) == {}
+
+
+def test_mapped_path_omits_when_the_path_is_absent():
+    spec = {"pane": {"path": "unit_id", "map": {"standing": "data-collector"}}}
+    assert resolve_facets(spec, {"clause": "x"}) == {}
+
+
+def test_mapped_path_matches_on_the_string_form_of_the_value():
+    spec = {"tier": {"path": "phase", "map": {"1": "early"}}}
+    assert resolve_facets(spec, {"phase": 1}) == {"tier": "early"}
+
+
+def test_map_beside_a_literal_is_refused():
+    with pytest.raises(ValueError, match="beside a literal `value`"):
+        resolve_facets({"pane": {"value": "a", "map": {"x": "y"}}}, {})
+
+
+@pytest.mark.parametrize("bad", [{}, ["standing"], "standing", None])
+def test_map_that_is_not_a_non_empty_mapping_is_refused(bad):
+    with pytest.raises(ValueError, match="not a non-empty mapping"):
+        resolve_facets({"pane": {"path": "unit_id", "map": bad}}, {"unit_id": "x"})
+
+
+@pytest.mark.parametrize("target", [None, ""])
+def test_map_entry_with_an_empty_target_is_refused(target):
+    with pytest.raises(ValueError, match="maps 'standing' to an empty value"):
+        resolve_facets(
+            {"pane": {"path": "unit_id", "map": {"standing": target}}},
+            {"unit_id": "standing"},
+        )

@@ -84,6 +84,7 @@ from ..records_shape import (
 )
 from .object_store import _parse_cadence  # second adoption, one repo — see below
 from ..aws import client as _aws_client
+from ..s3_body_cache import BODY_CACHE, listing_tag, response_tag
 
 #: A dashboard's own read of its S3 artifacts is an OBSERVATION (§2.5): it
 #: says what the artifact currently contains, never a decision about it.
@@ -337,6 +338,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
         client = _aws_client("s3")
         out: list[StoredObject] = []
+        tags: dict[str, str | None] = {}
         token: str | None = None
         while True:
             kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
@@ -348,16 +350,25 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
                 lm = obj.get("LastModified")
                 stamp = lm.isoformat() if hasattr(lm, "isoformat") else (str(lm) if lm else None)
                 out.append((key, stamp))
+                tags[key] = listing_tag(obj)
             if not page.get("IsTruncated"):
                 break
             token = page.get("NextContinuationToken")
+        # Only a COMPLETE listing reaches here (a failed page raises), so a key
+        # it omits is gone and its cached body is dropped with it.
+        BODY_CACHE.observe_listing(bucket, prefix, tags)
         return out
 
     def reader(bucket: str, key: str) -> Any:
         client = _aws_client("s3")
-        try:
+
+        def get() -> tuple[bytes, str | None]:
             resp = client.get_object(Bucket=bucket, Key=key)
-            raw = resp["Body"].read()
+            return resp["Body"].read(), response_tag(resp)
+
+        try:
+            # An unchanged ETag since the last listing reuses the last body.
+            raw = BODY_CACHE.read(bucket, key, get)
         except (BotoCoreError, ClientError):
             raise
         if key.endswith(".csv"):

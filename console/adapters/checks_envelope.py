@@ -41,6 +41,7 @@ from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 from ..aws import client as _aws_client
+from ..s3_body_cache import BODY_CACHE, listing_tag, response_tag
 from ..freshness import freshness as _artifact_freshness
 
 #: A check-result envelope is an OBSERVATION (§2.5): it says what actually ran
@@ -420,6 +421,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
         client = _aws_client("s3")
         out: list[StoredObject] = []
+        tags: dict[str, str | None] = {}
         token: str | None = None
         while True:
             kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
@@ -434,16 +436,25 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
                 else:
                     stamp = str(lm) if lm else None
                 out.append((key, stamp))
+                tags[key] = listing_tag(obj)
             if not page.get("IsTruncated"):
                 break
             token = page.get("NextContinuationToken")
+        # Only a COMPLETE listing reaches here (a failed page raises), so a key
+        # it omits is gone and its cached body is dropped with it.
+        BODY_CACHE.observe_listing(bucket, prefix, tags)
         return out
 
     def reader(bucket: str, key: str) -> dict[str, Any]:
         client = _aws_client("s3")
-        try:
+
+        def get() -> tuple[bytes, str | None]:
             resp = client.get_object(Bucket=bucket, Key=key)
-            body = resp["Body"].read()
+            return resp["Body"].read(), response_tag(resp)
+
+        try:
+            # An unchanged ETag since the last listing reuses the last body.
+            body = BODY_CACHE.read(bucket, key, get)
         except (BotoCoreError, ClientError):
             raise
         return json.loads(body.decode("utf-8"))

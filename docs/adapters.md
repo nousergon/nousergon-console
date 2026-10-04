@@ -640,7 +640,13 @@ the map must never read as healthy.
 **`facets`** map record or body paths onto the fields §2.2 filters on uniformly
 across the index — a different thing from declared `fields`, which are
 *rendered*. A facet whose path resolves to nothing is omitted, never written as
-an empty string: absent and `""` filter differently.
+an empty string: absent and `""` filter differently. Three spellings: a bare
+path string or `{path: …}`; `{value: …}`, a literal stamped on every record (the
+source's own identity); and `{path: …, map: {raw: facet_value}}`, which
+translates the record's value and **omits** the facet when the value is not a
+key of the map — the way to put a declared subset of one source's records on a
+pane (`pane: {path: unit_id, map: {standing: data-collector}}`) without a second
+adapter minting the same ids.
 
 **A field's `path` defaults to its own name**, so `{score: {render: value}}`
 reads `score`. An explicit `path` still wins.

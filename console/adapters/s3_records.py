@@ -37,6 +37,9 @@ different ways a body expresses that:
   last-modified stamp and the key pattern's named groups are the one record
   (a dated markdown report → one Run per date). ``records_path``/
   ``array_fields`` are refused.
+  With ``body: text`` the object's text is carried beside that record as
+  ``detail["document"]`` and shown on the entity page; ``window_days`` has a
+  list of the rows open on its last N days with an archive one link away.
 
 Every field beyond id/state/provenance is declared in config (§5.8) — a
 ``{field_name: {path, unit, render, baseline}}`` map resolved against the
@@ -71,10 +74,11 @@ over recorded fixtures with no live bucket (groom-sweep §8.1).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from ..model.entity import Edge, Entity, Provenance
+from ..model.entity import DOCUMENT_DETAIL, WINDOW_DETAIL, Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
@@ -100,6 +104,9 @@ StoreLister = Callable[[str, str], list[StoredObject]]
 #: A body reader takes (bucket, key) and returns the decoded body: a dict for
 #: JSON, or the raw text for CSV. Raises when the object is unreadable.
 BodyReader = Callable[[str, str], Any]
+#: A text reader takes (bucket, key) and returns the body as UTF-8 text, never
+#: parsed. Used only by `format: object` with `body: text`.
+TextReader = Callable[[str, str], str]
 
 
 def fetch(
@@ -107,6 +114,7 @@ def fetch(
     lister: StoreLister | None = None,
     reader: BodyReader | None = None,
     now: datetime | None = None,
+    text_reader: TextReader | None = None,
 ) -> AdapterResult:
     bucket = config.get("bucket")
     prefix = config.get("prefix", "")
@@ -117,22 +125,35 @@ def fetch(
         if kind is None:
             missing.append("kind")
         return _failed(config, tuple(missing) or ("all",))
-    if lister is None or reader is None:
-        default_lister, default_reader = _default_s3()
+    fmt = config.get("format", "json")
+    if fmt == OBJECT_FORMAT and (config.get("records_path") or config.get("array_fields")):
+        # A listing entry is ONE record. A fan-out over a body this format
+        # never reads is a config typo, not something to guess around.
+        return _failed(config, ("format",))
+    body_mode = config.get("body")
+    if body_mode is not None and (fmt != OBJECT_FORMAT or body_mode != BODY_TEXT):
+        # `body` carries a document beside a listing record; on a parsed
+        # format the body already IS the record, and an unknown mode is a typo.
+        return _failed(config, ("body",))
+    window_days = config.get("window_days")
+    if window_days is not None and (isinstance(window_days, bool)
+                                    or not isinstance(window_days, int)
+                                    or window_days < 1):
+        return _failed(config, ("window_days",))
+    if lister is None or reader is None or (body_mode and text_reader is None):
+        default_lister, default_reader, default_text = _default_s3()
         lister = lister or default_lister
         reader = reader or default_reader
+        text_reader = text_reader or default_text
         missing = [n for n, v in (("lister", lister), ("reader", reader)) if v is None]
+        if body_mode and text_reader is None:
+            missing.append("text_reader")
         if missing:
             return _failed(config, tuple(missing))
 
     import re
 
     regex = re.compile(pattern)
-    fmt = config.get("format", "json")
-    if fmt == OBJECT_FORMAT and (config.get("records_path") or config.get("array_fields")):
-        # A listing entry is ONE record. A fan-out over a body this format
-        # never reads is a config typo, not something to guess around.
-        return _failed(config, ("format",))
     staleness_factor = float(config.get("staleness_factor", 1.5))
     cadence_seconds = _parse_cadence(config.get("cadence"))
     now = now or datetime.now(timezone.utc)
@@ -182,6 +203,14 @@ def fetch(
             if mapped is None:
                 partial = True
                 continue
+            if body_mode:
+                mapped, readable = _with_document(
+                    mapped, bucket, key, text_reader,  # type: ignore[arg-type]
+                    int(config.get("body_max_bytes", DEFAULT_BODY_MAX_BYTES)))
+                partial = partial or not readable
+            if window_days is not None:
+                mapped = replace(mapped, detail={**mapped.detail,
+                                                 WINDOW_DETAIL: window_days})
             key_entities.append(mapped)
         entities.extend(key_entities)
 
@@ -230,6 +259,43 @@ def fetch(
 #: facets stay config declarations like every other s3-records source, so a
 #: dated series can be a Run per `job@date` and collapse to its newest row.
 OBJECT_FORMAT = "object"
+
+
+#: `body: text` (with `format: object` only). The listing entry is still the
+#: record, and the object's text is carried beside it as `detail["document"]`
+#: so the entity page shows the report itself: an `s3://` evidence link is not
+#: something a browser can open. Read through the same ETag cache as every
+#: other body, so an unchanged report is not re-downloaded on each rebuild.
+BODY_TEXT = "text"
+#: The largest document carried whole; a longer one is cut at this many bytes
+#: and says so (`truncated`), never silently shortened. Override per source
+#: with `body_max_bytes`.
+DEFAULT_BODY_MAX_BYTES = 512 * 1024
+#: `window_days` (`WINDOW_DETAIL`): the source declares that a list of its
+#: rows opens on its last N days, newest first, with every row one link away.
+#: Carried on each row, the same way `pane` and `question` are: the rows
+#: declare their own dashboard, so no menu or pane registry is edited.
+
+
+def _with_document(ent: Entity, bucket: str, key: str, text_reader: TextReader,
+                   max_bytes: int) -> tuple[Entity, bool]:
+    """`ent` with its object's text attached, and whether it could be read.
+
+    An unreadable body keeps the row (the listing says the report exists) and
+    records the failure as a named source finding, so the page says "could not
+    read" rather than showing an empty document (§5.5).
+    """
+    try:
+        text = text_reader(bucket, key)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a finding, not swallowed
+        finding = {"condition": f"unreadable ({type(exc).__name__})"}
+        return replace(ent, detail={**ent.detail, "document_source": finding}), False
+    raw = text.encode("utf-8")
+    truncated = len(raw) > max_bytes
+    if truncated:
+        text = raw[:max_bytes].decode("utf-8", errors="ignore")
+    doc = {"text": text, "bytes": len(raw), "truncated": truncated}
+    return replace(ent, detail={**ent.detail, DOCUMENT_DETAIL: doc}), True
 
 
 def _listing_record(key: str, last_modified: str | None,
@@ -327,13 +393,14 @@ def _one_entity(
 
 
 
-def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
-    """boto3-backed lister + body reader when the optional AWS extra is installed."""
+def _default_s3() -> tuple[StoreLister | None, BodyReader | None, TextReader | None]:
+    """boto3-backed lister, body reader and text reader when the optional AWS
+    extra is installed."""
     try:
         import boto3  # type: ignore
         from botocore.exceptions import BotoCoreError, ClientError  # type: ignore
     except ImportError:
-        return None, None
+        return None, None, None
 
     def lister(bucket: str, prefix: str) -> list[StoredObject]:
         client = _aws_client("s3")
@@ -359,7 +426,7 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
         BODY_CACHE.observe_listing(bucket, prefix, tags)
         return out
 
-    def reader(bucket: str, key: str) -> Any:
+    def raw_bytes(bucket: str, key: str) -> bytes:
         client = _aws_client("s3")
 
         def get() -> tuple[bytes, str | None]:
@@ -368,11 +435,17 @@ def _default_s3() -> tuple[StoreLister | None, BodyReader | None]:
 
         try:
             # An unchanged ETag since the last listing reuses the last body.
-            raw = BODY_CACHE.read(bucket, key, get)
+            return BODY_CACHE.read(bucket, key, get)
         except (BotoCoreError, ClientError):
             raise
+
+    def reader(bucket: str, key: str) -> Any:
+        raw = raw_bytes(bucket, key)
         if key.endswith(".csv"):
             return raw.decode("utf-8")
         return json.loads(raw.decode("utf-8"))
 
-    return lister, reader
+    def text_reader(bucket: str, key: str) -> str:
+        return raw_bytes(bucket, key).decode("utf-8")
+
+    return lister, reader, text_reader

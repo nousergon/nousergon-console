@@ -52,6 +52,12 @@ class Resolved:
     #: run per job (`?runs=all`, alpha-engine-config-I11805). Carried in the
     #: URL, so both views of a run list reproduce cold (§3.2, §3.4).
     all_runs: bool = False
+    #: List views only: a dated window (`?days=N`) or every row (`?days=all`),
+    #: newest first either way. Absent, a list whose rows declare a window
+    #: (`window_days`) opens on it, so `/run?pane=reports` is the last week
+    #: and `?days=all` is its archive — both URLs reproduce cold (§3.2).
+    days: int | None = None
+    days_all: bool = False
 
 
 class UnknownRoute(Exception):
@@ -61,6 +67,10 @@ class UnknownRoute(Exception):
 #: The run-list history switch: `?runs=all` lists every run, absent lists
 #: the newest run per job.
 RUNS_PARAM = "runs"
+#: The dated-window switch: `?days=N` keeps rows whose as-of is in the last N
+#: days, `?days=all` keeps every row; both order newest first.
+DAYS_PARAM = "days"
+ALL_DAYS = "all"
 
 
 def resolve(path: str, query_string: str = "") -> Resolved:
@@ -119,8 +129,11 @@ def resolve(path: str, query_string: str = "") -> Resolved:
             page = max(1, int(params.get("page", "1")))
         except ValueError:
             page = 1
+        raw_days = params.get(DAYS_PARAM, "")
+        days = int(raw_days) if raw_days.isdigit() and int(raw_days) > 0 else None
         return Resolved(view="list", kind=kind, facets=facets, page=page,
-                        all_runs=params.get(RUNS_PARAM) == "all")
+                        all_runs=params.get(RUNS_PARAM) == "all",
+                        days=days, days_all=raw_days == ALL_DAYS)
 
     # An entity page: /<kind>/<id>. The id is everything after the kind
     # segment, NOT a single segment — identifiers legitimately contain slashes

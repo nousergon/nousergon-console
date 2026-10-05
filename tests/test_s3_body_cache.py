@@ -119,7 +119,7 @@ def test_removed_key_is_dropped_and_never_served(s3):
 def test_s3_records_reader_shares_the_rule(s3):
     key = "reports/2026-07-31/eod.json"
     s3.put(key, {"day": "2026-07-31", "v": 1}, '"r1"')
-    lister, reader = s3_records._default_s3()
+    lister, reader, _ = s3_records._default_s3()
     cfg = {"bucket": BUCKET, "prefix": "reports/", "kind": "cycle",
            "key_pattern": r"reports/(?P<day>[^/]+)/eod\.json$"}
     for _ in range(3):
@@ -162,3 +162,17 @@ def test_listing_tag_falls_back_to_last_modified_and_size():
     assert s3_body_cache.listing_tag({"ETag": '"x"'}) == 'etag:"x"'
     assert s3_body_cache.listing_tag({"LastModified": LM, "Size": 3}) == f"lm:{LM.isoformat()}|3"
     assert s3_body_cache.listing_tag({"LastModified": LM}) is None
+
+
+def test_s3_records_text_reader_shares_the_cache(s3):
+    key = "reports/plan-2026-07-31.md"
+    s3.objects[key] = ("# plan\n".encode(), '"t1"')
+    lister, _, text_reader = s3_records._default_s3()
+    cfg = {"bucket": BUCKET, "prefix": "reports/", "kind": "run", "format": "object",
+           "body": "text", "state_default": "HEALTHY", "id_template": "plan@{day}",
+           "key_pattern": r"reports/plan-(?P<day>[^/]+)\.md$"}
+    for _ in range(3):
+        res = s3_records.fetch(cfg, lister=lister, reader=lambda b, k: None,
+                               text_reader=text_reader)
+        assert res.entities[0].detail["document"]["text"] == "# plan\n"
+    assert s3.gets == [key]

@@ -568,7 +568,7 @@ def test_unmatched_keys_skipped():
 
 
 def test_no_lister_or_reader_is_failed(monkeypatch):
-    monkeypatch.setattr(s3_records, "_default_s3", lambda: (None, None))
+    monkeypatch.setattr(s3_records, "_default_s3", lambda: (None, None, None))
     result = s3_records.fetch(_whole_body_cfg(), now=NOW)
     assert result.status is AdapterStatus.FAILED
     assert "lister" in result.unavailable
@@ -881,3 +881,94 @@ def test_object_format_refuses_a_fan_out_it_cannot_read():
                                reader=_never_read, now=NOW)
         assert res.status is AdapterStatus.FAILED
         assert res.unavailable == ("format",)
+
+
+# ---------------------------------------------------------------------------
+# `body: text` — a `format: object` row carries its document, so the entity
+# page shows the report rather than an `s3://` link no browser can open.
+# `window_days` — the rows declare the window their list opens on.
+# ---------------------------------------------------------------------------
+
+def _texts(mapping):
+    def text_reader(bucket, key):
+        return mapping[key]
+    return text_reader
+
+
+def test_body_text_attaches_the_document_and_keeps_the_listing_record():
+    text = _texts({k: f"# report {k}\n\n- item" for k, _ in _OBJECT_KEYS})
+    res = s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, text_reader=text, now=NOW)
+    assert res.status is AdapterStatus.OK
+    assert res.unavailable == ()
+    ent = _by_id(res)["summary:run@2026-08-09"]
+    doc = ent.detail["document"]
+    assert doc["text"] == "# report summaries/run-2026-08-09.md\n\n- item"
+    assert doc["truncated"] is False
+    assert doc["bytes"] == len(doc["text"].encode())
+    # The listing record is unchanged by carrying the document.
+    assert ent.detail["fields"]["cycle"]["value"] == "2026-08-09"
+
+
+def test_body_text_reads_only_the_keys_the_pattern_matched():
+    seen = []
+
+    def text_reader(bucket, key):
+        seen.append(key)
+        return "x"
+    s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS,
+                     reader=_never_read, text_reader=text_reader, now=NOW)
+    assert sorted(seen) == ["summaries/run-2026-08-08.md", "summaries/run-2026-08-09.md"]
+
+
+def test_body_text_over_the_cap_is_cut_and_says_so():
+    big = "é" * 10  # 20 bytes
+    res = s3_records.fetch(_object_cfg(body="text", body_max_bytes=7),
+                           lister=lambda b, p: _OBJECT_KEYS[:1], reader=_never_read,
+                           text_reader=lambda b, k: big, now=NOW)
+    doc = res.entities[0].detail["document"]
+    assert doc["truncated"] is True
+    assert doc["bytes"] == 20
+    # Cut on a character boundary, never a broken byte sequence.
+    assert doc["text"] == "é" * 3
+
+
+def test_an_unreadable_document_keeps_the_row_and_names_the_failure():
+    def text_reader(bucket, key):
+        raise OSError("denied")
+    res = s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS[:1],
+                           reader=_never_read, text_reader=text_reader, now=NOW)
+    (ent,) = res.entities
+    assert "document" not in ent.detail
+    assert ent.detail["document_source"] == {"condition": "unreadable (OSError)"}
+    assert res.unavailable == ("body",)
+
+
+def test_body_is_refused_off_object_format_and_for_an_unknown_mode():
+    for cfg in (_object_cfg(body="html"), _whole_body_cfg(body="text")):
+        res = s3_records.fetch(cfg, lister=lambda b, p: _OBJECT_KEYS,
+                               reader=_never_read, text_reader=lambda b, k: "", now=NOW)
+        assert res.status is AdapterStatus.FAILED
+        assert res.unavailable == ("body",)
+
+
+def test_body_text_without_any_text_reader_is_failed(monkeypatch):
+    monkeypatch.setattr(s3_records, "_default_s3", lambda: (None, None, None))
+    res = s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, now=NOW)
+    assert res.status is AdapterStatus.FAILED
+    assert res.unavailable == ("text_reader",)
+
+
+def test_window_days_is_stamped_on_every_row():
+    res = s3_records.fetch(_object_cfg(window_days=7), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, now=NOW)
+    assert {e.detail["window_days"] for e in res.entities} == {7}
+
+
+def test_window_days_must_be_a_positive_integer():
+    for bad in (0, -1, "7", 1.5, True):
+        res = s3_records.fetch(_object_cfg(window_days=bad), lister=lambda b, p: _OBJECT_KEYS,
+                               reader=_never_read, now=NOW)
+        assert res.status is AdapterStatus.FAILED
+        assert res.unavailable == ("window_days",)

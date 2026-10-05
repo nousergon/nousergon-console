@@ -22,7 +22,7 @@ import html
 from datetime import datetime, timezone
 
 from ..index.graph import Index
-from ..model.entity import Entity
+from ..model.entity import DOCUMENT_DETAIL, Entity
 from ..model.fields import Field, format_value, parse as parse_fields, part_of_whole
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
@@ -375,6 +375,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 {index_freshness(index)}
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
+{document_section(ent)}
 <h2>relations</h2><ul>{rel_items}</ul>
 {fields_section(ent)}
 {_source_findings_section(ent)}
@@ -396,19 +397,21 @@ def history_page(index: Index, ent: Entity, window_hours: int) -> str:
 
 
 def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
-              all_runs: bool = False) -> str:
+              all_runs: bool = False, days: int | None = None,
+              days_all: bool = False) -> str:
     """A filtered list — the facets are in the URL, so this reproduces cold (§3.4)."""
     # One filter-collapse-order implementation, shared with the JSON
     # representation (§3.8: the same query, both renderings) —
     # `render.json.list_rows`, alpha-engine-config-I7107 / I11805.
-    from ..server.router import RUNS_PARAM, Resolved
+    from ..server.router import ALL_DAYS, DAYS_PARAM, RUNS_PARAM, Resolved
     from .json import list_rows
 
     listing = list_rows(index, Resolved(view="list", kind=kind, facets=facets,
-                                        page=page, all_runs=all_runs))
+                                        page=page, all_runs=all_runs,
+                                        days=days, days_all=days_all))
     entities = listing.rows
-    start = (page - 1) * 50
-    visible = entities[start:start + 50]
+    start = (page - 1) * PAGE_SIZE
+    visible = entities[start:start + PAGE_SIZE]
     shown = (f"<p>showing {len(visible)} of {listing.total} · "
              f"{len(entities)} filtered · page {page}</p>")
     summary = " · ".join(
@@ -418,13 +421,21 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
     noun = "jobs" if listing.collapsed else f"{kind.value}s"
     summary_line = f'<p class="list-summary">{len(entities)} {noun} · {summary}</p>'
     toggle = ""
-    if kind is Kind.RUN:
+    url_state = dict(facets)
+    if listing.dated:
+        toggle = _window_line(kind, facets, listing)
+        if days_all:
+            url_state[DAYS_PARAM] = ALL_DAYS
+        elif days:
+            url_state[DAYS_PARAM] = str(days)
+    elif kind is Kind.RUN:
         if listing.collapsed:
             toggle = (f'<p>newest run per job — {len(entities)} jobs from '
                       f'{listing.filtered_runs} runs · <a href="'
                       f'{esc(path_for_list(kind, {**facets, RUNS_PARAM: "all"}))}">'
                       "show every run</a></p>")
         else:
+            url_state[RUNS_PARAM] = "all"
             toggle = (f'<p>every run · <a href="{esc(path_for_list(kind, facets))}">'
                       "show newest run per job</a></p>")
     title = f"{kind.value}s"
@@ -435,7 +446,71 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
 <h1>{esc(title)}</h1>
 {index_freshness(index)}{summary_line}{toggle}{shown}
 {table}
+{_pager(kind, url_state, page, len(entities))}
 </body></html>"""
+
+
+#: Rows per list page, the same slice the JSON representation takes.
+PAGE_SIZE = 50
+
+
+def _window_line(kind: Kind, facets: dict[str, str], listing) -> str:
+    """What a dated list shows, and the one link to the other view (§3.4).
+
+    The window view links to the archive of every row; the archive links back
+    to the window the rows declare. Both are plain URLs, so either can be
+    pasted into an issue and reproduces cold (§3.2).
+    """
+    from ..server.router import ALL_DAYS, DAYS_PARAM
+
+    noun = f"{kind.value}s"
+    if listing.window_days is not None:
+        archive = path_for_list(kind, {**facets, DAYS_PARAM: ALL_DAYS})
+        outside = (f" · {listing.outside} older or undated not shown"
+                   if listing.outside else "")
+        return (f'<p class="list-window">past {listing.window_days} days, newest first'
+                f' — {len(listing.rows)} of {listing.filtered_runs} {esc(noun)}{outside}'
+                f' · <a href="{esc(archive)}">archive: every {esc(kind.value)} '
+                f'({listing.filtered_runs})</a></p>')
+    back = path_for_list(kind, facets)
+    back_text = (f"past {listing.declared_window} days" if listing.declared_window
+                 else "default view")
+    return (f'<p class="list-window">archive: every {esc(kind.value)}, newest first'
+            f' — {len(listing.rows)} {esc(noun)} · <a href="{esc(back)}">'
+            f'{esc(back_text)}</a></p>')
+
+
+def _pager(kind: Kind, url_state: dict[str, str], page: int, rows: int) -> str:
+    """Previous/next links when a list runs past one page, so every row is
+    reachable by following links rather than by editing `?page=` by hand."""
+    pages = max(1, -(-rows // PAGE_SIZE))
+    if pages == 1:
+        return ""
+    links = []
+    if page > 1:
+        prev_url = path_for_list(kind, {**url_state, "page": str(page - 1)})
+        links.append(f'<a href="{esc(prev_url)}">previous page</a>')
+    if page < pages:
+        next_url = path_for_list(kind, {**url_state, "page": str(page + 1)})
+        links.append(f'<a href="{esc(next_url)}">next page</a>')
+    return f'<p class="pager">page {page} of {pages} · ' + " · ".join(links) + "</p>"
+
+
+def document_section(ent: Entity) -> str:
+    """A source object's own text, shown where it is listed (`detail["document"]`).
+
+    Preformatted and escaped: the console shows a document as text and never
+    interprets it, so a report cannot inject markup into the page. A cut
+    document says so, and how large the whole object is.
+    """
+    doc = ent.detail.get(DOCUMENT_DETAIL)
+    if not isinstance(doc, dict) or not isinstance(doc.get("text"), str):
+        return ""
+    note = ""
+    if doc.get("truncated"):
+        note = (f'<p class="absent">document cut — showing the first part of '
+                f'{esc(doc.get("bytes"))} bytes; the whole object is at the evidence link</p>')
+    return f'<h2>document</h2>{note}<pre class="document">{esc(doc["text"])}</pre>'
 
 
 def index_freshness(index: Index, now: datetime | None = None) -> str:

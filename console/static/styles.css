@@ -28,3 +28,8 @@ progress { width: 6rem; height: .7rem; vertical-align: middle; accent-color: #4c
 /* Landing exception groups and per-source list groups (I11805). */
 details > summary { font-weight: 600; margin: 0.8em 0 0.3em; cursor: pointer; }
 h2.list-group { margin-top: 1.4em; }
+
+/* A source object's own text on its entity page (`detail["document"]`):
+   wrapped, so a long markdown line reads without scrolling sideways. */
+pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch; padding: .75rem 1rem; border: 1px solid #4c5563; border-radius: .25rem; font-size: .92rem; line-height: 1.5; }
+.list-window { font-weight: 600; }

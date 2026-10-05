@@ -626,7 +626,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object`, `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days` |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -689,6 +689,22 @@ csv` ignores both — the whole file is the record list):
   body to fan out. Kind, id, state and facets stay declarations: a
   `job@date` Run id collapses a dated series to its newest row, which
   `object-store`'s per-key Artifact with a cadence-staleness state cannot do.
+- **`body: text`** (with `format: object` only): the listing entry is still
+  the record, and the object's UTF-8 text rides beside it as
+  `detail["document"]` (`text`, `bytes`, `truncated`). The entity page shows
+  it as escaped preformatted text, so a markdown report is read on the console
+  rather than behind an `s3://` evidence link a browser cannot open. Bodies go
+  through the same ETag cache as every other read. A body over
+  `body_max_bytes` (default 512 KiB) is cut and says so; an unreadable body
+  keeps the row and names the failure as `document_source`. JSON list payloads
+  carry the document's size, not its text.
+
+**`window_days`** (a positive integer) stamps every row with the dated window
+its list opens on. When every row a list shows declares the same window, the
+list opens on the last N days by as-of, newest first, and links to
+`?days=all`, the archive of every row (paged by links), which links back. A
+URL's own `?days=N` overrides it. A list mixing windowed and unwindowed rows
+is not windowed, so one source cannot hide another's older rows.
 
 `id_template` is a Python format string resolved against regex named groups
 ∪ body-level scalars ∪ the current record (record wins on collision) — e.g.

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json as _json
 from dataclasses import dataclass, field as dc_field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -34,7 +34,7 @@ from ..index.graph import Index
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
-from ..model.entity import Edge, Entity
+from ..model.entity import DOCUMENT_DETAIL, WINDOW_DETAIL, Edge, Entity
 from ..model.kinds import STATE_FILTER, Kind, State
 from ..model.fields import parse as parse_fields
 from ..search.resolve import search
@@ -337,8 +337,13 @@ def _list(index: Index, req: Resolved) -> dict[str, Any]:
         "showing": len(shown), "filtered": len(listing.rows),
         "of": listing.total,
         "summary": listing.summary,
-        "entities": [entity(e) for e in shown],
+        "entities": [entity(e, with_document=False) for e in shown],
     }
+    if listing.dated:
+        # A dated view says which window it is and what it left out (§3.4).
+        doc["window"] = {"days": listing.window_days,
+                         "declared_days": listing.declared_window,
+                         "outside": listing.outside}
     if listing.collapsed:
         # The run list's default projection, declared rather than implied
         # (§3.4): newest run per job, with how many runs it stands for.
@@ -358,9 +363,56 @@ class Listing:
     collapsed: bool = False
     filtered_runs: int = 0
     labels: dict[str, str] = dc_field(default_factory=dict)
+    #: A dated view (`?days=`, or a window the rows declare): rows ordered
+    #: newest first, never collapsed per job. `window_days` None is the
+    #: archive — every row. `outside` counts filtered rows the window left out
+    #: (older, or carrying no parseable as-of).
+    dated: bool = False
+    window_days: int | None = None
+    declared_window: int | None = None
+    outside: int = 0
 
 
-def list_rows(index: Index, req: Resolved) -> Listing:
+def declared_window(entities: list[Entity]) -> int | None:
+    """The window every row declares (`detail["window_days"]`), or None.
+
+    Only when EVERY row declares the same one: a pane mixing a windowed source
+    with an unwindowed one must not silently hide the second's older rows.
+    """
+    values = {e.detail.get(WINDOW_DETAIL) for e in entities}
+    if len(values) != 1:
+        return None
+    (value,) = values
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _as_of_time(ent: Entity) -> datetime | None:
+    raw = ent.provenance.as_of
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def _dated(rows: list[Entity], window: int | None,
+           now: datetime) -> tuple[list[Entity], int]:
+    """Rows in the window (all when `window` is None), newest first; undated
+    rows sort last in the archive and fall outside any window."""
+    stamped = [(e, _as_of_time(e)) for e in rows]
+    if window is not None:
+        cutoff = now - timedelta(days=window)
+        kept = [(e, t) for e, t in stamped if t is not None and t >= cutoff]
+    else:
+        kept = stamped
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    kept.sort(key=lambda pair: pair[1] or floor, reverse=True)
+    return [e for e, _ in kept], len(rows) - len(kept)
+
+
+def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listing:
     """Filter, collapse and order a list (alpha-engine-config-I11805).
 
     A run list shows the newest run per job unless the URL says `runs=all`:
@@ -373,6 +425,16 @@ def list_rows(index: Index, req: Resolved) -> Listing:
 
     total = index.of_kind(req.kind)
     filtered = filter_entities(total, req.facets)
+    declared = declared_window(filtered)
+    if req.days_all or req.days or declared:
+        window = None if req.days_all else (req.days or declared)
+        rows, outside = _dated(filtered, window, now or datetime.now(timezone.utc))
+        summary = {}
+        for ent in rows:
+            summary[ent.state_value] = summary.get(ent.state_value, 0) + 1
+        return Listing(rows=rows, total=len(total), summary=dict(sorted(summary.items())),
+                       filtered_runs=len(filtered), dated=True, window_days=window,
+                       declared_window=declared, outside=outside)
     collapsed = req.kind is Kind.RUN and not req.all_runs
     labels: dict[str, str] = {}
     rows = filtered
@@ -440,8 +502,11 @@ def _search(index: Index, query: str) -> dict[str, Any]:
 
 # ------------------------------------------------------------ projections --
 
-def entity(ent: Entity) -> dict[str, Any]:
+def entity(ent: Entity, with_document: bool = True) -> dict[str, Any]:
     """One entity on the wire, carrying its §5.1 provenance in full.
+
+    ``with_document=False`` (list payloads) keeps a carried document's size and
+    truncation but not its text: fifty reports' bodies are not a list row.
 
     Per-field sources are included rather than collapsed: a merged row names
     the source of each field (§2.5), and a consumer that has to ask "which
@@ -456,6 +521,9 @@ def entity(ent: Entity) -> dict[str, Any]:
         "facets": dict(ent.facets),
         "detail": dict(ent.detail),
     }
+    doc_body = ent.detail.get(DOCUMENT_DETAIL)
+    if not with_document and isinstance(doc_body, dict):
+        doc["detail"][DOCUMENT_DETAIL] = {k: v for k, v in doc_body.items() if k != "text"}
     if ent.field_sources:
         doc["field_sources"] = {
             name: {"source": p.source, "as_of": p.as_of, "evidence": p.evidence}

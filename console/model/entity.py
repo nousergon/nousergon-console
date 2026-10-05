@@ -170,3 +170,11 @@ RELATIONS: dict[str, str] = {
     # identical "alias-of" links and having to guess.
     "alias-of": "has-alias",
 }
+
+#: Detail keys an adapter may set and the renderer reads, spelled once here so
+#: neither side imports the other (an adapter's module is not the renderer's).
+#: `document`: a source object's own text (`{"text", "bytes", "truncated"}`),
+#: shown on the entity page so a report is read where it is listed.
+DOCUMENT_DETAIL = "document"
+#: `window_days`: the rows declare the dated window their list opens on.
+WINDOW_DETAIL = "window_days"

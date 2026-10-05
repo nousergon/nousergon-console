@@ -22,7 +22,7 @@ import html
 from datetime import datetime, timezone
 
 from ..index.graph import Index
-from ..model.entity import DOCUMENT_DETAIL, Entity
+from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, Entity
 from ..model.fields import Field, format_value, parse as parse_fields, part_of_whole
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
@@ -499,10 +499,16 @@ def _pager(kind: Kind, url_state: dict[str, str], page: int, rows: int) -> str:
 def document_section(ent: Entity) -> str:
     """A source object's own text, shown where it is listed (`detail["document"]`).
 
-    Preformatted and escaped: the console shows a document as text and never
-    interprets it, so a report cannot inject markup into the page. A cut
-    document says so, and how large the whole object is.
+    A plain-text document is preformatted and escaped: the console shows it as
+    text and never interprets it, so a report cannot inject markup into the
+    page. A document the source declares as markdown (`"format": "markdown"`)
+    is rendered by `render.markdown`, which has raw HTML off and refuses every
+    link scheme but http(s); without a renderer installed it falls back to the
+    escaped text and says so. A cut document says so, and how large the whole
+    object is.
     """
+    from . import markdown
+
     doc = ent.detail.get(DOCUMENT_DETAIL)
     if not isinstance(doc, dict) or not isinstance(doc.get("text"), str):
         return ""
@@ -510,6 +516,12 @@ def document_section(ent: Entity) -> str:
     if doc.get("truncated"):
         note = (f'<p class="absent">document cut — showing the first part of '
                 f'{esc(doc.get("bytes"))} bytes; the whole object is at the evidence link</p>')
+    if doc.get("format") == DOCUMENT_MARKDOWN:
+        rendered = markdown.render(doc["text"])
+        if rendered is not None:
+            return f'<h2>document</h2>{note}<div class="document markdown">{rendered}</div>'
+        note += ('<p class="absent">markdown renderer unavailable — '
+                 'showing the document as text</p>')
     return f'<h2>document</h2>{note}<pre class="document">{esc(doc["text"])}</pre>'
 
 

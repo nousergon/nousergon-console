@@ -11,6 +11,10 @@ license = {text = "AGPL-3.0-only"}
 requires-python = ">=3.11"
 dependencies = [
     "PyYAML>=6.0",
+    # Renders a source document declared `body: markdown` (console/render/
+    # markdown.py) with raw HTML off — CommonMark-compliant, GFM tables built
+    # in, pure Python, one dependency (`mdurl`).
+    "markdown-it-py>=3.0,<5",
 ]
 
 [project.optional-dependencies]

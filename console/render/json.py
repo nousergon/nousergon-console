@@ -34,7 +34,7 @@ from ..index.graph import Index
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
-from ..model.entity import DOCUMENT_DETAIL, WINDOW_DETAIL, Edge, Entity
+from ..model.entity import DOCUMENT_DETAIL, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity
 from ..model.kinds import STATE_FILTER, Kind, State
 from ..model.fields import parse as parse_fields
 from ..search.resolve import search
@@ -349,7 +349,9 @@ def _list(index: Index, req: Resolved) -> dict[str, Any]:
         # (§3.4): newest run per job, with how many runs it stands for.
         doc["latest_per_job"] = {"jobs": len(listing.rows),
                                  "runs": listing.filtered_runs}
-        doc["labels"] = {e.id: listing.labels[e.id] for e in shown}
+    labels = {e.id: listing.labels[e.id] for e in shown if e.id in listing.labels}
+    if labels:
+        doc["labels"] = labels
     return doc
 
 
@@ -384,6 +386,16 @@ def declared_window(entities: list[Entity]) -> int | None:
         return None
     (value,) = values
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def declared_labels(entities: list[Entity]) -> dict[str, str]:
+    """The labels rows declare for themselves (`detail["label"]`), by id.
+
+    Display only: the id stays the link and the identifier. A row without a
+    label is absent here and shows its id.
+    """
+    return {e.id: e.detail[LABEL_DETAIL] for e in entities
+            if isinstance(e.detail.get(LABEL_DETAIL), str) and e.detail[LABEL_DETAIL]}
 
 
 def _as_of_time(ent: Entity) -> datetime | None:
@@ -434,9 +446,10 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
             summary[ent.state_value] = summary.get(ent.state_value, 0) + 1
         return Listing(rows=rows, total=len(total), summary=dict(sorted(summary.items())),
                        filtered_runs=len(filtered), dated=True, window_days=window,
-                       declared_window=declared, outside=outside)
+                       declared_window=declared, outside=outside,
+                       labels=declared_labels(rows))
     collapsed = req.kind is Kind.RUN and not req.all_runs
-    labels: dict[str, str] = {}
+    labels: dict[str, str] = declared_labels(filtered)
     rows = filtered
     if collapsed:
         job_of = {e.source: e.target for e in index.edges() if e.rel == "belongs-to"}
@@ -447,7 +460,11 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
             if kept is None or (ent.provenance.as_of or "") > (kept.provenance.as_of or ""):
                 newest[job] = ent
         rows = list(newest.values())
-        labels = {ent.id: job for job, ent in newest.items()}
+        # A collapsed row stands for its JOB, so the job name is its label.
+        # A row that is its own job (no `@`, no belongs-to edge) keeps the
+        # label it declares, which names it better than its id does.
+        labels = {ent.id: labels.get(ent.id, job) if job == ent.id else job
+                  for job, ent in newest.items()}
     rows = sorted(rows, key=lambda e: not is_exception(e))
     summary: dict[str, int] = {}
     for ent in rows:

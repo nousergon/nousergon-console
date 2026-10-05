@@ -28,7 +28,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .model.kinds import COMPONENT_STATE_KINDS, Kind, State
@@ -220,6 +220,58 @@ def resolve_id(id_template: str, context: dict[str, Any]) -> str | None:
     except (KeyError, IndexError):
         return None
     return entity_id or None
+
+
+def valid_date_fields(date_fields: Any) -> bool:
+    """Whether a `date_fields` declaration has the one shape it may have:
+    ``{name: {path: <dotted path>, offset_days: <int, default 0>}}``."""
+    if not isinstance(date_fields, dict):
+        return False
+    for name, spec in date_fields.items():
+        if not isinstance(name, str) or not name or not isinstance(spec, dict):
+            return False
+        if not isinstance(spec.get("path"), str) or not spec["path"]:
+            return False
+        offset = spec.get("offset_days", 0)
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            return False
+        if set(spec) - {"path", "offset_days"}:
+            return False
+    return True
+
+
+def resolve_dates(date_fields: dict[str, Any] | None,
+                  path_root: dict) -> dict[str, date] | None:
+    """Each declared date field as a `datetime.date`, shifted by its
+    ``offset_days``: what a label template formats with a ``strftime`` spec
+    (``{published:%a %-m/%-d}``). The value at ``path`` is an ISO date or
+    timestamp; only its date part is read. None when any declared field is
+    absent or not a date, so a label never renders half-resolved."""
+    out: dict[str, date] = {}
+    for name, spec in (date_fields or {}).items():
+        raw = get_path(path_root, spec["path"])
+        if raw is None:
+            return None
+        try:
+            day = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None
+        out[name] = day + timedelta(days=int(spec.get("offset_days", 0)))
+    return out
+
+
+def resolve_label(label_template: str, context: dict[str, Any],
+                  dates: dict[str, date]) -> str | None:
+    """A row's human-readable label from the declared template, formatted
+    against the same scalar context as `id_template` plus the declared date
+    fields (a declared date wins a name collision: the author named it).
+    None on a missing name, a format spec the value cannot take, or an empty
+    result; the row then shows its id, which is never wrong, only terse."""
+    try:
+        label = str(label_template).format(**{**context, **dates})
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None
+    return label.strip() or None
 
 
 def build_fields(path_root: dict, fields_config: dict[str, Any] | None,

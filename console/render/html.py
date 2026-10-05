@@ -22,7 +22,7 @@ import html
 from datetime import datetime, timezone
 
 from ..index.graph import Index
-from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, Entity
+from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, Entity
 from ..model.fields import Field, format_value, parse as parse_fields, part_of_whole
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
@@ -368,10 +368,14 @@ def entity_page(index: Index, ent: Entity) -> str:
         f'<li>{esc(e.rel)} → <a href="{esc(_edge_href(index, e))}">{esc(_edge_other(ent, e))}</a></li>'
         for e in related
     ) or '<li class="absent">no relations</li>'
+    # A declared label heads the page; the id stays in the breadcrumb and the
+    # row below it, so the identifier is never hidden by the name.
+    label = ent.detail.get(LABEL_DETAIL)
+    heading = label if isinstance(label, str) and label else ent.id
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>{esc(ent.id)} · {esc(ent.kind.value)}</title></head><body>
+<title>{esc(heading)} · {esc(ent.kind.value)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; <a href="/{esc(ent.kind.route)}">{esc(ent.kind.value)}</a> &rsaquo; {esc(ent.id)}</nav>
-<h1>{esc(ent.id)}</h1>
+<h1>{esc(heading)}</h1>
 {index_freshness(index)}
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}

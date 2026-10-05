@@ -626,7 +626,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`) |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -714,6 +714,29 @@ list opens on the last N days by as-of, newest first, and links to
 `?days=all`, the archive of every row (paged by links), which links back. A
 URL's own `?days=N` overrides it. A list mixing windowed and unwindowed rows
 is not windowed, so one source cannot hide another's older rows.
+
+**`label_template`** (a Python format string) names each row for a reader:
+the list shows it in place of the id, and the entity page uses it as its
+heading. The id is unchanged, still the link and still the identifier, so
+adding or editing a label never breaks a URL. It formats against the same
+names as `id_template`, plus any **`date_fields`**:
+`{name: {path, offset_days}}` reads an ISO date or timestamp at `path` (its
+date part only), shifts it by `offset_days` (default 0), and offers it as a
+date, so a `strftime` spec formats it. A report filed under the date its
+cycle started but published the next morning reads by its publish day:
+
+```yaml
+date_fields:
+  published: {path: cycle, offset_days: 1}
+  night: {path: cycle}
+label_template: "{published:%a %-m/%-d} morning report (covers the {night:%-m/%-d} night)"
+```
+
+`%-m`/`%-d` (no leading zero) are the C library's, which every POSIX host
+has. A row whose label cannot be resolved (a missing name, a value that is
+not a date, a spec the value cannot take) keeps its id and the source reports
+`label` unavailable; a malformed `label_template` or `date_fields` fails the
+source. A console that predates these keys ignores them and shows ids.
 
 `id_template` is a Python format string resolved against regex named groups
 ∪ body-level scalars ∪ the current record (record wins on collision) — e.g.

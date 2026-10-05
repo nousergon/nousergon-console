@@ -626,7 +626,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days` |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -698,6 +698,15 @@ csv` ignores both — the whole file is the record list):
   `body_max_bytes` (default 512 KiB) is cut and says so; an unreadable body
   keeps the row and names the failure as `document_source`. JSON list payloads
   carry the document's size, not its text.
+- **`body: markdown`** (with `format: object` only): carried exactly as
+  `body: text` is, with `detail["document"]["format"]` set to `markdown`, and
+  the entity page renders it — headings, lists, GFM tables, code, links.
+  Rendering is closed by construction: raw HTML in the document is shown as
+  escaped text, links are kept only for `http`, `https` or relative targets
+  (any other scheme leaves just the link text), and images are not embedded.
+  A wide table scrolls inside its own box. A console older than this value
+  refuses it as an unknown `body` mode and FAILS the source, so switch a
+  config to it only once the console that understands it is deployed.
 
 **`window_days`** (a positive integer) stamps every row with the dated window
 its list opens on. When every row a list shows declares the same window, the

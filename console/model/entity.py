@@ -173,8 +173,13 @@ RELATIONS: dict[str, str] = {
 
 #: Detail keys an adapter may set and the renderer reads, spelled once here so
 #: neither side imports the other (an adapter's module is not the renderer's).
-#: `document`: a source object's own text (`{"text", "bytes", "truncated"}`),
+#: `document`: a source object's own text (`{"text", "bytes", "truncated",
+#: "format"}`),
 #: shown on the entity page so a report is read where it is listed.
 DOCUMENT_DETAIL = "document"
+#: A document's `format` when its source declares it markdown (`body:
+#: markdown`); the entity page renders it rather than showing the raw text.
+#: Any other value, or none, is plain text.
+DOCUMENT_MARKDOWN = "markdown"
 #: `window_days`: the rows declare the dated window their list opens on.
 WINDOW_DETAIL = "window_days"

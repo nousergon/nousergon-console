@@ -38,7 +38,8 @@ different ways a body expresses that:
   (a dated markdown report → one Run per date). ``records_path``/
   ``array_fields`` are refused.
   With ``body: text`` the object's text is carried beside that record as
-  ``detail["document"]`` and shown on the entity page; ``window_days`` has a
+  ``detail["document"]`` and shown on the entity page (``body: markdown``
+  carries it the same way and the page renders it as markdown); ``window_days`` has a
   list of the rows open on its last N days with an archive one link away.
 
 Every field beyond id/state/provenance is declared in config (§5.8) — a
@@ -78,7 +79,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from ..model.entity import DOCUMENT_DETAIL, WINDOW_DETAIL, Edge, Entity, Provenance
+from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, WINDOW_DETAIL, Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
@@ -105,7 +106,7 @@ StoreLister = Callable[[str, str], list[StoredObject]]
 #: JSON, or the raw text for CSV. Raises when the object is unreadable.
 BodyReader = Callable[[str, str], Any]
 #: A text reader takes (bucket, key) and returns the body as UTF-8 text, never
-#: parsed. Used only by `format: object` with `body: text`.
+#: parsed. Used only by `format: object` with `body: text` or `body: markdown`.
 TextReader = Callable[[str, str], str]
 
 
@@ -131,7 +132,7 @@ def fetch(
         # never reads is a config typo, not something to guess around.
         return _failed(config, ("format",))
     body_mode = config.get("body")
-    if body_mode is not None and (fmt != OBJECT_FORMAT or body_mode != BODY_TEXT):
+    if body_mode is not None and (fmt != OBJECT_FORMAT or body_mode not in BODY_MODES):
         # `body` carries a document beside a listing record; on a parsed
         # format the body already IS the record, and an unknown mode is a typo.
         return _failed(config, ("body",))
@@ -206,7 +207,8 @@ def fetch(
             if body_mode:
                 mapped, readable = _with_document(
                     mapped, bucket, key, text_reader,  # type: ignore[arg-type]
-                    int(config.get("body_max_bytes", DEFAULT_BODY_MAX_BYTES)))
+                    int(config.get("body_max_bytes", DEFAULT_BODY_MAX_BYTES)),
+                    body_mode)
                 partial = partial or not readable
             if window_days is not None:
                 mapped = replace(mapped, detail={**mapped.detail,
@@ -267,6 +269,12 @@ OBJECT_FORMAT = "object"
 #: something a browser can open. Read through the same ETag cache as every
 #: other body, so an unchanged report is not re-downloaded on each rebuild.
 BODY_TEXT = "text"
+#: `body: markdown`: carried exactly as `body: text` is, with the document's
+#: `format` declared as markdown so the entity page renders it (headings,
+#: tables, links) instead of showing the raw text. The rendering — raw HTML
+#: off, http(s)/relative links only — is the renderer's, not this adapter's.
+BODY_MARKDOWN = DOCUMENT_MARKDOWN
+BODY_MODES = (BODY_TEXT, BODY_MARKDOWN)
 #: The largest document carried whole; a longer one is cut at this many bytes
 #: and says so (`truncated`), never silently shortened. Override per source
 #: with `body_max_bytes`.
@@ -278,7 +286,7 @@ DEFAULT_BODY_MAX_BYTES = 512 * 1024
 
 
 def _with_document(ent: Entity, bucket: str, key: str, text_reader: TextReader,
-                   max_bytes: int) -> tuple[Entity, bool]:
+                   max_bytes: int, body_mode: str = BODY_TEXT) -> tuple[Entity, bool]:
     """`ent` with its object's text attached, and whether it could be read.
 
     An unreadable body keeps the row (the listing says the report exists) and
@@ -294,7 +302,7 @@ def _with_document(ent: Entity, bucket: str, key: str, text_reader: TextReader,
     truncated = len(raw) > max_bytes
     if truncated:
         text = raw[:max_bytes].decode("utf-8", errors="ignore")
-    doc = {"text": text, "bytes": len(raw), "truncated": truncated}
+    doc = {"text": text, "bytes": len(raw), "truncated": truncated, "format": body_mode}
     return replace(ent, detail={**ent.detail, DOCUMENT_DETAIL: doc}), True
 
 

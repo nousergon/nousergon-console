@@ -952,6 +952,39 @@ def test_body_is_refused_off_object_format_and_for_an_unknown_mode():
         assert res.unavailable == ("body",)
 
 
+def test_body_text_declares_its_document_as_text():
+    res = s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS[:1],
+                           reader=_never_read, text_reader=lambda b, k: "# x", now=NOW)
+    assert res.entities[0].detail["document"]["format"] == "text"
+
+
+def test_body_markdown_carries_the_document_and_declares_it_markdown():
+    res = s3_records.fetch(_object_cfg(body="markdown"), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, text_reader=lambda b, k: "| a |\n|---|\n| 1 |",
+                           now=NOW)
+    assert res.status is AdapterStatus.OK
+    assert res.unavailable == ()
+    doc = _by_id(res)["summary:run@2026-08-09"].detail["document"]
+    # The text is carried as written; rendering is the page's job.
+    assert doc == {"text": "| a |\n|---|\n| 1 |", "bytes": 17, "truncated": False,
+                   "format": "markdown"}
+
+
+def test_body_markdown_over_the_cap_is_cut_and_says_so():
+    res = s3_records.fetch(_object_cfg(body="markdown", body_max_bytes=4),
+                           lister=lambda b, p: _OBJECT_KEYS[:1], reader=_never_read,
+                           text_reader=lambda b, k: "# heading", now=NOW)
+    doc = res.entities[0].detail["document"]
+    assert doc["truncated"] is True and doc["text"] == "# he" and doc["bytes"] == 9
+
+
+def test_body_markdown_is_refused_off_object_format():
+    res = s3_records.fetch(_whole_body_cfg(body="markdown"), lister=lambda b, p: _OBJECT_KEYS,
+                           reader=_never_read, text_reader=lambda b, k: "", now=NOW)
+    assert res.status is AdapterStatus.FAILED
+    assert res.unavailable == ("body",)
+
+
 def test_body_text_without_any_text_reader_is_failed(monkeypatch):
     monkeypatch.setattr(s3_records, "_default_s3", lambda: (None, None, None))
     res = s3_records.fetch(_object_cfg(body="text"), lister=lambda b, p: _OBJECT_KEYS,

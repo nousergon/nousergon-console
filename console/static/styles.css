@@ -33,3 +33,20 @@ h2.list-group { margin-top: 1.4em; }
    wrapped, so a long markdown line reads without scrolling sideways. */
 pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch; padding: .75rem 1rem; border: 1px solid #4c5563; border-radius: .25rem; font-size: .92rem; line-height: 1.5; }
 .list-window { font-weight: 600; }
+
+/* A markdown document (`body: markdown`), rendered. Kept to the page's own
+   measure; a wide table scrolls inside `.md-table`, never the page. */
+.document.markdown { max-width: 100ch; padding: .25rem 1rem; border: 1px solid #4c5563; border-radius: .25rem; overflow-wrap: anywhere; }
+.document.markdown h1 { font-size: 1.4rem; }
+.document.markdown h2 { font-size: 1.2rem; }
+.document.markdown h3, .document.markdown h4, .document.markdown h5, .document.markdown h6 { font-size: 1rem; }
+.document.markdown :is(h1, h2, h3, h4, h5, h6) { margin: 1.1em 0 .4em; }
+.document.markdown code { font-size: .9em; padding: .05em .3em; border-radius: .2rem; background: rgba(127, 127, 127, .15); }
+.document.markdown pre { overflow-x: auto; padding: .6rem .8rem; border-radius: .25rem; background: rgba(127, 127, 127, .12); }
+.document.markdown pre code { padding: 0; background: none; }
+.document.markdown blockquote { margin: .6em 0; padding-left: .8rem; border-left: .25rem solid #4c5563; color: inherit; }
+.document.markdown .md-table { max-width: 100%; overflow-x: auto; margin: .6em 0; }
+.document.markdown table { border-collapse: collapse; font-size: .92rem; }
+.document.markdown th, .document.markdown td { border: 1px solid #4c5563; padding: .25rem .5rem; text-align: left; vertical-align: top; overflow-wrap: normal; }
+.document.markdown th { font-weight: 600; }
+.document.markdown hr { border: 0; border-top: 1px solid #4c5563; }

@@ -183,3 +183,7 @@ DOCUMENT_DETAIL = "document"
 DOCUMENT_MARKDOWN = "markdown"
 #: `window_days`: the rows declare the dated window their list opens on.
 WINDOW_DETAIL = "window_days"
+#: `label`: the name a list row and the entity page show in place of the id,
+#: when the source declares one (s3-records `label_template`). The id is
+#: still the identifier and the URL; a label is display only.
+LABEL_DETAIL = "label"

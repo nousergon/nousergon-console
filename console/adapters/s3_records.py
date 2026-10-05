@@ -50,6 +50,12 @@ meaning (which JSON key means what) is compiled into this module. The
 synthetic ``text`` declared field so the pane renders it without any
 kind-specific rendering code.
 
+``label_template`` (any format) names a row for a reader without touching its
+id: formatted against the ``id_template`` names plus ``date_fields`` (declared
+dates, optionally shifted by ``offset_days``, that take a ``strftime`` spec),
+it is carried as ``detail["label"]``, shown by a list in place of the id and
+as the entity page's heading. The id stays the link.
+
 **Component/Run state** comes from ``state_field`` (a dotted path), resolved in
 this order: an optional ``state_map`` translating the source's own vocabulary
 (``{"passed": "HEALTHY", "failed": "FAILED"}``) into
@@ -79,13 +85,15 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, WINDOW_DETAIL, Edge, Entity, Provenance
+from ..model.entity import (
+    DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity, Provenance,
+)
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from ..records_shape import (
-    build_fields, flat_context, get_path, project, resolve_facets, resolve_id,
-    resolve_state,
+    build_fields, flat_context, get_path, project, resolve_dates, resolve_facets,
+    resolve_id, resolve_label, resolve_state, valid_date_fields,
 )
 from .object_store import _parse_cadence  # second adoption, one repo — see below
 from ..aws import client as _aws_client
@@ -141,6 +149,15 @@ def fetch(
                                     or not isinstance(window_days, int)
                                     or window_days < 1):
         return _failed(config, ("window_days",))
+    label_template = config.get("label_template")
+    if label_template is not None and (not isinstance(label_template, str)
+                                       or not label_template.strip()):
+        return _failed(config, ("label_template",))
+    date_fields = config.get("date_fields")
+    if date_fields is not None and not valid_date_fields(date_fields):
+        # Dates exist only to be formatted into a label; a typo in their
+        # declaration must fail loudly, not render every row by its id.
+        return _failed(config, ("date_fields",))
     if lister is None or reader is None or (body_mode and text_reader is None):
         default_lister, default_reader, default_text = _default_s3()
         lister = lister or default_lister
@@ -171,6 +188,7 @@ def fetch(
     entities: list[Entity] = []
     edges: list[Edge] = []
     partial = False
+    unlabelled = False
 
     for key, last_modified in objects:
         m = regex.search(key)
@@ -204,6 +222,8 @@ def fetch(
             if mapped is None:
                 partial = True
                 continue
+            if label_template and LABEL_DETAIL not in mapped.detail:
+                unlabelled = True
             if body_mode:
                 mapped, readable = _with_document(
                     mapped, bucket, key, text_reader,  # type: ignore[arg-type]
@@ -243,7 +263,7 @@ def fetch(
         status=AdapterStatus.OK,
         entities=tuple(entities),
         edges=tuple(edges),
-        unavailable=("body",) if partial else (),
+        unavailable=(("body",) if partial else ()) + (("label",) if unlabelled else ()),
     )
 
 
@@ -390,13 +410,25 @@ def _one_entity(
     # lives in `records_shape.resolve_facets`, shared with the driver (§2.3).
     facets = resolve_facets(config.get("facets"), path_root)
 
+    detail: dict[str, Any] = {"fields": fields_out, "key": key}
+    label_template = config.get("label_template")
+    if label_template:
+        # A row's reader-facing name (`label_template`, with `date_fields`
+        # for dates the key does not spell, such as a cycle's next day). The
+        # id stays the source's identifier and the URL; only what a list and
+        # the entity page SHOW changes. Unresolvable: the row keeps its id.
+        dates = resolve_dates(config.get("date_fields"), {**context, **path_root})
+        label = resolve_label(label_template, context, dates) if dates is not None else None
+        if label is not None:
+            detail[LABEL_DETAIL] = label
+
     return Entity(
         kind=kind,
         id=entity_id,
         state=state,
         provenance=Provenance(source=source_label, as_of=as_of, evidence=evidence),
         facets=facets,
-        detail={"fields": fields_out, "key": key},
+        detail=detail,
     )
 
 

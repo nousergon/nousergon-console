@@ -79,6 +79,19 @@ def test_html_pages_link_the_served_stylesheet(live_server):
     assert 'href="/styles.css"' in _get(live_server + "/")
 
 
+def test_html_pages_declare_a_device_width_viewport(live_server):
+    """Without it a phone lays every view out at ~980px and shrinks it."""
+    for path in ("/", "/component", "/component/comp-producer", "/search?q=comp"):
+        assert ('<meta name="viewport" content="width=device-width, initial-scale=1">'
+                in _get(live_server + path)), path
+
+
+def test_every_served_table_scrolls_inside_its_own_box(live_server):
+    body = _get(live_server + "/")
+    assert "<table" in body
+    assert body.count("<table") == body.count('<div class="table-scroll"><table')
+
+
 def test_search_resolves_identifier(live_server):
     body = _get(f"{live_server}/search?q=comp-producer")
     assert "comp-producer" in body

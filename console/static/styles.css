@@ -50,3 +50,13 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 .document.markdown th, .document.markdown td { border: 1px solid #4c5563; padding: .25rem .5rem; text-align: left; vertical-align: top; overflow-wrap: normal; }
 .document.markdown th { font-weight: 600; }
 .document.markdown hr { border: 0; border-top: 1px solid #4c5563; }
+
+/* Phones. The viewport meta (`render/html.py::HEAD_INJECT`) lays the page out
+   at the device's width; these keep it there. A table wider than the screen
+   scrolls inside its own `.table-scroll` box (`with_scrolling_tables`), never
+   the page, and a long unbroken identifier or object key wraps rather than
+   pushing the page sideways. */
+.table-scroll { max-width: 100%; overflow-x: auto; }
+body { overflow-wrap: break-word; }
+input, select, textarea { max-width: 100%; }
+@media (max-width: 40rem) { body { margin: 1rem auto; } }

@@ -100,7 +100,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: str, content_type: str) -> None:
         if content_type.startswith("text/html"):
             body = body.replace(
-                "<head>", '<head><link rel="stylesheet" href="/styles.css">', 1
+                "<head>", "<head>" + render_html.HEAD_INJECT, 1
             )
         payload = body.encode("utf-8")
         try:
@@ -136,7 +136,8 @@ def _html(index: Index, req) -> str:
     and not the other, `test_every_route_serves_both_representations` fails,
     because it enumerates routes rather than listing them by hand.
     """
-    return render_html.with_site_nav(_page(index, req))
+    return render_html.with_scrolling_tables(
+        render_html.with_site_nav(_page(index, req)))
 
 
 def _page(index: Index, req) -> str:

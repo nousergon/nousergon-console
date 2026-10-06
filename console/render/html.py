@@ -19,6 +19,7 @@ Rendering rules honoured here:
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime, timezone
 
 from ..index.graph import Index
@@ -766,6 +767,32 @@ def with_site_nav(page: str) -> str:
            '<a href="/dashboards">dashboards</a> · '
            '<a href="/search">search</a></nav>')
     return page.replace("<body>", "<body>" + nav, 1)
+
+
+#: The site-wide `<head>` additions, injected once at the server
+#: (`server/app.py::_send`) into every HTML response that has a `<head>`.
+#: The viewport line is what lets a phone lay the page out at its own width:
+#: without it a mobile browser assumes a ~980px desktop page and shrinks it,
+#: which renders every view at an unreadable scale.
+HEAD_INJECT = ('<meta name="viewport" content="width=device-width, initial-scale=1">'
+               '<link rel="stylesheet" href="/styles.css">')
+
+
+def with_scrolling_tables(page: str) -> str:
+    """Wrap every rendered `<table>` in a `.table-scroll` box, so a table wider
+    than the screen scrolls inside its own box and never widens the page.
+
+    Applied once, at the server, like `with_site_nav`, so a table added to any
+    view later is covered without remembering to. Source text never reaches
+    this as markup — it is escaped (`esc`) or rendered with raw HTML off
+    (`render/markdown.py`) — so only the renderer's own tables match.
+    """
+    return _TABLE_CLOSE.sub("</table></div>",
+                            _TABLE_OPEN.sub(r'<div class="table-scroll">\g<0>', page))
+
+
+_TABLE_OPEN = re.compile(r"<table\b[^>]*>")
+_TABLE_CLOSE = re.compile(r"</table>")
 
 
 def _member_links(kind: Kind, state: str, member_ids) -> str:

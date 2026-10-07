@@ -149,6 +149,7 @@ from ..model.kinds import Kind
 from .state_machine import ExecutionRecord, _as_of
 from .state_machine import _default_reader as _sm_default_reader
 from ..aws import client as _aws_client
+from ..sf_execution_cache import EXECUTION_CACHE
 
 #: Execution history + a trading calendar are OBSERVATIONS (§2.5) — what ran,
 #: when, on which days the schedule should have run at all.
@@ -1190,6 +1191,12 @@ def history_reader_for(
     serial per-execution loop. There is no bulk `GetExecutionHistory`, so the
     fix is fan-out over a bounded thread pool rather than batching a call AWS
     does not offer.
+
+    **A terminal execution's history is read ONCE per process** and served from
+    ``EXECUTION_CACHE`` on later passes (``console/sf_execution_cache.py``);
+    only RUNNING (or redriven) executions are re-read. Measured 2026-10-07:
+    ~120-160 ``GetExecutionHistory`` calls a minute, around the clock, almost
+    all of them re-reading histories that could not have changed.
     """
     if not degraded_state_names:
         return None
@@ -1237,7 +1244,11 @@ def history_reader_for(
             max_workers=min(_HISTORY_FETCH_WORKERS, len(targets))
         ) as pool:
             futures = {
-                pool.submit(_fetch_entered_states, client, arn): rec
+                pool.submit(
+                    EXECUTION_CACHE.entered_states,
+                    rec,
+                    lambda a=arn: _fetch_entered_states(client, a),
+                ): rec
                 for rec, arn in targets
             }
             for future in futures:

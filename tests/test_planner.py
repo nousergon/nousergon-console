@@ -67,15 +67,25 @@ def test_on_track_when_work_keeps_pace_with_the_calendar():
 
 
 def test_threatened_when_behind_by_more_than_the_threatened_gap():
-    # 1 of 2 closed (50%) with 20 of 30 days elapsed (67%): 17 points behind.
-    m = _one(_plan([_ms(["repo-I1", "repo-I4"])]), date(2026, 10, 21))
+    # 1 of 3 closed (33%) with 15 of 30 days elapsed (50%): 17 points behind.
+    m = _one(_plan([_ms(["repo-I1", "repo-I4", "repo-I3"])]), date(2026, 10, 16))
     assert m["state"] == planner.THREATENED
 
 
 def test_off_track_when_far_behind():
-    # 0 of 1 closed with 15 of 30 days elapsed: 50 points behind.
-    m = _one(_plan([_ms(["repo-I4"])]), date(2026, 10, 16))
+    # 1 of 4 closed (25%) with 21 of 30 days elapsed (70%): 45 points behind.
+    m = _one(_plan([_ms(["repo-I1", "repo-I4", "repo-I3", "repo-I2"])]),
+             date(2026, 10, 22))
     assert m["state"] == planner.OFF_TRACK and "replan" in m["reason"]
+
+
+def test_a_small_milestone_is_judged_on_date_and_blockers_not_pace():
+    # One open issue is 0% done every day until it closes; pace would turn it
+    # red a third of the way in.
+    m = _one(_plan([_ms(["repo-I4"])]), date(2026, 10, 29))
+    assert m["state"] == planner.ON_TRACK and "not pace" in m["reason"]
+    m = _one(_plan([_ms(["repo-I4"])]), date(2026, 11, 1))
+    assert m["state"] == planner.OFF_TRACK
 
 
 def test_off_track_once_the_target_passes_unmet():
@@ -116,7 +126,7 @@ def test_items_list_open_and_blocked_first():
 
 def test_project_carries_counts_never_one_verdict():
     plan = _plan([_ms(["repo-I1"]), {**_ms(["repo-I4"]), "id": "m2"}])
-    p = planner.evaluate(_index(plan), now=date(2026, 10, 16))[0]
+    p = planner.evaluate(_index(plan), now=date(2026, 11, 2))[0]
     assert p["states"][planner.MET] == 1 and p["states"][planner.OFF_TRACK] == 1
     assert "state" not in p
 

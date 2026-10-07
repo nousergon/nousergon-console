@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ..index import planner
 from ..index.graph import Index
 from ..render import html as render_html
 from ..render import json as render_json
@@ -54,6 +55,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if req.view in {"entity", "history"} and index.entity(req.entity_id or "") is None:
             self._fail(404, as_json, f"No entity {req.entity_id}.")
+            return
+        if req.view == "planner-project" and planner.project(index, req.project_id or "") is None:
+            self._fail(404, as_json, f"No planner project {req.project_id}.")
             return
         if req.view == "registry" and req.registry_name not in index.registry_names():
             self._fail(404, as_json, f"No registry {req.registry_name}.")
@@ -154,6 +158,10 @@ def _page(index: Index, req) -> str:
         return render_html.history_page(index, index.entity(req.entity_id), req.window_hours or 24)
     if req.view == "doctor":
         return render_html.doctor_page(index, req.query or "")
+    if req.view == "planner":
+        return render_html.planner_page(index)
+    if req.view == "planner-project":
+        return render_html.planner_project_page(index, req.project_id or "")
     if req.view == "registry":
         return render_html.registry_page(index, req.registry_name or "")
     return render_html.search_page(search(index, req.query or ""), req.query or "")
@@ -182,6 +190,8 @@ def _resolves(index: Index, path: str, query: str) -> bool:
         return False
     if req.view == "entity":
         return index.entity(req.entity_id or "") is not None
+    if req.view == "planner-project":
+        return planner.project(index, req.project_id or "") is not None
     return True
 
 

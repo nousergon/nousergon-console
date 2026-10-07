@@ -759,11 +759,179 @@ def dashboards_page(index: Index) -> str:
 </body></html>"""
 
 
+def _schedule_word(state: str) -> str:
+    """The state word, always rendered beside its colour (§5.7)."""
+    return f'<span class="schedule-word schedule-{esc(state)}">{esc(state)}</span>'
+
+
+def _planner_axis_pos(day: str, start, span_days: int) -> float:
+    from datetime import date as _date
+
+    offset = (_date.fromisoformat(day) - start).days
+    return max(0.0, min(100.0, 100.0 * offset / span_days)) if span_days else 0.0
+
+
+def _planner_timeline(projects: list[dict]) -> str:
+    """Every project as one row on one dated axis; each milestone a bar from
+    its start to its target, labelled with its own state. No project colour:
+    the row's colours are its milestones' (§4.3)."""
+    from datetime import date as _date, datetime as _dt, timezone as _tz
+    from ..index import planner
+
+    span = planner.axis(projects)
+    if span is None:
+        return '<p class="absent">no milestones declared</p>'
+    start, end = span
+    days = max(1, (end - start).days)
+    today = _dt.now(_tz.utc).date()
+    from datetime import timedelta as _td
+
+    ticks = []
+    # Weekly (Monday) ticks under the month ticks, so a target's week reads
+    # off the axis without hovering.
+    monday = start + _td(days=(7 - start.weekday()) % 7)
+    while monday <= end:
+        if monday.day > 3:
+            ticks.append(f'<span class="plan-tick plan-week" style="left:'
+                         f'{_planner_axis_pos(monday.isoformat(), start, days):.2f}%">'
+                         f'{monday.day}</span>')
+        monday += _td(days=7)
+    month = _date(start.year, start.month, 1)
+    while month <= end:
+        if month >= start:
+            ticks.append(f'<span class="plan-tick" style="left:'
+                         f'{_planner_axis_pos(month.isoformat(), start, days):.2f}%">'
+                         f'{month.strftime("%b %d")}</span>')
+        month = (_date(month.year + 1, 1, 1) if month.month == 12
+                 else _date(month.year, month.month + 1, 1))
+    today_line = ""
+    if start <= today <= end:
+        today_line = (f'<span class="plan-today" style="left:'
+                      f'{_planner_axis_pos(today.isoformat(), start, days):.2f}%" '
+                      f'title="today {today.isoformat()}"></span>')
+    rows = []
+    for p in projects:
+        bars = []
+        for lane, m in enumerate(p["milestones"]):
+            left = _planner_axis_pos(m["start"], start, days)
+            right = _planner_axis_pos(m["target"], start, days)
+            bars.append(
+                f'<a class="plan-bar schedule-{esc(m["state"])}" '
+                f'href="{esc(p["url"])}#m-{esc(m["id"])}" '
+                f'style="left:{left:.2f}%;width:{max(right - left, 0.8):.2f}%;'
+                f'top:{lane * 1.9:.1f}rem" '
+                f'title="{esc(m["title"])} · target {esc(m["target"])} · '
+                f'{esc(m["state"])}: {esc(m["reason"])}">'
+                f'{esc(m["state"])} · {esc(m["title"])} · {esc(m["target"][5:])}</a>')
+        height = max(1, len(p["milestones"])) * 1.9 + 0.3
+        rows.append(
+            f'<div class="plan-row"><div class="plan-name">'
+            f'<a href="{esc(p["url"])}">{esc(p["title"])}</a></div>'
+            f'<div class="plan-track" style="height:{height:.1f}rem">'
+            f'{today_line}{"".join(bars)}</div></div>')
+    return (f'<div class="plan-scroll"><div class="plan-grid">'
+            f'<div class="plan-row plan-axis"><div class="plan-name"></div>'
+            f'<div class="plan-track">{"".join(ticks)}</div></div>'
+            f'{"".join(rows)}</div></div>')
+
+
+def _planner_milestone_rows(project: dict, with_items: bool) -> str:
+    out = []
+    for m in project["milestones"]:
+        tracker = (f' · <a href="{esc(m["tracker"])}">tracker</a>'
+                   if m.get("tracker") else "")
+        out.append(
+            f'<tr id="m-{esc(m["id"])}" class="schedule-{esc(m["state"])}">'
+            f'<td>{_schedule_word(m["state"])}</td>'
+            f'<td>{esc(m["title"])}{tracker}</td>'
+            f'<td>{esc(m["target"])}</td>'
+            f'<td>{m["closed"]} / {m["of"]}</td>'
+            f'<td>{esc(m["reason"])}</td></tr>')
+        if with_items and m["items"]:
+            items = "".join(
+                "<li>"
+                + (f'<a href="{esc(i["url"])}">{esc(i["ref"])}</a>' if i.get("url")
+                   else esc(i["ref"]))
+                + (f' · {esc(i["title"])}' if i.get("title") else "")
+                + (" · closed" if i["closed"] else
+                   (" · <strong>UNREADABLE</strong>" if not i["readable"] else " · open"))
+                + (f' · <strong class="plan-blocker">{esc(i["blocker"])}</strong>'
+                   if i.get("blocker") else "")
+                + "</li>"
+                for i in m["items"])
+            out.append(f'<tr class="plan-items"><td></td><td colspan="4">'
+                       f'<ul>{items}</ul></td></tr>')
+    head = ("<tr><th>state</th><th>milestone</th><th>target</th>"
+            "<th>items closed</th><th>why</th></tr>")
+    return f'<table class="plan-table">{head}{"".join(out)}</table>'
+
+
+def _planner_counts(project: dict) -> str:
+    return " · ".join(f'{n} {_schedule_word(s)}'
+                      for s, n in project["states"].items() if n)
+
+
+def planner_page(index: Index) -> str:
+    """The delivery calendar (alpha-engine-config-I12152): every declared
+    project's milestones side by side on one dated axis, then each project's
+    milestones with the reason for its state. Declared in config, evaluated
+    per request, nothing stored (§5.6)."""
+    from ..index import planner
+
+    projects = planner.evaluate(index)
+    if projects:
+        sections = "".join(
+            f'<h2><a href="{esc(p["url"])}">{esc(p["title"])}</a></h2>'
+            f'<p>{_planner_counts(p)}'
+            + (f' · owner {esc(p["owner"])}' if p.get("owner") else "")
+            + "</p>"
+            + _planner_milestone_rows(p, with_items=False)
+            for p in projects)
+    else:
+        sections = '<p class="absent">no projects declared — the `planner:` config block is empty</p>'
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>planner</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; planner</nav>
+<h1>planner</h1>
+<p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>
+{index_freshness(index)}
+{_planner_timeline(projects)}
+{sections}
+</body></html>"""
+
+
+def planner_project_page(index: Index, project_id: str) -> str:
+    """One project: each milestone, its reason, and every required item with
+    its blockers named, open and blocked first."""
+    from ..index import planner
+
+    p = planner.project(index, project_id)
+    if p is None:
+        return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>planner</title></head><body>
+<p class="absent">no planner project {esc(project_id)}</p></body></html>"""
+    tracker = (f' · <a href="{esc(p["tracker"])}">tracker</a>'
+               if p.get("tracker") else "")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(p["title"])} · planner</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/planner">planner</a> &rsaquo; {esc(p["title"])}</nav>
+<h1>{esc(p["title"])}</h1>
+<p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>
+<p>{_planner_counts(p)}{(' · owner ' + esc(p["owner"])) if p.get("owner") else ""}{tracker}</p>
+{index_freshness(index)}
+{_planner_timeline([p])}
+{_planner_milestone_rows(p, with_items=True)}
+</body></html>"""
+
+
 def with_site_nav(page: str) -> str:
     """Prepend the one site menu to a rendered page: home · dashboards ·
     search. Applied once, at the server, so no page can ship without it."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
            '<a href="/dashboards">dashboards</a> · '
+           '<a href="/planner">planner</a> · '
            '<a href="/search">search</a></nav>')
     return page.replace("<body>", "<body>" + nav, 1)
 

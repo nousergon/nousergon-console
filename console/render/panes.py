@@ -51,6 +51,14 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
     # a different moment, by a reader deciding whether a phase of work is over.
     # Cross-cutting because a milestone's clauses bind across kinds and across
     # the §9 numbers, which belong to no kind at all.
+    # The delivery planner (alpha-engine-config-I12152): a SCHEDULE question.
+    # `milestones` asks whether a predicate holds now; this asks whether dated
+    # work will land by its date and what is holding it. Cross-cutting because
+    # a milestone's required items span repos and kinds.
+    Pane("planner",
+         "will each declared milestone land by its target date, and what is "
+         "holding the ones that won't",
+         None),
     Pane("milestones",
          "has the declared milestone been met, and which clause is holding it",
          None),

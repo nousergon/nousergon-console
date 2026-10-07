@@ -38,6 +38,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..model.kinds import Kind
 from ..state_machine_shape import run_state
 from ..aws import client as _aws_client
+from ..sf_execution_cache import EXECUTION_CACHE
 from .base import Cost, DriverResult
 
 name = "state-machine"
@@ -155,7 +156,8 @@ def _default_reader() -> ExecutionReader | None:
     Pages ``list_executions`` fully and hydrates each summary with
     ``describe_execution`` — mirrors the adapter's own default reader.
     Returns None when boto3 is absent so the driver fails loud rather than
-    silently returning zero runs.
+    silently returning zero runs. Terminal executions are described once and
+    reused via the shared ``EXECUTION_CACHE`` (``console/sf_execution_cache.py``).
     """
     try:
         import boto3  # type: ignore
@@ -165,27 +167,32 @@ def _default_reader() -> ExecutionReader | None:
 
     def reader(region: str, arn: str) -> list[ExecutionRecord]:
         client = _aws_client("stepfunctions", region)
-        records: list[ExecutionRecord] = []
+        summaries: list[ExecutionRecord] = []
         token: str | None = None
         while True:
             kwargs: dict[str, Any] = {"stateMachineArn": arn, "maxResults": 1000}
             if token:
                 kwargs["nextToken"] = token
             page = client.list_executions(**kwargs)
-            for summary in page.get("executions") or []:
-                execution_arn = summary.get("executionArn")
-                rec: ExecutionRecord = dict(summary)
-                if execution_arn:
-                    try:
-                        detail = client.describe_execution(executionArn=execution_arn)
-                        rec.update(detail)
-                    except (BotoCoreError, ClientError):
-                        # Keep the summary; input/output simply unavailable.
-                        pass
-                records.append(rec)
+            summaries.extend(page.get("executions") or [])
             token = page.get("nextToken")
             if not token:
                 break
+        EXECUTION_CACHE.observe_listing(arn, summaries)
+        records: list[ExecutionRecord] = []
+        for summary in summaries:
+            execution_arn = summary.get("executionArn")
+            rec: ExecutionRecord = dict(summary)
+            if execution_arn:
+                try:
+                    rec.update(EXECUTION_CACHE.describe(
+                        summary,
+                        lambda a=execution_arn: client.describe_execution(executionArn=a),
+                    ))
+                except (BotoCoreError, ClientError):
+                    # Keep the summary; input/output simply unavailable.
+                    pass
+            records.append(rec)
         return records
 
     return reader

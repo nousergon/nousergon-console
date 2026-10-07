@@ -204,3 +204,38 @@ def test_as_dict_is_complete_enough_to_act_on():
     assert d["broken"] == "adapter claim"
     assert d["remedy"]
     assert len(d["steps"]) >= 2
+
+
+# ------------------------------------------ the state, as values not prose ---
+
+def test_facts_carry_the_entity_kind_state_and_reporting_claim_count():
+    """A consumer grading "never green with nothing to say" (§8.3) needs the
+    rendered state AND how many reports stand behind it, as values. Parsing
+    them out of a step's `detail` would break on the first rewording."""
+    facts = as_dict(doctor(_build(), ID))["facts"]
+    assert facts["entity_kind"] == "component"
+    assert facts["entity_state"] == "HEALTHY"
+    assert facts["reporting_claims"] == 1
+
+
+def test_a_declared_but_unobserved_component_reports_zero_claims_and_its_real_state():
+    """The case the facts exist for: declared, nothing reporting, rendered
+    UNREPORTED — the count is 0, not absent, and the state is what renders."""
+    facts = as_dict(doctor(_build(observed=False), ID))["facts"]
+    assert facts["reporting_claims"] == 0
+    assert facts["entity_state"] == "UNREPORTED"
+
+
+def test_no_entity_means_no_kind_and_no_state_never_a_default():
+    facts = as_dict(doctor(Index(), "nothing-knows-this"))["facts"]
+    assert facts["entity_kind"] is None and facts["entity_state"] is None
+    assert facts["reporting_claims"] == 0
+
+
+def test_the_json_doctor_view_carries_the_facts():
+    from console.render.json import payload
+    from console.server.router import resolve
+
+    doc = payload(_build(), resolve(f"/doctor/{ID}"))
+    assert doc["facts"]["entity_state"] == "HEALTHY"
+    assert doc["facts"]["reporting_claims"] == 1

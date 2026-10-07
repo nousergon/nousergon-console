@@ -214,6 +214,16 @@ def doctor(index: Index, identifier: str) -> Diagnosis:
         facts={
             "adapters_asked": adapters_asked,
             "claim_classes": sorted({c.claim_class.name for c in claims}),
+            # The merged entity's kind and rendered state, and how many
+            # non-declaration claims stand behind that state, as VALUES rather
+            # than inside a step's prose. A consumer grading "never green with
+            # nothing to say" (observability-policy §8.3) needs all three, and
+            # parsing them back out of `detail` text would break the first
+            # time the wording changed. None when no entity was produced —
+            # absent, never a default kind or state.
+            "entity_kind": entity.kind.value if entity is not None else None,
+            "entity_state": entity.state_value if entity is not None else None,
+            "reporting_claims": len(reporting),
         },
     )
 

@@ -28,7 +28,8 @@ shows each milestone's own state side by side (§4.3: no aggregate green light).
                 measure — never quietly on track (§5.5).
 ``OFF_TRACK``   the target passed unmet, or the work is behind the calendar by
                 more than ``off_track_gap``: replan it.
-``THREATENED``  behind by more than ``threatened_gap``, or an open required
+``THREATENED``  behind by more than ``threatened_gap`` (pace is judged only
+                with at least ``min_pace_items`` required items), or an open required
                 item is gated on a person or blocked by another issue within
                 ``blocker_window_days`` of the target.
 ``ON_TRACK``    none of the above.
@@ -80,6 +81,11 @@ class Thresholds:
     threatened_gap: float = 0.15
     off_track_gap: float = 0.40
     blocker_window_days: int = 7
+    #: Below this many required items the pace comparison is not made: one
+    #: open issue reads 0% done on every day until it closes, so pace would
+    #: turn every single-issue milestone red a third of the way in. Such a
+    #: milestone is judged on its date and its blockers alone.
+    min_pace_items: int = 3
 
 
 @dataclass(frozen=True)
@@ -162,6 +168,7 @@ def parse(raw: Any) -> Plan:
         off_track_gap=float(t.get("off_track_gap", Thresholds.off_track_gap)),
         blocker_window_days=int(t.get("blocker_window_days",
                                       Thresholds.blocker_window_days)),
+        min_pace_items=int(t.get("min_pace_items", Thresholds.min_pace_items)),
     )
     if not 0 <= thresholds.threatened_gap < thresholds.off_track_gap <= 1:
         raise PlannerConfigError(
@@ -304,10 +311,10 @@ def evaluate_milestone(m: Milestone, items: list[dict[str, Any]], today: date,
         state = OFF_TRACK
         reason = (f"target {m.target.isoformat()} passed {-days_left} days ago "
                   f"with {len(open_items)} items open: replan")
-    elif elapsed - done > thresholds.off_track_gap:
+    elif total >= thresholds.min_pace_items and elapsed - done > thresholds.off_track_gap:
         state = OFF_TRACK
         reason = f"{progress}: more than {_pct(thresholds.off_track_gap)} behind, replan"
-    elif elapsed - done > thresholds.threatened_gap:
+    elif total >= thresholds.min_pace_items and elapsed - done > thresholds.threatened_gap:
         state = THREATENED
         reason = f"{progress}: more than {_pct(thresholds.threatened_gap)} behind"
     elif blockers and days_left <= thresholds.blocker_window_days:
@@ -315,6 +322,10 @@ def evaluate_milestone(m: Milestone, items: list[dict[str, Any]], today: date,
         reason = (f"{len(blockers)} required item{'s' if len(blockers) != 1 else ''} blocked "
                   f"({'; '.join(b['ref'] + ' ' + b['blocker'] for b in blockers)}) "
                   f"with {days_left} days to target")
+    elif total < thresholds.min_pace_items:
+        state = ON_TRACK
+        reason = (f"{progress}; with under {thresholds.min_pace_items} required "
+                  f"items, judged on its date and blockers, not pace")
     else:
         state, reason = ON_TRACK, progress
     return {

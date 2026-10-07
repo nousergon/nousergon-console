@@ -52,6 +52,7 @@ oversight, it is the adapter genuinely having nothing to declare.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import subprocess
@@ -129,6 +130,121 @@ def _gh_pr_lister(org: str, repo: str) -> list[dict[str, Any]]:
         capture_output=True, text=True, check=True,
     )
     return json.loads(out.stdout or "[]")
+
+
+#: Reads named issues directly (``issue_refs``), one dict per readable issue
+#: shaped like `_gh_lister`'s rows plus ``closedAt`` and ``blockedBy`` (the
+#: refs of OPEN issues the host records as blocking it). Takes
+#: (org, repo, numbers, cache) and may omit a number it could not read: the
+#: reader of a missing ref renders it as unreadable, never as closed.
+RefReader = Callable[[str, str, list[int], str], list[dict[str, Any]]]
+
+#: `<repo>-I<N>`, the fleet's tracker ref — the same id `_to_entity` assigns,
+#: so a named ref and a listed issue are one entity (§2.5's claim merge).
+_ISSUE_REF = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+)-I(?P<number>[0-9]+)$")
+
+
+def parse_issue_ref(ref: str) -> tuple[str, int] | None:
+    """``alpha-engine-config-I12`` -> (``alpha-engine-config``, 12), or None."""
+    m = _ISSUE_REF.match(str(ref).strip())
+    return (m.group("repo"), int(m.group("number"))) if m else None
+
+
+def _gh_ref_reader(org: str, repo: str, numbers: list[int],
+                   cache: str) -> list[dict[str, Any]]:
+    """REST, one issue per call, through `gh api --cache` so a rebuild every
+    few minutes costs the host one read per ref per cache window rather than
+    one per build. A ref that errors is omitted, never guessed."""
+    out: list[dict[str, Any]] = []
+    for number in numbers:
+        base = f"repos/{org}/{repo}/issues/{number}"
+        try:
+            issue = json.loads(subprocess.run(
+                ["gh", "api", "--cache", cache, base],
+                capture_output=True, text=True, check=True,
+            ).stdout or "{}")
+        except Exception:  # noqa: BLE001 - an unread ref is reported, not raised
+            continue
+        if not issue or issue.get("pull_request"):
+            continue  # a PR number is not an issue ref
+        blocked_by: list[str] = []
+        if str(issue.get("state", "")).lower() == "open":
+            try:
+                deps = json.loads(subprocess.run(
+                    ["gh", "api", "--cache", cache, f"{base}/dependencies/blocked_by"],
+                    capture_output=True, text=True, check=True,
+                ).stdout or "[]")
+            except Exception:  # noqa: BLE001 - no dependency read is no claim
+                deps = []
+            for dep in deps if isinstance(deps, list) else []:
+                if str(dep.get("state", "")).lower() != "open":
+                    continue
+                dep_repo = str(dep.get("repository_url", "")).rsplit("/", 1)[-1] or repo
+                blocked_by.append(f"{dep_repo}-I{dep.get('number')}")
+        out.append({
+            "number": issue.get("number"),
+            "title": issue.get("title", ""),
+            "state": str(issue.get("state", "")).upper(),
+            "labels": [{"name": lab.get("name", "")} for lab in issue.get("labels", [])],
+            "updatedAt": issue.get("updated_at"),
+            "closedAt": issue.get("closed_at"),
+            "url": issue.get("html_url"),
+            "blockedBy": blocked_by,
+        })
+    return out
+
+
+def fetch_refs(
+    config: dict[str, Any],
+    refs: Iterable[str],
+    ref_reader: RefReader | None = None,
+) -> AdapterResult:
+    """Read NAMED issues, whatever their age (`alpha-engine-config-I12152`).
+
+    `fetch` lists the newest 200 issues per repo, which is the right window for
+    the Decision Queue and the wrong one for a plan: a milestone that requires
+    an issue filed months ago would read it as absent. The planner declares
+    exactly which refs it needs, and this reads those and nothing else. Same
+    source shape as `fetch` — a Git host's issues API — so it lives here, per
+    `docs/adapters.md`'s boundary test, and emits the same entity at the same
+    id, carrying ``closed_at`` and ``blocked_by`` as well.
+    """
+    org = config.get("org")
+    name = config.get("_name", "planner-issues")
+    incident_label = config.get("incident_label", "incident")
+    cache = str(config.get("cache", "15m"))
+    by_repo: dict[str, list[int]] = {}
+    for ref in refs:
+        parsed = parse_issue_ref(ref)
+        if parsed is not None:
+            by_repo.setdefault(parsed[0], []).append(parsed[1])
+    if not org:
+        return AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
+                             status=AdapterStatus.FAILED, unavailable=("all",))
+    reader = ref_reader or _gh_ref_reader
+    entities: list[Entity] = []
+    unavailable: list[str] = []
+    for repo, numbers in sorted(by_repo.items()):
+        wanted = sorted(set(numbers))
+        try:
+            items = reader(org, repo, wanted, cache)
+        except Exception:  # noqa: BLE001 - this repo's refs are unread, not empty
+            unavailable.extend(f"{repo}-I{n}" for n in wanted)
+            continue
+        seen = set()
+        for item in items:
+            ent = _to_entity(org, repo, item, incident_label)
+            detail = dict(ent.detail)
+            detail["closed_at"] = item.get("closedAt")
+            detail["blocked_by"] = sorted(item.get("blockedBy") or [])
+            entities.append(dataclasses.replace(ent, detail=detail))
+            seen.add(item.get("number"))
+        unavailable.extend(f"{repo}-I{n}" for n in wanted if n not in seen)
+    status = (AdapterStatus.FAILED if unavailable and not entities
+              else AdapterStatus.OK)
+    return AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
+                         status=status, entities=tuple(entities),
+                         unavailable=tuple(unavailable))
 
 
 def fetch(

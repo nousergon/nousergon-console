@@ -128,6 +128,26 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
 
         doc = {"schema_version": SCHEMA_VERSION, "view": "doctor",
                **as_dict(doctor(index, req.query or ""))}
+    elif req.view == "planner":
+        from ..index import planner
+
+        projects = planner.evaluate(index)
+        span = planner.axis(projects)
+        doc = {"schema_version": SCHEMA_VERSION, "view": "planner",
+               "question": planner.PLANNER_QUESTION,
+               "states": list(planner.SCHEDULE_STATES),
+               "axis": ({"start": span[0].isoformat(), "end": span[1].isoformat()}
+                        if span else None),
+               "projects": projects}
+    elif req.view == "planner-project":
+        from ..index import planner
+
+        found = planner.project(index, req.project_id or "")
+        if found is None:  # pragma: no cover - app.py 404s before reaching here
+            raise KeyError(req.project_id)
+        doc = {"schema_version": SCHEMA_VERSION, "view": "planner-project",
+               "question": planner.PLANNER_QUESTION,
+               "states": list(planner.SCHEDULE_STATES), "project": found}
     elif req.view == "registry":
         source = next(a for a in index.build_info.adapters if a.name == req.registry_name)
         doc = {"schema_version": SCHEMA_VERSION, "view": "registry", "name": source.name,

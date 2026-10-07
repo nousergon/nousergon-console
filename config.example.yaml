@@ -1433,3 +1433,42 @@ facets:
 self:
   component_id: nousergon-console
   emit: stdout
+
+# ── Delivery planner (`/planner`, alpha-engine-config-I12152) ──────────────
+# "Will each declared milestone land by its target date, and what is holding
+# the ones that won't?" Projects and milestones are declared here; nothing
+# about any project lives in the console. Each milestone names a window
+# (`start` -> `target`) and the tracker refs (`<repo>-I<N>`) that must close.
+# Those refs are read by name through the git-host adapter's `fetch_refs`
+# (under `org`, through `gh api --cache <fetch.cache>`), whatever their age.
+#
+# Schedule state, recomputed per request, with the reason always rendered:
+#   MET          every required item closed (and `predicate`, if any, EXITED)
+#   UNREPORTED   a required item could not be read, or nothing to measure
+#   OFF_TRACK    target passed unmet, or elapsed% - closed% > off_track_gap
+#   THREATENED   elapsed% - closed% > threatened_gap, or an open required item
+#                carries a `blocker_labels` label or an open blocked-by issue
+#                within blocker_window_days of the target
+#   ON_TRACK     otherwise
+#
+# A bad declaration (unknown date, target before start, a ref that is not
+# `<repo>-I<N>`) FAILS THE BUILD naming the project and milestone. This example
+# declares no `org`, so its refs render UNREPORTED rather than reaching a host.
+planner:
+  # org: your-org
+  fetch: {cache: 15m}
+  thresholds: {threatened_gap: 0.15, off_track_gap: 0.40, blocker_window_days: 7}
+  blocker_labels: ["gate:decision", "gate:operator", "gate:device", "blocked"]
+  projects:
+    - id: example-project
+      title: Example project
+      owner: example-owner
+      tracker: https://example.invalid/tracker/2
+      milestones:
+        - id: first-release
+          title: First release
+          start: "2026-01-05"
+          target: "2026-02-27"
+          requires: [example-repo-I1, example-repo-I2]
+          # Optional: a §4.4 milestone predicate (by id) that must be EXITED.
+          predicate: example-exit-predicate

@@ -63,36 +63,18 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 .schedule-UNREPORTED { border-left: .35rem dashed #8a4b00; }
 .schedule-word { padding-left: .3rem; font-weight: 600; }
 .plan-scroll { overflow-x: auto; margin: 1rem 0; }
-.plan-grid { min-width: 44rem; }
-.plan-row { display: flex; border-bottom: 1px solid rgba(127, 127, 127, .35); }
-.plan-name { flex: 0 0 9rem; padding: .3rem .5rem .3rem 0; font-weight: 600; }
-.plan-track { position: relative; flex: 1; min-height: 1.6rem; }
-.plan-axis .plan-track { height: 1.4rem; }
-.plan-tick { position: absolute; top: 0; font-size: .75rem; color: #4c5563; border-left: 1px solid #b0b6bf; padding-left: .2rem; white-space: nowrap; }
-.plan-today { position: absolute; top: 0; bottom: 0; border-left: 2px solid #0b5fa5; }
-.plan-bar { position: absolute; height: 1.1rem; margin-top: .4rem; border-radius: .2rem; box-sizing: border-box; background: rgba(127, 127, 127, .3); }
-.schedule-ON_TRACK.plan-bar { background: rgba(8, 160, 50, .55); }
-.schedule-MET.plan-bar { background: rgba(127, 127, 127, .45); }
-.schedule-THREATENED.plan-bar { background: rgba(230, 180, 0, .75); }
-.schedule-OFF_TRACK.plan-bar { background: rgba(210, 20, 50, .7); }
-.schedule-UNREPORTED.plan-bar { background: repeating-linear-gradient(45deg, rgba(138, 75, 0, .5) 0 .3rem, transparent .3rem .6rem); }
-.plan-diamond { position: absolute; width: .8rem; height: .8rem; margin: .55rem 0 0 -.4rem; transform: rotate(45deg); border: 2px solid currentColor; box-sizing: border-box; background: inherit; }
-.schedule-ON_TRACK.plan-diamond { background: #087f23; }
-.schedule-MET.plan-diamond { background: #4c5563; }
-.schedule-THREATENED.plan-diamond { background: #c99700; }
-.schedule-OFF_TRACK.plan-diamond { background: #b00020; }
-.schedule-UNREPORTED.plan-diamond { background: transparent; border-style: dashed; }
-.plan-label { position: absolute; white-space: nowrap; font-size: .8rem; line-height: 1.9rem; color: inherit; text-decoration: none; }
-.plan-label:hover { text-decoration: underline; }
-.plan-tick { color: #8a9099; }
+.plan-svg { min-width: 56rem; display: block; }
+.plan-legend { margin: .3rem 0; font-size: .9rem; }
+.plan-key { margin-right: .9rem; white-space: nowrap; }
+.plan-swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; vertical-align: -.1rem; margin-right: .3rem; }
+.plan-mark { display: inline-block; width: .65rem; height: .65rem; transform: rotate(45deg); border: 1px solid currentColor; vertical-align: .05rem; margin-right: .4rem; }
+.plan-svg a:hover text { text-decoration: underline; }
 .plan-table td, .plan-table th { padding: .25rem .5rem; vertical-align: top; text-align: left; }
 .plan-items ul { margin: 0; padding-left: 1.1rem; font-size: .9rem; }
 .plan-blocker { color: #b00020; }
 .plan-table td:nth-child(3) { white-space: nowrap; }
-.plan-tick.plan-week { border-left-style: dotted; }
 @media (max-width: 40rem) {
   .plan-table th { display: none; }
   .plan-table tr { display: block; margin-bottom: .7rem; }
   .plan-table td { display: block; padding: .1rem .5rem; }
-  .plan-name { flex-basis: 6.5rem; }
 }

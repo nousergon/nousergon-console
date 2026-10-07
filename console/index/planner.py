@@ -20,8 +20,10 @@ built index plus its declarations, recomputed per query and never cached
 milestone is not a component and is neither HEALTHY nor FAILED, the same
 reasoning that gives the §4.4 pane MET/UNMET. Every value is rendered with the
 reason that produced it in words, so colour never carries the distinction
-alone (§5.7), and there is no project-level roll-up colour — a project row
+alone (§5.7), and there is no project-level roll-up state — a project row
 shows each milestone's own state side by side (§4.3: no aggregate green light).
+On the calendar a project's colour is its IDENTITY, not a verdict: bars wear
+the project's colour, and the state sits on the target diamond with its word.
 
 ``MET``         every required item closed (and any bound predicate EXITED).
 ``UNREPORTED``  a required item could not be read, or nothing was declared to
@@ -354,7 +356,7 @@ def evaluate(index: Any, now: datetime | date | None = None,
         # recomputed, so the two panes can never disagree about one predicate.
         exits = {d["id"]: d["exit_state"] for d in index.landing_model().milestones}
     out: list[dict[str, Any]] = []
-    for p in plan.projects:
+    for slot, p in enumerate(plan.projects):
         milestones = []
         for m in p.milestones:
             items = [_item(index, r, plan.blocker_labels) for r in m.requires]
@@ -364,6 +366,9 @@ def evaluate(index: Any, now: datetime | date | None = None,
         out.append({
             "id": p.id, "title": p.title, "owner": p.owner, "tracker": p.tracker,
             "url": f"/planner/{p.id}",
+            # Declared position: the project's colour on the calendar follows
+            # the project, so a project page draws it in the same colour.
+            "slot": slot,
             # Counts per state, never one verdict (§4.3).
             "states": {s: sum(1 for m in milestones if m["state"] == s)
                        for s in SCHEDULE_STATES},

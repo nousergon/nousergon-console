@@ -201,3 +201,21 @@ def test_example_config_declares_a_plan_that_builds():
                           / "config.example.yaml").read_text())
     plan = planner.parse(cfg["planner"])
     assert plan.refs and plan.org is None
+
+
+def test_calendar_colours_each_project_and_keeps_the_state_word():
+    """Brian 2026-10-07: the calendar is colour-coded by project. The colour
+    follows the project's declared position, so its own page draws it the
+    same; the schedule state stays a word beside its diamond (§5.7)."""
+    from console.render.html import PLANNER_PROJECT_COLOURS, planner_page, planner_project_page
+
+    plan = planner.parse({"org": "o", "projects": [
+        {"id": "a", "title": "Alpha", "milestones": [_ms(["repo-I1"], id="a1")]},
+        {"id": "b", "title": "Beta", "milestones": [_ms(["repo-I4"], id="b1")]}]})
+    index = _index(plan)
+    page = planner_page(index)
+    assert "<svg" in page
+    assert PLANNER_PROJECT_COLOURS[0] in page and PLANNER_PROJECT_COLOURS[1] in page
+    assert ">MET</tspan>" in page and ">ON_TRACK</tspan>" in page
+    beta = planner_project_page(index, "b")
+    assert PLANNER_PROJECT_COLOURS[1] in beta and PLANNER_PROJECT_COLOURS[0] not in beta

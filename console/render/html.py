@@ -781,7 +781,11 @@ def _planner_timeline(projects: list[dict]) -> str:
     span = planner.axis(projects)
     if span is None:
         return '<p class="absent">no milestones declared</p>'
-    start, end = span
+    from datetime import timedelta as _pad
+
+    # A few days of margin past the last target, so its diamond and label
+    # are not clipped by the edge of the track.
+    start, end = span[0], span[1] + _pad(days=3)
     days = max(1, (end - start).days)
     today = _dt.now(_tz.utc).date()
     from datetime import timedelta as _td
@@ -791,10 +795,10 @@ def _planner_timeline(projects: list[dict]) -> str:
     # off the axis without hovering.
     monday = start + _td(days=(7 - start.weekday()) % 7)
     while monday <= end:
-        if monday.day > 3:
+        if monday.day > 3 and _planner_axis_pos(monday.isoformat(), start, days) < 95:
             ticks.append(f'<span class="plan-tick plan-week" style="left:'
                          f'{_planner_axis_pos(monday.isoformat(), start, days):.2f}%">'
-                         f'{monday.day}</span>')
+                         f'{monday.strftime("%b")} {monday.day}</span>')
         monday += _td(days=7)
     month = _date(start.year, start.month, 1)
     while month <= end:
@@ -815,14 +819,25 @@ def _planner_timeline(projects: list[dict]) -> str:
         for lane, m in enumerate(p["milestones"]):
             left = _planner_axis_pos(m["start"], start, days)
             right = _planner_axis_pos(m["target"], start, days)
+            # The bar spans start -> target and carries the colour; the
+            # diamond marks the target date; the label sits in the lane,
+            # never clipped by a short bar, and flips to the left of the
+            # target when the target is in the right third of the axis.
+            label_side = (f"right:{100 - right:.2f}%;padding-right:.9rem;text-align:right"
+                          if right > 66 else f"left:{right:.2f}%;padding-left:.8rem")
+            title = (f'{esc(m["title"])} · target {esc(m["target"])} · '
+                     f'{esc(m["state"])}: {esc(m["reason"])}')
+            top = lane * 1.9
             bars.append(
-                f'<a class="plan-bar schedule-{esc(m["state"])}" '
-                f'href="{esc(p["url"])}#m-{esc(m["id"])}" '
-                f'style="left:{left:.2f}%;width:{max(right - left, 0.8):.2f}%;'
-                f'top:{lane * 1.9:.1f}rem" '
-                f'title="{esc(m["title"])} · target {esc(m["target"])} · '
-                f'{esc(m["state"])}: {esc(m["reason"])}">'
-                f'{esc(m["state"])} · {esc(m["title"])} · {esc(m["target"][5:])}</a>')
+                f'<span class="plan-bar schedule-{esc(m["state"])}" '
+                f'style="left:{left:.2f}%;width:{max(right - left, 0.6):.2f}%;'
+                f'top:{top:.1f}rem" title="{title}"></span>'
+                f'<span class="plan-diamond schedule-{esc(m["state"])}" '
+                f'style="left:{right:.2f}%;top:{top:.1f}rem" title="{title}"></span>'
+                f'<a class="plan-label" href="{esc(p["url"])}#m-{esc(m["id"])}" '
+                f'style="{label_side};top:{top:.1f}rem" title="{title}">'
+                f'<strong>{esc(m["state"])}</strong> · {esc(m["title"])} · '
+                f'{esc(m["target"][5:])}</a>')
         height = max(1, len(p["milestones"])) * 1.9 + 0.3
         rows.append(
             f'<div class="plan-row"><div class="plan-name">'

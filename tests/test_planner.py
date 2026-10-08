@@ -219,3 +219,20 @@ def test_calendar_colours_each_project_and_keeps_the_state_word():
     assert ">MET</tspan>" in page and ">ON_TRACK</tspan>" in page
     beta = planner_project_page(index, "b")
     assert PLANNER_PROJECT_COLOURS[1] in beta and PLANNER_PROJECT_COLOURS[0] not in beta
+
+
+def test_pace_false_judges_a_gate_read_on_the_day_by_date_and_blockers():
+    """A milestone whose items all close at the target reads 0/N until then on
+    a perfect week; `pace: false` stops that reading as THREATENED."""
+    reqs = ["repo-I4", "repo-I4", "repo-I4"]
+    paced = _one(_plan([_ms(["repo-I1", "repo-I4", "repo-I3"],
+                            target="2026-10-31")]), date(2026, 10, 25))
+    assert paced["state"] in (planner.THREATENED, planner.OFF_TRACK)
+    unpaced = _one(_plan([_ms(["repo-I1", "repo-I4", "repo-I3"], target="2026-10-31",
+                              pace=False)]), date(2026, 10, 20))
+    assert unpaced["state"] == planner.ON_TRACK and "not pace" in unpaced["reason"]
+    blocked = _one(_plan([_ms(["repo-I3", "repo-I4"], target="2026-10-31",
+                              pace=False)]), date(2026, 10, 28))
+    assert blocked["state"] == planner.THREATENED
+    with pytest.raises(planner.PlannerConfigError, match="pace"):
+        _plan([_ms(reqs, pace="no")])

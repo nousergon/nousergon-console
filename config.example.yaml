@@ -1472,3 +1472,7 @@ planner:
           requires: [example-repo-I1, example-repo-I2]
           # Optional: a §4.4 milestone predicate (by id) that must be EXITED.
           predicate: example-exit-predicate
+          # Optional, default true. false when every required item closes
+          # only AT the target by design (a gate read on the day): closure
+          # count cannot show pace, so date and blockers alone decide.
+          # pace: false

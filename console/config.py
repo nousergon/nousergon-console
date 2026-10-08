@@ -34,6 +34,7 @@ from .adapters import (
 from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
+from .index import planner as delivery_planner
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
@@ -181,6 +182,9 @@ def build_index(config: dict[str, Any]) -> Index:
     # the same build `console index --config config.example.yaml` runs on every
     # PR, so a bad declaration is caught there rather than live.
     declared_milestones = milestone_predicates.parse(config.get("milestones"))
+    # Same posture for the delivery planner (alpha-engine-config-I12152): a
+    # project or milestone this build cannot evaluate fails the build by name.
+    declared_plan = delivery_planner.parse(config.get("planner"))
     # One tolerance, set before any claim arrives: the merge's DISABLED/MISSED
     # comparison and §9.6's staleness audit both read it, and they must not be
     # able to disagree about one row (`index/cadence_state.py`).
@@ -236,6 +240,20 @@ def build_index(config: dict[str, Any]) -> Index:
         result, elapsed = _timed_fetch(module.fetch, cfg)
         index.add_result(result, elapsed_seconds=elapsed)
 
+    # The planner's required issues, read by name whatever their age — the
+    # repos adapter lists only the newest issues per repo. One read for every
+    # ref any milestone declares, so the list lives in the plan and nowhere
+    # else.
+    if declared_plan.refs:
+        from .adapters import git_host as _git_host
+
+        result, elapsed = _timed_fetch(
+            lambda cfg: _git_host.fetch_refs(cfg, declared_plan.refs),
+            {**declared_plan.fetch, "org": declared_plan.org,
+             "_name": "planner-issues"},
+        )
+        index.add_result(result, elapsed_seconds=elapsed)
+
     # §2.6: every component's own descriptor said where its facts live. Walking
     # those bindings is what makes onboarding cost ONE FILE — a component whose
     # data lands somewhere no adapter points is read because it said where, not
@@ -266,6 +284,7 @@ def build_index(config: dict[str, Any]) -> Index:
     # Declarations only — evaluation is per query, over the built graph, and
     # nothing about it is cached (§5.6).
     milestone_predicates.attach(index, declared_milestones)
+    delivery_planner.attach(index, declared_plan)
     # ONE OBSERVATION PER BUILD (§4.4, alpha-engine-config-I9083). `evaluate`
     # is per QUERY and a page refresh is not an observation, so the clause
     # journal — the durable record of every clause's status, and the only

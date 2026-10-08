@@ -760,11 +760,248 @@ def dashboards_page(index: Index) -> str:
 </body></html>"""
 
 
+def _schedule_word(state: str) -> str:
+    """The state word, always rendered beside its colour (§5.7)."""
+    return f'<span class="schedule-word schedule-{esc(state)}">{esc(state)}</span>'
+
+
+def _planner_axis_pos(day: str, start, span_days: int) -> float:
+    from datetime import date as _date
+
+    offset = (_date.fromisoformat(day) - start).days
+    return max(0.0, min(100.0, 100.0 * offset / span_days)) if span_days else 0.0
+
+
+# One colour per project, in declared order (Brian, 2026-10-07: "color coded
+# by project"). Validated as a categorical palette on both the light and the
+# dark surface (lightness band, chroma, colour-blind and normal-vision
+# separation). Yellow, red and green are left out on purpose: those are the
+# schedule states'. A project past the fifth is drawn neutral grey rather than
+# in a generated hue; its name labels its row either way.
+PLANNER_PROJECT_COLOURS = ("#2a78d6", "#d55181", "#8a63d2", "#199e70", "#b8742a")
+PLANNER_OVERFLOW_COLOUR = "#7a7f87"
+# The schedule state's own colour, drawn only on the target diamond and the
+# legend, always beside the state word (§5.7).
+PLANNER_STATE_COLOURS = {
+    "MET": "#4c5563", "ON_TRACK": "#087f23", "THREATENED": "#c99700",
+    "OFF_TRACK": "#b00020", "UNREPORTED": "#8a4b00",
+}
+
+
+def _planner_colour(project: dict) -> str:
+    slot = project.get("slot", 0)
+    return (PLANNER_PROJECT_COLOURS[slot] if slot < len(PLANNER_PROJECT_COLOURS)
+            else PLANNER_OVERFLOW_COLOUR)
+
+
+def _planner_legend(projects: list[dict]) -> str:
+    names = "".join(
+        f'<span class="plan-key"><span class="plan-swatch" style="background:'
+        f'{_planner_colour(p)}"></span>{esc(p["title"])}</span>' for p in projects)
+    states = "".join(
+        f'<span class="plan-key"><span class="plan-mark" style="background:'
+        f'{c}"></span>{esc(s)}</span>' for s, c in PLANNER_STATE_COLOURS.items())
+    return (f'<p class="plan-legend"><strong>projects</strong> {names}</p>'
+            f'<p class="plan-legend"><strong>state at target</strong> {states}</p>')
+
+
+def _planner_timeline(projects: list[dict]) -> str:
+    """The delivery calendar as one inline SVG Gantt chart: a dated axis with
+    week gridlines and a today line; each project a band in its own colour,
+    headed by its name; each milestone a row with its title on the left, a bar
+    from start to target in the project's colour, a diamond at the target in
+    its schedule state's colour, and the state word and date beside it.
+    Self-contained (presentation attributes, not the stylesheet), so it draws
+    the same wherever the page is opened."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+    from ..index import planner
+
+    span = planner.axis(projects)
+    if span is None:
+        return '<p class="absent">no milestones declared</p>'
+    width, gutter, right_pad = 1100, 300, 12
+    plot_w = width - gutter - right_pad
+    row_h, head_row, axis_h, band_gap = 28, 26, 46, 8
+    char_w = 7.2  # 13px system-ui, average; sizes the room left for labels
+    label_room = 21 * char_w + 16  # "THREATENED · Oct 11" beside the diamond
+    first = span[0] - _td(days=1)
+    # Pad the end so the latest target's label fits on the axis.
+    core = max(1, (span[1] - first).days)
+    pad = int(core * label_room / max(plot_w - label_room, 1)) + 1
+    start, end = first, span[1] + _td(days=pad)
+    days = max(1, (end - start).days)
+    today = _dt.now(_tz.utc).date()
+
+    def x(day) -> float:
+        return gutter + plot_w * (day - start).days / days
+
+    def clip(text: str, n: int = 40) -> str:
+        return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+    height = (axis_h + sum(head_row + row_h * len(p["milestones"]) + band_gap
+                           for p in projects) + 6)
+    grid, out = [], []
+    month = start.replace(day=1)
+    while month <= end:
+        if month >= start:
+            grid.append(f'<line x1="{x(month):.1f}" x2="{x(month):.1f}" y1="0" '
+                        f'y2="{height}" stroke="currentColor" stroke-opacity=".35"/>'
+                        f'<text x="{x(month) + 4:.1f}" y="14" font-weight="700">'
+                        f'{month.strftime("%B")}</text>')
+        month = (month.replace(year=month.year + 1, month=1) if month.month == 12
+                 else month.replace(month=month.month + 1))
+    monday = start + _td(days=(7 - start.weekday()) % 7)
+    while monday <= end:
+        grid.append(f'<line x1="{x(monday):.1f}" x2="{x(monday):.1f}" y1="22" '
+                    f'y2="{height}" stroke="currentColor" stroke-opacity=".12"/>'
+                    f'<text x="{x(monday) + 3:.1f}" y="36" font-size="11" '
+                    f'fill-opacity=".7">{monday.strftime("%b")} {monday.day}</text>')
+        monday += _td(days=7)
+
+    y = axis_h
+    for p in projects:
+        colour = _planner_colour(p)
+        band = head_row + row_h * len(p["milestones"])
+        out.append(
+            f'<rect x="0" y="{y}" width="{width}" height="{band}" '
+            f'fill="{colour}" fill-opacity=".09"/>'
+            f'<rect x="0" y="{y}" width="6" height="{band}" fill="{colour}"/>'
+            f'<a href="{esc(p["url"])}"><text x="16" y="{y + 18}" font-weight="700" '
+            f'font-size="14">{esc(p["title"])}</text></a>')
+        for i, m in enumerate(p["milestones"]):
+            ms, mt = _date.fromisoformat(m["start"]), _date.fromisoformat(m["target"])
+            mid = y + head_row + i * row_h + row_h / 2
+            x0, x1 = x(ms), x(mt)
+            state = m["state"]
+            tip = (f'{m["title"]} · {p["title"]} · {m["start"]} to {m["target"]} · '
+                   f'{state}: {m["reason"]}')
+            sc = PLANNER_STATE_COLOURS.get(state, PLANNER_OVERFLOW_COLOUR)
+            dash = ' stroke-dasharray="3 2"' if state == "UNREPORTED" else ""
+            href = f'{esc(p["url"])}#m-{esc(m["id"])}'
+            out.append(
+                f'<g><title>{esc(tip)}</title>'
+                f'<a href="{href}"><text x="28" y="{mid + 4.5:.1f}">'
+                f'{esc(clip(m["title"]))}</text></a>'
+                f'<rect x="{x0:.1f}" y="{mid - 7:.1f}" width="{max(x1 - x0, 4):.1f}" '
+                f'height="14" rx="4" fill="{colour}"/>'
+                f'<path d="M{x1:.1f} {mid - 9:.1f} L{x1 + 9:.1f} {mid:.1f} '
+                f'L{x1:.1f} {mid + 9:.1f} L{x1 - 9:.1f} {mid:.1f} Z" fill="{sc}" '
+                f'stroke="currentColor" stroke-width="1.5"{dash}/>'
+                f'<text x="{x1 + 14:.1f}" y="{mid + 4.5:.1f}">'
+                f'<tspan font-weight="700">{esc(state)}</tspan> · '
+                f'{mt.strftime("%b")} {mt.day}</text></g>')
+        y += band + band_gap
+
+    if start <= today <= end:
+        tx = x(today)
+        out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="40" y2="{height - 12}" '
+                   f'stroke="#2f80e0" stroke-width="2"/>'
+                   f'<text x="{tx:.1f}" y="{height - 1}" text-anchor="middle" '
+                   f'font-size="11" font-weight="700" fill="#2f80e0">today</text>')
+    svg = (f'<svg class="plan-svg" viewBox="0 0 {width} {height}" width="100%" '
+           f'role="img" aria-label="delivery calendar: each project\'s milestones '
+           f'from start to target date" font-family="system-ui, sans-serif" '
+           f'font-size="13" fill="currentColor">{"".join(grid)}{"".join(out)}</svg>')
+    return f'{_planner_legend(projects)}<div class="plan-scroll">{svg}</div>'
+
+
+def _planner_milestone_rows(project: dict, with_items: bool) -> str:
+    out = []
+    for m in project["milestones"]:
+        tracker = (f' · <a href="{esc(m["tracker"])}">tracker</a>'
+                   if m.get("tracker") else "")
+        out.append(
+            f'<tr id="m-{esc(m["id"])}" class="schedule-{esc(m["state"])}">'
+            f'<td>{_schedule_word(m["state"])}</td>'
+            f'<td>{esc(m["title"])}{tracker}</td>'
+            f'<td>{esc(m["target"])}</td>'
+            f'<td>{m["closed"]} / {m["of"]}</td>'
+            f'<td>{esc(m["reason"])}</td></tr>')
+        if with_items and m["items"]:
+            items = "".join(
+                "<li>"
+                + (f'<a href="{esc(i["url"])}">{esc(i["ref"])}</a>' if i.get("url")
+                   else esc(i["ref"]))
+                + (f' · {esc(i["title"])}' if i.get("title") else "")
+                + (" · closed" if i["closed"] else
+                   (" · <strong>UNREADABLE</strong>" if not i["readable"] else " · open"))
+                + (f' · <strong class="plan-blocker">{esc(i["blocker"])}</strong>'
+                   if i.get("blocker") else "")
+                + "</li>"
+                for i in m["items"])
+            out.append(f'<tr class="plan-items"><td></td><td colspan="4">'
+                       f'<ul>{items}</ul></td></tr>')
+    head = ("<tr><th>state</th><th>milestone</th><th>target</th>"
+            "<th>items closed</th><th>why</th></tr>")
+    return f'<table class="plan-table">{head}{"".join(out)}</table>'
+
+
+def _planner_counts(project: dict) -> str:
+    return " · ".join(f'{n} {_schedule_word(s)}'
+                      for s, n in project["states"].items() if n)
+
+
+def planner_page(index: Index) -> str:
+    """The delivery calendar (alpha-engine-config-I12152): every declared
+    project's milestones side by side on one dated axis, then each project's
+    milestones with the reason for its state. Declared in config, evaluated
+    per request, nothing stored (§5.6)."""
+    from ..index import planner
+
+    projects = planner.evaluate(index)
+    if projects:
+        sections = "".join(
+            f'<h2><a href="{esc(p["url"])}">{esc(p["title"])}</a></h2>'
+            f'<p>{_planner_counts(p)}'
+            + (f' · owner {esc(p["owner"])}' if p.get("owner") else "")
+            + "</p>"
+            + _planner_milestone_rows(p, with_items=False)
+            for p in projects)
+    else:
+        sections = '<p class="absent">no projects declared — the `planner:` config block is empty</p>'
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>planner</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; planner</nav>
+<h1>planner</h1>
+<p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>
+{index_freshness(index)}
+{_planner_timeline(projects)}
+{sections}
+</body></html>"""
+
+
+def planner_project_page(index: Index, project_id: str) -> str:
+    """One project: each milestone, its reason, and every required item with
+    its blockers named, open and blocked first."""
+    from ..index import planner
+
+    p = planner.project(index, project_id)
+    if p is None:
+        return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>planner</title></head><body>
+<p class="absent">no planner project {esc(project_id)}</p></body></html>"""
+    tracker = (f' · <a href="{esc(p["tracker"])}">tracker</a>'
+               if p.get("tracker") else "")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(p["title"])} · planner</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/planner">planner</a> &rsaquo; {esc(p["title"])}</nav>
+<h1>{esc(p["title"])}</h1>
+<p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>
+<p>{_planner_counts(p)}{(' · owner ' + esc(p["owner"])) if p.get("owner") else ""}{tracker}</p>
+{index_freshness(index)}
+{_planner_timeline([p])}
+{_planner_milestone_rows(p, with_items=True)}
+</body></html>"""
+
+
 def with_site_nav(page: str) -> str:
     """Prepend the one site menu to a rendered page: home · dashboards ·
     search. Applied once, at the server, so no page can ship without it."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
            '<a href="/dashboards">dashboards</a> · '
+           '<a href="/planner">planner</a> · '
            '<a href="/search">search</a></nav>')
     return page.replace("<body>", "<body>" + nav, 1)
 

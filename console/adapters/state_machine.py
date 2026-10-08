@@ -36,6 +36,7 @@ from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind, State
 from ..state_machine_shape import run_state
 from ..aws import client as _aws_client
+from ..sf_execution_cache import EXECUTION_CACHE
 
 #: Execution history is an OBSERVATION (§2.5) — what ran, when, and how it ended.
 CLAIM_CLASS = ClaimClass.OBSERVATION
@@ -381,6 +382,10 @@ def _default_reader() -> ExecutionReader | None:
     Pages ``list_executions`` fully and hydrates each summary with
     ``describe_execution`` so input/output (cycle key, durable keys) are
     available. Returns None when boto3 is absent so the adapter fails loud.
+
+    A terminal execution is described ONCE per process and served from
+    ``EXECUTION_CACHE`` on later passes while its listing summary is unchanged;
+    only non-terminal executions are re-described (``console/sf_execution_cache.py``).
     """
     try:
         import boto3  # type: ignore
@@ -390,7 +395,7 @@ def _default_reader() -> ExecutionReader | None:
 
     def reader(region: str, arn: str) -> list[ExecutionRecord]:
         client = _aws_client("stepfunctions", region)
-        records: list[ExecutionRecord] = []
+        summaries: list[ExecutionRecord] = []
         token: str | None = None
         while True:
             kwargs: dict[str, Any] = {"stateMachineArn": arn, "maxResults": 1000}
@@ -400,21 +405,27 @@ def _default_reader() -> ExecutionReader | None:
                 page = client.list_executions(**kwargs)
             except (BotoCoreError, ClientError):
                 raise
-            for summary in page.get("executions") or []:
-                execution_arn = summary.get("executionArn")
-                rec: ExecutionRecord = dict(summary)
-                if execution_arn:
-                    try:
-                        detail = client.describe_execution(executionArn=execution_arn)
-                        rec.update(detail)
-                    except (BotoCoreError, ClientError):
-                        # Keep the summary; input/output simply unavailable for
-                        # this one execution — cycle/artifact derivation skips it.
-                        pass
-                records.append(rec)
+            summaries.extend(page.get("executions") or [])
             token = page.get("nextToken")
             if not token:
                 break
+        # The listing is complete: anything it no longer names leaves the cache.
+        EXECUTION_CACHE.observe_listing(arn, summaries)
+        records: list[ExecutionRecord] = []
+        for summary in summaries:
+            execution_arn = summary.get("executionArn")
+            rec: ExecutionRecord = dict(summary)
+            if execution_arn:
+                try:
+                    rec.update(EXECUTION_CACHE.describe(
+                        summary,
+                        lambda a=execution_arn: client.describe_execution(executionArn=a),
+                    ))
+                except (BotoCoreError, ClientError):
+                    # Keep the summary; input/output simply unavailable for
+                    # this one execution — cycle/artifact derivation skips it.
+                    pass
+            records.append(rec)
         return records
 
     return reader

@@ -60,3 +60,31 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 body { overflow-wrap: break-word; }
 input, select, textarea { max-width: 100%; }
 @media (max-width: 40rem) { body { margin: 1rem auto; } }
+
+/* The delivery planner (alpha-engine-config-I12152). Its own selector
+   namespace, like `.milestone-*`: ON_TRACK / THREATENED / OFF_TRACK / MET are a
+   schedule vocabulary, not observability-policy.md §8.3's component states.
+   Colour carries that one axis and the state word is always printed beside it
+   (§5.7); UNREPORTED is dashed so it never reads as a shade of THREATENED. */
+.schedule-ON_TRACK { border-left: .35rem solid #087f23; }
+.schedule-MET { border-left: .35rem solid #4c5563; }
+.schedule-THREATENED { border-left: .35rem solid #c99700; }
+.schedule-OFF_TRACK { border-left: .35rem solid #b00020; }
+.schedule-UNREPORTED { border-left: .35rem dashed #8a4b00; }
+.schedule-word { padding-left: .3rem; font-weight: 600; }
+.plan-scroll { overflow-x: auto; margin: 1rem 0; }
+.plan-svg { min-width: 56rem; display: block; }
+.plan-legend { margin: .3rem 0; font-size: .9rem; }
+.plan-key { margin-right: .9rem; white-space: nowrap; }
+.plan-swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; vertical-align: -.1rem; margin-right: .3rem; }
+.plan-mark { display: inline-block; width: .65rem; height: .65rem; transform: rotate(45deg); border: 1px solid currentColor; vertical-align: .05rem; margin-right: .4rem; }
+.plan-svg a:hover text { text-decoration: underline; }
+.plan-table td, .plan-table th { padding: .25rem .5rem; vertical-align: top; text-align: left; }
+.plan-items ul { margin: 0; padding-left: 1.1rem; font-size: .9rem; }
+.plan-blocker { color: #b00020; }
+.plan-table td:nth-child(3) { white-space: nowrap; }
+@media (max-width: 40rem) {
+  .plan-table th { display: none; }
+  .plan-table tr { display: block; margin-bottom: .7rem; }
+  .plan-table td { display: block; padding: .1rem .5rem; }
+}

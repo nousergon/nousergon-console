@@ -78,3 +78,12 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
   .plan-table tr { display: block; margin-bottom: .7rem; }
   .plan-table td { display: block; padding: .1rem .5rem; }
 }
+
+/* Timeseries fields (`render: timeseries`) as inline bar charts, with an
+   `of:` sibling drawn as a dashed reference line. Uncoloured like the
+   part-of-whole bar (§5.4); the summary text beside it carries the numbers
+   (§5.7). */
+svg.ts-chart { width: 15rem; height: 4rem; vertical-align: middle; color: inherit; }
+svg.ts-chart rect { fill: currentColor; fill-opacity: .55; }
+svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.ts-summary { color: #4c5563; }

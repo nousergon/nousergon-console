@@ -171,6 +171,60 @@ def part_of_whole(field: Field, whole: Field | None) -> tuple[float, float] | No
     return float(field.value), float(whole.value)
 
 
+#: Keys a timeseries point names its x (the label) with, first match wins.
+_X_KEYS = ("date", "x", "t", "ts", "time", "at")
+
+
+def series_points(value: Any) -> list[tuple[str, float | None]] | None:
+    """A `timeseries` value as (label, y) points, or None when it has no shape.
+
+    Read from the value's SHAPE alone, never from who emitted it (§5.8). Four
+    shapes are accepted:
+
+    - a list of numbers — labels are the 1-based positions;
+    - a mapping of label to number (`{"2026-10-01": 0.74, ...}`), in order;
+    - a list of `[label, number]` pairs;
+    - a list of mappings with an x key from `_X_KEYS` and ONE numeric y key:
+      `value` or `y` when present, otherwise the only other key whose values
+      are all numbers or null. Two candidates is ambiguous and returns None
+      rather than charting the wrong one.
+
+    A null y is a gap (a point the emitter could not measure), never zero.
+    """
+    if isinstance(value, Mapping):
+        items = list(value.items())
+        if items and all(v is None or _is_number(v) for _, v in items):
+            return [(str(k), None if v is None else float(v)) for k, v in items]
+        return None
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    if all(v is None or _is_number(v) for v in value):
+        return [(str(i + 1), None if v is None else float(v)) for i, v in enumerate(value)]
+    if all(isinstance(v, (list, tuple)) and len(v) == 2
+           and (v[1] is None or _is_number(v[1])) for v in value):
+        return [(str(v[0]), None if v[1] is None else float(v[1])) for v in value]
+    if not all(isinstance(v, Mapping) for v in value):
+        return None
+    x_key = next((k for k in _X_KEYS if all(k in v for v in value)), None)
+    if x_key is None:
+        return None
+    keys = [k for k in value[0] if k != x_key]
+    numeric = [
+        k for k in keys
+        if all(v.get(k) is None or _is_number(v.get(k)) for v in value)
+        and any(_is_number(v.get(k)) for v in value)
+    ]
+    y_key = next((k for k in ("value", "y") if k in numeric), None)
+    if y_key is None:
+        if len(numeric) != 1:
+            return None
+        y_key = numeric[0]
+    return [
+        (str(v[x_key]), None if v.get(y_key) is None else float(v[y_key]))
+        for v in value
+    ]
+
+
 def format_value(field: Field) -> str:
     """Render a declared value from its descriptor alone.
 
@@ -189,7 +243,7 @@ def format_value(field: Field) -> str:
         return f"{float(value):.4g}"
     if field.render is Render.COUNT and _is_number(value):
         return f"{int(value):,}"
-    if field.render is Render.TIMESERIES and isinstance(value, (list, tuple)):
+    if field.render is Render.TIMESERIES and isinstance(value, (list, tuple, Mapping)):
         return f"{len(value)} points"
     return str(value)
 

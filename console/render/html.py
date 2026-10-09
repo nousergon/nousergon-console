@@ -23,7 +23,14 @@ from datetime import datetime, timezone
 
 from ..index.graph import Index
 from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, Entity
-from ..model.fields import Field, format_value, parse as parse_fields, part_of_whole
+from ..model.fields import (
+    Field,
+    Render,
+    format_value,
+    parse as parse_fields,
+    part_of_whole,
+    series_points,
+)
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
     EXCEPTION_VALUES,
@@ -148,6 +155,10 @@ def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True) -> 
     §5.4 colours only a declared baseline.
     """
     unit = f" {esc(f.unit)}" if f.unit and with_unit else ""
+    if f.render is Render.TIMESERIES:
+        chart = _timeseries_html(f, by_name.get(f.of or ""))
+        if chart is not None:
+            return chart
     pair = part_of_whole(f, by_name.get(f.of or ""))
     if pair is None:
         return esc(format_value(f)) + unit
@@ -162,6 +173,86 @@ def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True) -> 
         bar_value, bar_max = min(value, whole), whole
     return (f'<progress value="{bar_value:g}" max="{bar_max:g}"></progress> '
             f"{esc(format_value(f))} / {whole_txt}{unit} ({esc(pct_txt)})")
+
+
+#: Inline chart geometry (viewBox units; the SVG scales with its CSS width).
+_CHART_W, _CHART_H, _CHART_PAD = 240.0, 64.0, 2.0
+
+
+def _num(v: float) -> str:
+    return f"{v:.4g}"
+
+
+def _timeseries_html(f: Field, whole: Field | None) -> str | None:
+    """A `timeseries` field as an inline SVG bar chart, or None for no shape.
+
+    Generic over the field's shape (`series_points`), never over who emitted
+    it (§5.8). A field declared `of` a numeric sibling draws that sibling as a
+    dashed reference line across the chart — the same relation `of` declares
+    for a scalar (spend `of` budget), drawn as a line because each point is
+    measured against it.
+
+    Uncoloured on purpose, like the part-of-whole bar: `of` is a relation, not
+    a declared baseline, so it earns no verdict colour (§5.4). Nothing is
+    carried by length alone (§5.7): the SVG has a `<title>` per bar and the
+    span, latest, peak and reference value are printed beside it in text,
+    with how many points sit above the reference.
+    """
+    points = series_points(f.value)
+    if not points:
+        return None
+    ys = [y for _, y in points if y is not None]
+    ref = None
+    if whole is not None and isinstance(whole.value, (int, float)) \
+            and not isinstance(whole.value, bool):
+        ref = float(whole.value)
+    unit = f" {f.unit}" if f.unit else ""
+    lo = min([0.0, *ys, *([ref] if ref is not None else [])])
+    hi = max([0.0, *ys, *([ref] if ref is not None else [])])
+    span = (hi - lo) or 1.0
+    inner_h = _CHART_H - 2 * _CHART_PAD
+
+    def y_at(v: float) -> float:
+        return _CHART_PAD + (hi - v) / span * inner_h
+
+    slot = (_CHART_W - 2 * _CHART_PAD) / len(points)
+    bar_w = max(slot * 0.8, 0.5)
+    zero = y_at(0.0)
+    bars = []
+    for i, (label, y) in enumerate(points):
+        if y is None:
+            continue  # a gap: the point was not measured, which is not zero
+        x = _CHART_PAD + i * slot + (slot - bar_w) / 2
+        top, bottom = sorted((y_at(y), zero))
+        bars.append(
+            f'<rect x="{x:.2f}" y="{top:.2f}" width="{bar_w:.2f}" '
+            f'height="{max(bottom - top, 0.5):.2f}">'
+            f"<title>{esc(label)}: {esc(_num(y))}{esc(unit)}</title></rect>"
+        )
+    line = ""
+    if ref is not None:
+        ry = y_at(ref)
+        line = (f'<line class="ts-ref" x1="0" x2="{_CHART_W:g}" y1="{ry:.2f}" '
+                f'y2="{ry:.2f}"><title>{esc(whole.name)}: '  # type: ignore[union-attr]
+                f"{esc(_num(ref))}{esc(unit)}</title></line>")
+    summary = [f"{len(points)} points, {points[0][0]} – {points[-1][0]}"]
+    if ys:
+        latest = next(y for _, y in reversed(points) if y is not None)
+        summary += [f"latest {_num(latest)}{unit}", f"peak {_num(max(ys))}{unit}"]
+    else:
+        summary.append("no measured point")
+    if ref is not None:
+        above = sum(1 for y in ys if y > ref)
+        summary.append(f"{whole.name} {_num(ref)}{unit} "  # type: ignore[union-attr]
+                       f"({above} of {len(ys)} above)")
+    text = " · ".join(summary)
+    return (
+        f'<svg class="ts-chart" viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
+        f'preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
+        f"<title>{esc(f.name)}: {esc(text)}</title>"
+        + "".join(bars) + line
+        + f'</svg><br><small class="ts-summary">{esc(text)}</small>'
+    )
 
 
 def _field_columns(entities: list[Entity]) -> list[str]:

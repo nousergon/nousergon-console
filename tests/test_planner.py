@@ -358,3 +358,11 @@ def test_alerts_render_on_both_pages_and_in_json():
 def test_bad_alert_declarations_fail_by_name(alerts, needle):
     with pytest.raises(planner.PlannerConfigError, match=needle):
         _alert_plan(alerts)
+
+
+def test_equal_instants_break_on_id_descending():
+    src = {"name": "x", "facets": {"pipeline": "pages"}}
+    rows = [_alert_row(f"day:2026-10-0{n}") for n in (2, 7, 4)]
+    a = planner.evaluate(_alert_index(_alert_plan({"sources": [src]}), rows))[0]["alerts"]
+    assert [i["entity"] for i in a["items"]] == [
+        "day:2026-10-07", "day:2026-10-04", "day:2026-10-02"]

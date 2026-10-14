@@ -541,11 +541,12 @@ def evaluate_alerts(index: Any, alerts: Alerts | None) -> dict[str, Any]:
                 "state": ent.state_value,
             }))
         sources.append({"name": src.name, "selector": src.selector, "matched": matched})
-    # Newest first; an undatable row after every dated one; the id breaks ties
-    # so equal instants render in one order on every request.
-    rows.sort(key=lambda r: r[1])
-    rows.sort(key=lambda r: (r[0] is not None, r[0] or datetime.min.replace(
-        tzinfo=timezone.utc)), reverse=True)
+    # Newest first; an undatable row after every dated one. Equal instants
+    # (a replay re-observes many incidents in one pass) break on the id,
+    # descending, so the order is the same on every request and dated ids
+    # list their newest day first.
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda r: (r[0] is not None, r[0] or floor, r[1]), reverse=True)
     return {"declared": True, "limit": alerts.limit, "sources": sources,
             "items": [r[2] for r in rows[:alerts.limit]]}
 

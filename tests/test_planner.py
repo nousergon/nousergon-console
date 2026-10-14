@@ -201,6 +201,7 @@ def test_example_config_declares_a_plan_that_builds():
                           / "config.example.yaml").read_text())
     plan = planner.parse(cfg["planner"])
     assert plan.refs and plan.org is None
+    assert plan.projects[0].alerts and plan.projects[0].alerts.sources
 
 
 def test_calendar_colours_each_project_and_keeps_the_state_word():
@@ -236,3 +237,124 @@ def test_pace_false_judges_a_gate_read_on_the_day_by_date_and_blockers():
     assert blocked["state"] == planner.THREATENED
     with pytest.raises(planner.PlannerConfigError, match="pace"):
         _plan([_ms(reqs, pace="no")])
+
+
+# ------------------------------------------------------------ alert updates --
+
+def _alert_row(eid, kind="incident", facets=None, as_of="2026-10-13T10:00:00Z",
+               evidence="s3://b/k.json", **fields):
+    from console.model.entity import Entity, Provenance
+    from console.model.kinds import Kind
+
+    return Entity(kind=Kind(kind), id=eid, state="open",
+                  provenance=Provenance(source="s3://b", as_of=as_of, evidence=evidence),
+                  facets=facets if facets is not None else {"pipeline": "pages"},
+                  detail={"fields": {k: {"value": v, "render": "text"}
+                                     for k, v in fields.items()}})
+
+
+def _alert_index(plan, rows):
+    from console.model.envelope import AdapterResult
+
+    index = _index(plan)
+    index.add_result(AdapterResult(name="pages", status=AdapterStatus.OK,
+                                   entities=tuple(rows)))
+    return index
+
+
+def _alert_plan(alerts):
+    return planner.parse({"org": "o", "projects": [
+        {"id": "p", "title": "Project", "milestones": [_ms(["repo-I1"])],
+         "alerts": alerts}]})
+
+
+PAGES = {"name": "page", "kind": "incident", "facets": {"pipeline": "pages"},
+         "text": "{rendered}", "at": "last_observed_utc", "where": {"sent": True}}
+
+
+def test_alerts_list_newest_first_with_text_time_and_link():
+    rows = [
+        _alert_row("a-old", rendered="[crucible-v2] FAILURE old\ncause: x",
+                   last_observed_utc="2026-10-12T01:00:00Z", sent=True),
+        _alert_row("a-new", rendered="[crucible-v2] FAILURE new",
+                   last_observed_utc="2026-10-14T01:02:23Z", sent=True),
+        _alert_row("a-unsent", rendered="never sent",
+                   last_observed_utc="2026-10-15T00:00:00Z", sent=False),
+        _alert_row("other", facets={"pipeline": "elsewhere"}, rendered="not mine",
+                   sent=True),
+    ]
+    a = planner.evaluate(_alert_index(_alert_plan({"sources": [PAGES]}), rows),
+                         now=date(2026, 10, 14))[0]["alerts"]
+    assert [i["entity"] for i in a["items"]] == ["a-new", "a-old"]
+    first, second = a["items"]
+    assert first["at"] == "2026-10-14T01:02:23Z"
+    assert second["text"] == "[crucible-v2] FAILURE old"  # first line only
+    # evidence is not http(s), so the link is the row's own console page
+    assert first["url"] == first["entity_url"] == "/incident/a-new"
+    assert a["sources"] == [{"name": "page", "selector":
+                             "kind=incident pipeline=pages sent=True", "matched": 2}]
+
+
+def test_alerts_limit_link_field_and_as_of_fallback():
+    report = {"name": "daily", "facets": {"pipeline": "pages"},
+              "text": "{phase}: board {board_met}", "link": "update_url"}
+    rows = [_alert_row(f"r{n}", as_of=f"2026-10-1{n}T15:00:00Z", phase="p1",
+                       board_met=f"{n}/9", update_url=f"https://gh/c{n}")
+            for n in range(1, 5)]
+    rows.append(_alert_row("r0", as_of=None, phase=None))
+    a = planner.evaluate(_alert_index(
+        _alert_plan({"limit": 2, "sources": [report]}), rows))[0]["alerts"]
+    assert [i["entity"] for i in a["items"]] == ["r4", "r3"]
+    assert a["items"][0]["text"] == "p1: board 4/9"
+    assert a["items"][0]["url"] == "https://gh/c4"
+    assert a["limit"] == 2 and a["sources"][0]["matched"] == 5
+
+
+def test_a_template_naming_a_missing_field_falls_back_to_the_row_id():
+    src = {"name": "x", "facets": {"pipeline": "pages"}, "text": "{nope}"}
+    a = planner.evaluate(_alert_index(_alert_plan({"sources": [src]}),
+                                      [_alert_row("row-1")]))[0]["alerts"]
+    assert a["items"][0]["text"] == "row-1"
+
+
+def test_undeclared_and_unmatched_alerts_render_their_absence():
+    from console.render.html import planner_page, planner_project_page
+
+    none = _index(_plan([_ms(["repo-I1"])]))
+    assert planner.evaluate(none)[0]["alerts"]["declared"] is False
+    assert "no alert source declared" in planner_page(none)
+
+    index = _alert_index(_alert_plan({"sources": [PAGES]}), [])
+    page = planner_project_page(index, "p")
+    assert "alert updates (latest 5)" in page
+    assert "page: no row matches" in page and "pipeline=pages" in page
+
+
+def test_alerts_render_on_both_pages_and_in_json():
+    from console.render.html import planner_page, planner_project_page
+
+    rows = [_alert_row("a1", rendered="<b>FAILURE</b>", sent=True,
+                       last_observed_utc="2026-10-14T01:00:00Z",
+                       evidence="https://example/a1")]
+    index = _alert_index(_alert_plan({"sources": [PAGES]}), rows)
+    for page in (planner_page(index), planner_project_page(index, "p")):
+        assert "&lt;b&gt;FAILURE&lt;/b&gt;" in page and "<b>FAILURE" not in page
+        assert 'href="https://example/a1"' in page and 'href="/incident/a1"' in page
+    doc = render_json.payload(index, resolve("/planner"))
+    assert doc["projects"][0]["alerts"]["items"][0]["entity"] == "a1"
+
+
+@pytest.mark.parametrize("alerts, needle", [
+    ({"sources": []}, "at least one selector"),
+    ({"sources": [{"name": "x"}]}, "facets"),
+    ({"sources": [{"name": "x", "facets": {}}]}, "facets"),
+    ({"sources": [{"name": "x", "facets": {"a": "b"}, "kind": "nope"}]}, "kind"),
+    ({"sources": [{"name": "x", "facets": {"a": "b"}},
+                  {"name": "x", "facets": {"a": "c"}}]}, "twice"),
+    ({"limit": 0, "sources": [{"name": "x", "facets": {"a": "b"}}]}, "limit"),
+    ({"sources": [{"name": "x", "facets": {"a": "b"}, "text": "{oops"}]}, "template"),
+    (["not", "a", "mapping"], "mapping"),
+])
+def test_bad_alert_declarations_fail_by_name(alerts, needle):
+    with pytest.raises(planner.PlannerConfigError, match=needle):
+        _alert_plan(alerts)

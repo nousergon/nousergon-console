@@ -1027,6 +1027,31 @@ def _planner_milestone_rows(project: dict, with_items: bool) -> str:
     return f'<table class="plan-table">{head}{"".join(out)}</table>'
 
 
+def _planner_alerts(project: dict) -> str:
+    """The project's newest alert updates (`alerts:` selectors), newest first.
+    A project that declares none says so; a selector that matched no row is
+    named, so an empty list never reads as "nothing was sent"."""
+    a = project.get("alerts") or {}
+    if not a.get("declared"):
+        return ('<p class="absent plan-alerts">alert updates: no alert source '
+                'declared for this project</p>')
+    rows = "".join(
+        f'<li><time>{esc(i["at"] or "time unknown")}</time> · '
+        f'<span class="plan-source">{esc(i["source"])}</span> · '
+        f'<a href="{esc(i["url"])}">{esc(i["text"])}</a>'
+        + (f' · <a href="{esc(i["entity_url"])}">row</a>'
+           if i["entity_url"] != i["url"] else "")
+        + "</li>"
+        for i in a["items"])
+    empty = "".join(
+        f'<li class="absent">{esc(s["name"])}: no row matches '
+        f'<code>{esc(s["selector"])}</code></li>'
+        for s in a["sources"] if not s["matched"])
+    body = (f'<ul class="plan-alerts">{rows}{empty}</ul>' if rows or empty
+            else '<p class="absent">no alert rows</p>')
+    return f'<h3>alert updates (latest {a["limit"]})</h3>{body}'
+
+
 def _planner_counts(project: dict) -> str:
     return " · ".join(f'{n} {_schedule_word(s)}'
                       for s, n in project["states"].items() if n)
@@ -1047,6 +1072,7 @@ def planner_page(index: Index) -> str:
             + (f' · owner {esc(p["owner"])}' if p.get("owner") else "")
             + "</p>"
             + _planner_milestone_rows(p, with_items=False)
+            + _planner_alerts(p)
             for p in projects)
     else:
         sections = '<p class="absent">no projects declared — the `planner:` config block is empty</p>'
@@ -1084,6 +1110,7 @@ def planner_project_page(index: Index, project_id: str) -> str:
 {index_freshness(index)}
 {_planner_timeline([p])}
 {_planner_milestone_rows(p, with_items=True)}
+{_planner_alerts(p)}
 </body></html>"""
 
 

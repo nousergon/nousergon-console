@@ -193,6 +193,8 @@ def _default_reader() -> ExecutionReader | None:
                     # Keep the summary; input/output simply unavailable.
                     pass
             records.append(rec)
+        # Keep what this read paid for across a restart (config-I11792).
+        EXECUTION_CACHE.persist()
         return records
 
     return reader

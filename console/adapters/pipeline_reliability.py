@@ -1192,11 +1192,15 @@ def history_reader_for(
     fix is fan-out over a bounded thread pool rather than batching a call AWS
     does not offer.
 
-    **A terminal execution's history is read ONCE per process** and served from
+    **A terminal execution's history is read ONCE** and served from
     ``EXECUTION_CACHE`` on later passes (``console/sf_execution_cache.py``);
     only RUNNING (or redriven) executions are re-read. Measured 2026-10-07:
     ~120-160 ``GetExecutionHistory`` calls a minute, around the clock, almost
-    all of them re-reading histories that could not have changed.
+    all of them re-reading histories that could not have changed. Since
+    alpha-engine-config-I11792 the cache also survives a process restart when
+    the host gives it a ``CacheDirectory`` — measured 2026-10-14, every console
+    restart re-read every retained history (~400 calls, mostly 1000-event
+    weekly pages), and a day of deploys made that ~800 calls an hour.
     """
     if not degraded_state_names:
         return None
@@ -1256,6 +1260,8 @@ def history_reader_for(
                 entered = future.result()
                 if entered is not None:
                     rec["entered_states"] = entered
+        # Keep what this read paid for across a restart (config-I11792).
+        EXECUTION_CACHE.persist()
 
     return attach
 

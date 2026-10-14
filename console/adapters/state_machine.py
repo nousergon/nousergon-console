@@ -426,6 +426,8 @@ def _default_reader() -> ExecutionReader | None:
                     # this one execution — cycle/artifact derivation skips it.
                     pass
             records.append(rec)
+        # Keep what this read paid for across a restart (config-I11792).
+        EXECUTION_CACHE.persist()
         return records
 
     return reader

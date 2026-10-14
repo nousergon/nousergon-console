@@ -85,8 +85,10 @@ def sfn(monkeypatch):
     fake = FakeSFN()
     for mod in (sm_adapter, sm_driver, pr):
         monkeypatch.setattr(mod, "_aws_client", lambda _service, _region=None: fake)
+    sf_execution_cache.EXECUTION_CACHE.use_store(None)
     sf_execution_cache.EXECUTION_CACHE.clear()
     yield fake
+    sf_execution_cache.EXECUTION_CACHE.use_store(None)
     sf_execution_cache.EXECUTION_CACHE.clear()
 
 
@@ -236,3 +238,136 @@ def test_change_tag_is_none_unless_terminal_with_stop_date():
     assert tag({"status": "ABORTED", "stopDate": "x"}) == ("ABORTED", "x", "0")
     assert tag({"status": "TIMED_OUT", "stopDate": "x", "redriveCount": 2}) == \
         ("TIMED_OUT", "x", "2")
+
+
+# ── persisted across a restart (alpha-engine-config-I11792) ──────────────────
+#
+# Measured 2026-10-14: every console restart re-read every retained execution's
+# history (~400 GetExecutionHistory calls, mostly 1000-event weekly pages), and
+# seven restarts in an afternoon made that ~800 calls an hour. A restart is
+# modelled here as dropping the in-memory cache and re-pointing it at the same
+# store — exactly what a new process sees.
+
+
+def _restart(path):
+    cache = sf_execution_cache.EXECUTION_CACHE
+    cache.use_store(None)
+    cache.clear()
+    cache.use_store(str(path))
+
+
+def test_terminal_execution_is_not_refetched_after_a_restart(sfn, tmp_path):
+    store = tmp_path / "sf_execution_cache.json"
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(store))
+    sfn.add("w-0919", "SUCCEEDED", "2026-09-19T09:00:00", "2026-09-19T12:00:00", entered=STAGES)
+    sfn.add("w-0926", "FAILED", "2026-09-26T09:00:00", "2026-09-26T09:10:00", entered=STAGES[:1])
+    sfn.add("w-1003", "RUNNING", "2026-10-03T09:00:00", entered=STAGES[:1])
+
+    first = _pass(sfn)
+    assert sorted(sfn.histories) == ["w-0919", "w-0926", "w-1003"]
+    assert store.exists()
+
+    _restart(store)
+    second = _pass(sfn)
+    # Only the RUNNING execution is re-read; the finished ones come off disk.
+    assert sfn.describes == ["w-1003"]
+    assert sfn.histories == ["w-1003"]
+    assert _render(second) == _render(first)
+
+
+def test_restored_describe_keeps_its_datetimes(sfn, tmp_path):
+    store = tmp_path / "c.json"
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(store))
+    sfn.add("w-0926", "SUCCEEDED", "2026-09-26T09:00:00", "2026-09-26T12:00:00")
+    reader = sm_driver._default_reader()
+    first = reader(REGION, SM_ARN)
+
+    _restart(store)
+    sfn.describes.clear()
+    second = reader(REGION, SM_ARN)
+    assert sfn.describes == []
+    assert second == first
+    assert isinstance(second[0]["stopDate"], datetime)
+
+
+def test_execution_redriven_while_down_is_reread_after_restart(sfn, tmp_path):
+    store = tmp_path / "c.json"
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(store))
+    arn = sfn.add("w-0926", "FAILED", "2026-09-26T09:00:00", "2026-09-26T09:10:00",
+                  entered=STAGES[:1])
+    _pass(sfn)
+
+    sfn.executions[arn].update(status="SUCCEEDED", redriveCount=1,
+                               stopDate=_dt("2026-09-27T01:00:00"))
+    sfn.history[arn] = list(STAGES)
+    _restart(store)
+    _pass(sfn)
+    assert sfn.describes == ["w-0926"] and sfn.histories == ["w-0926"]
+
+
+def test_execution_gone_while_down_is_dropped_from_the_store(sfn, tmp_path):
+    store = tmp_path / "c.json"
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(store))
+    sfn.add("w-0919", "SUCCEEDED", "2026-09-19T09:00:00", "2026-09-19T12:00:00", entered=STAGES)
+    old = sfn.add("w-0912", "SUCCEEDED", "2026-09-12T09:00:00", "2026-09-12T12:00:00",
+                  entered=STAGES)
+    _pass(sfn)
+    del sfn.executions[old]
+    _restart(store)
+    _pass(sfn)
+    assert len(sf_execution_cache.EXECUTION_CACHE) == 2
+    doc = json.loads(store.read_text())
+    assert not any(a.endswith(":w-0912") for a in doc["details"])
+    assert not any(a.endswith(":w-0912") for a in doc["entered"])
+
+
+@pytest.mark.parametrize("body", [
+    "{not json",
+    json.dumps({"version": 999, "details": {}, "entered": {}}),
+    json.dumps({"version": 1, "details": "nope"}),
+])
+def test_unreadable_store_is_a_cold_start_then_rewritten(sfn, tmp_path, body):
+    store = tmp_path / "c.json"
+    store.write_text(body)
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(store))
+    sfn.add("w-0926", "SUCCEEDED", "2026-09-26T09:00:00", "2026-09-26T12:00:00", entered=STAGES)
+    _pass(sfn)
+    assert sfn.histories == ["w-0926"]
+    assert json.loads(store.read_text())["version"] == sf_execution_cache.STORE_VERSION
+
+
+def test_unwritable_store_never_fails_the_pass(sfn, tmp_path):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("")
+    sf_execution_cache.EXECUTION_CACHE.use_store(str(blocker / "sub" / "c.json"))
+    sfn.add("w-0926", "SUCCEEDED", "2026-09-26T09:00:00", "2026-09-26T12:00:00", entered=STAGES)
+    _pass(sfn)
+    _pass(sfn)
+    assert sfn.histories == []  # in-memory cache still works
+
+
+def test_without_a_store_nothing_is_written(sfn, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sfn.add("w-0926", "SUCCEEDED", "2026-09-26T09:00:00", "2026-09-26T12:00:00", entered=STAGES)
+    _pass(sfn)
+    assert list(tmp_path.iterdir()) == []
+    assert sf_execution_cache.EXECUTION_CACHE.persist() is False
+
+
+def test_default_store_path(monkeypatch):
+    monkeypatch.delenv(sf_execution_cache.STORE_PATH_ENV, raising=False)
+    monkeypatch.delenv("CACHE_DIRECTORY", raising=False)
+    assert sf_execution_cache.default_store_path() is None
+    monkeypatch.setenv("CACHE_DIRECTORY", "/var/cache/nousergon-console:/var/cache/other")
+    assert sf_execution_cache.default_store_path() == \
+        "/var/cache/nousergon-console/sf_execution_cache.json"
+    monkeypatch.setenv(sf_execution_cache.STORE_PATH_ENV, "/x/y.json")
+    assert sf_execution_cache.default_store_path() == "/x/y.json"
+
+
+def test_service_unit_gives_the_cache_a_directory():
+    from pathlib import Path
+
+    unit = Path(__file__).resolve().parents[1] / "infrastructure" / "nousergon-console.service"
+    lines = [ln.strip() for ln in unit.read_text().splitlines()]
+    assert "CacheDirectory=nousergon-console" in lines

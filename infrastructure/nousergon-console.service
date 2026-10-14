@@ -22,6 +22,11 @@ PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=/home/ec2-user/nousergon-console
+# /var/cache/nousergon-console, exported as $CACHE_DIRECTORY: finished Step
+# Functions executions' describe/history answers persist here so a restart does
+# not re-read every retained execution (console/sf_execution_cache.py,
+# alpha-engine-config-I11792). Survives restarts; safe to delete (cold start).
+CacheDirectory=nousergon-console
 MemoryMax=112M
 OOMPolicy=restart
 

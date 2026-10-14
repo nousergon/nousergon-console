@@ -82,6 +82,9 @@ input, select, textarea { max-width: 100%; }
 .plan-table td, .plan-table th { padding: .25rem .5rem; vertical-align: top; text-align: left; }
 .plan-items ul { margin: 0; padding-left: 1.1rem; font-size: .9rem; }
 .plan-blocker { color: #b00020; }
+.plan-alerts { margin: .3rem 0 1rem; padding-left: 1.1rem; font-size: .9rem; overflow-wrap: anywhere; }
+.plan-alerts time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-source { opacity: .75; }
 .plan-table td:nth-child(3) { white-space: nowrap; }
 @media (max-width: 40rem) {
   .plan-table th { display: none; }

@@ -36,6 +36,18 @@ the project's colour, and the state sits on the target diamond with its word.
                 ``blocker_window_days`` of the target.
 ``ON_TRACK``    none of the above.
 
+**Alert updates** (Brian 2026-10-14: "lets make sure our alert updates are
+reflected there as well"). A project may declare `alerts:`, a list of entity
+SELECTORS over rows other adapters already mint (the crucible page bus, a
+daily report's history row, ...): every entity whose facets equal the
+declared `facets` (and, optionally, whose `kind` and declared field values
+match) is one alert update, and the project renders its newest `limit` with
+the time, a one-line text and a link. The tag that puts an alert on a project
+is the selector in config, never inferred from the text, and the planner reads
+no source of its own: an alert is visible here exactly when the adapter that
+records it is healthy, and a selector that matches nothing says so by name
+rather than rendering an empty list as "no alerts".
+
 "Behind the calendar" is one comparison: the fraction of the window
 ``start -> target`` already elapsed, minus the fraction of required items
 closed. It is deliberately linear and deliberately simple — a reader can redo
@@ -44,6 +56,7 @@ handful of issues could not offer.
 """
 from __future__ import annotations
 
+import string
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
@@ -70,6 +83,12 @@ DEFAULT_BLOCKER_LABELS: tuple[str, ...] = (
 )
 
 _ATTR = "_console_planner_declarations"
+
+#: How many alert updates a project shows when its `alerts:` names no `limit`.
+DEFAULT_ALERT_LIMIT = 5
+#: A rendered alert line is a headline, not the message: the first line,
+#: cut here. The whole record is one click away on its own row.
+ALERT_TEXT_MAX = 240
 
 
 class PlannerConfigError(ValueError):
@@ -107,12 +126,48 @@ class Milestone:
 
 
 @dataclass(frozen=True)
+class AlertSource:
+    """One declared selector over already-minted entities."""
+    name: str
+    facets: tuple[tuple[str, str], ...]
+    kind: str | None = None
+    #: `str.format` template over the entity's declared field names; a field
+    #: it names that the row does not carry falls back to the row's label/id.
+    text: str | None = None
+    #: Declared field holding the instant the alert was sent or last observed;
+    #: unset (or absent on the row) means the row's own `as_of`.
+    at: str | None = None
+    #: Declared field holding an http(s) link; unset or not a URL falls back
+    #: to the row's evidence link when that is http(s), else its console page.
+    link: str | None = None
+    #: Declared field values a row must carry to count (e.g. `sent: true`).
+    where: tuple[tuple[str, Any], ...] = ()
+    #: Declared field values that drop a row (e.g. `synthetic: true` drills).
+    exclude: tuple[tuple[str, Any], ...] = ()
+
+    @property
+    def selector(self) -> str:
+        parts = ([f"kind={self.kind}"] if self.kind else []) + [
+            f"{k}={v}" for k, v in self.facets] + [
+            f"{k}={v}" for k, v in self.where] + [
+            f"{k}!={v}" for k, v in self.exclude]
+        return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class Alerts:
+    sources: tuple[AlertSource, ...]
+    limit: int = DEFAULT_ALERT_LIMIT
+
+
+@dataclass(frozen=True)
 class Project:
     id: str
     title: str
     milestones: tuple[Milestone, ...]
     owner: str | None = None
     tracker: str | None = None
+    alerts: Alerts | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +212,64 @@ def _text(entry: Mapping[str, Any], key: str, where: str) -> str:
     if not value:
         raise PlannerConfigError(f"{where}: `{key}` is required")
     return value
+
+
+def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
+    if raw is None:
+        return None
+    where = f"planner project {pid!r} alerts"
+    if not isinstance(raw, Mapping):
+        raise PlannerConfigError(f"{where}: must be a mapping with `sources:`")
+    limit = raw.get("limit", DEFAULT_ALERT_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise PlannerConfigError(f"{where}: `limit` must be an integer 1..50")
+    from ..model.kinds import Kind
+
+    sources: list[AlertSource] = []
+    names: set[str] = set()
+    for s_ord, src in enumerate(raw.get("sources") or [], start=1):
+        here = f"{where} source #{s_ord}"
+        if not isinstance(src, Mapping):
+            raise PlannerConfigError(f"{here}: must be a mapping")
+        name = _text(src, "name", here)
+        here = f"{where} source {name!r}"
+        if name in names:
+            raise PlannerConfigError(f"{here}: declared twice")
+        names.add(name)
+        facets = src.get("facets")
+        if not isinstance(facets, Mapping) or not facets:
+            # A selector with no facet would claim every row in the index.
+            raise PlannerConfigError(
+                f"{here}: `facets` must name at least one facet the alert rows carry")
+        kind = str(src["kind"]).strip() if src.get("kind") else None
+        if kind is not None:
+            try:
+                Kind(kind)
+            except ValueError:
+                raise PlannerConfigError(f"{here}: unknown `kind` {kind!r}") from None
+        match = src.get("where") or {}
+        drop = src.get("exclude") or {}
+        if not isinstance(match, Mapping) or not isinstance(drop, Mapping):
+            raise PlannerConfigError(
+                f"{here}: `where` and `exclude` must map field names to values")
+        text = str(src["text"]) if src.get("text") else None
+        if text is not None:
+            try:
+                list(string.Formatter().parse(text))
+            except ValueError as exc:
+                raise PlannerConfigError(f"{here}: `text` is not a template: {exc}") from None
+        sources.append(AlertSource(
+            name=name,
+            facets=tuple((str(k), str(v)) for k, v in facets.items()),
+            kind=kind, text=text,
+            at=(str(src["at"]) if src.get("at") else None),
+            link=(str(src["link"]) if src.get("link") else None),
+            where=tuple((str(k), v) for k, v in match.items()),
+            exclude=tuple((str(k), v) for k, v in drop.items()),
+        ))
+    if not sources:
+        raise PlannerConfigError(f"{where}: `sources` must declare at least one selector")
+    return Alerts(sources=tuple(sources), limit=limit)
 
 
 def parse(raw: Any) -> Plan:
@@ -226,6 +339,7 @@ def parse(raw: Any) -> Plan:
             milestones=tuple(milestones),
             owner=(str(p["owner"]) if p.get("owner") else None),
             tracker=(str(p["tracker"]) if p.get("tracker") else None),
+            alerts=_parse_alerts(p.get("alerts"), pid),
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -356,6 +470,95 @@ def evaluate_milestone(m: Milestone, items: list[dict[str, Any]], today: date,
     }
 
 
+def _field_value(ent: Any, name: str) -> Any:
+    spec = (ent.detail.get("fields") or {}).get(name)
+    return spec.get("value") if isinstance(spec, Mapping) else spec
+
+
+def _is_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("https://", "http://"))
+
+
+def _headline(value: str) -> str:
+    line = next((ln.strip() for ln in value.splitlines() if ln.strip()), "")
+    return line if len(line) <= ALERT_TEXT_MAX else line[:ALERT_TEXT_MAX - 1] + "…"
+
+
+def _alert_text(ent: Any, src: AlertSource) -> str:
+    fallback = str(ent.detail.get("label") or ent.id)
+    if not src.text:
+        return _headline(fallback)
+    names = [f for _, f, _, _ in string.Formatter().parse(src.text) if f]
+    values = {n: _field_value(ent, n) for n in names}
+    if any(v is None for v in values.values()):
+        return _headline(fallback)
+    try:
+        return _headline(src.text.format(**values)) or _headline(fallback)
+    except (KeyError, IndexError, ValueError, AttributeError):
+        return _headline(fallback)
+
+
+def _instant(value: Any) -> tuple[datetime | None, str | None]:
+    if value is None:
+        return None, None
+    raw = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None, raw or None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed, parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _matches(ent: Any, src: AlertSource) -> bool:
+    if src.kind and ent.kind.value != src.kind:
+        return False
+    facets = ent.facets or {}
+    if any(facets.get(k) != v for k, v in src.facets):
+        return False
+    if any(_field_value(ent, k) == v for k, v in src.exclude):
+        return False
+    return all(_field_value(ent, k) == v for k, v in src.where)
+
+
+def evaluate_alerts(index: Any, alerts: Alerts | None) -> dict[str, Any]:
+    """A project's newest alert updates across its declared selectors, newest
+    first. Pure over the built index: the same rows give the same list."""
+    if alerts is None:
+        return {"declared": False, "limit": 0, "sources": [], "items": []}
+    rows: list[tuple[datetime | None, str, dict[str, Any]]] = []
+    sources = []
+    entities = list(index.all())
+    for src in alerts.sources:
+        matched = 0
+        for ent in entities:
+            if not _matches(ent, src):
+                continue
+            matched += 1
+            declared_at = _field_value(ent, src.at) if src.at else None
+            when, at = _instant(declared_at if declared_at is not None
+                                else ent.provenance.as_of)
+            link = _field_value(ent, src.link) if src.link else None
+            if not _is_url(link):
+                link = ent.provenance.evidence if _is_url(ent.provenance.evidence) else ent.route
+            rows.append((when, ent.id, {
+                "source": src.name, "at": at, "text": _alert_text(ent, src),
+                "url": link, "entity": ent.id, "entity_url": ent.route,
+                "state": ent.state_value,
+            }))
+        sources.append({"name": src.name, "selector": src.selector, "matched": matched})
+    # Newest first; an undatable row after every dated one. Equal instants
+    # (a replay re-observes many incidents in one pass) break on the id,
+    # descending, so the order is the same on every request and dated ids
+    # list their newest day first.
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    rows.sort(key=lambda r: (r[0] is not None, r[0] or floor, r[1]), reverse=True)
+    return {"declared": True, "limit": alerts.limit, "sources": sources,
+            "items": [r[2] for r in rows[:alerts.limit]]}
+
+
 def evaluate(index: Any, now: datetime | date | None = None,
              plan: Plan | None = None) -> list[dict[str, Any]]:
     """Every declared project with every milestone evaluated, in declared
@@ -387,6 +590,7 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "states": {s: sum(1 for m in milestones if m["state"] == s)
                        for s in SCHEDULE_STATES},
             "milestones": milestones,
+            "alerts": evaluate_alerts(index, p.alerts),
         })
     return out
 

@@ -1476,3 +1476,22 @@ planner:
           # only AT the target by design (a gate read on the day): closure
           # count cannot show pace, so date and blockers alone decide.
           # pace: false
+      # Optional: the project's ALERT UPDATES, newest first. Each source is a
+      # SELECTOR over rows other adapters already mint: every entity whose
+      # facets equal `facets` (whose declared fields equal `where`, and none
+      # equal `exclude`) is one alert. `text` is a template over the row's
+      # declared fields (first line shown; a missing field falls back to the
+      # row's label or id), `at` a field holding the send time (default: the
+      # row's as-of), `link` a field holding an http(s) link (default: its
+      # evidence, else its console page). A selector matching no row is named
+      # on the page.
+      alerts:
+        limit: 5
+        sources:
+          - name: page
+            kind: incident
+            facets: {pipeline: example-pages}
+            text: "{rendered}"
+            at: last_observed_utc
+            where: {sent: true}
+            exclude: {synthetic: true}

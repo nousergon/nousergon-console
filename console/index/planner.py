@@ -142,12 +142,15 @@ class AlertSource:
     link: str | None = None
     #: Declared field values a row must carry to count (e.g. `sent: true`).
     where: tuple[tuple[str, Any], ...] = ()
+    #: Declared field values that drop a row (e.g. `synthetic: true` drills).
+    exclude: tuple[tuple[str, Any], ...] = ()
 
     @property
     def selector(self) -> str:
         parts = ([f"kind={self.kind}"] if self.kind else []) + [
             f"{k}={v}" for k, v in self.facets] + [
-            f"{k}={v}" for k, v in self.where]
+            f"{k}={v}" for k, v in self.where] + [
+            f"{k}!={v}" for k, v in self.exclude]
         return " ".join(parts)
 
 
@@ -245,8 +248,10 @@ def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
             except ValueError:
                 raise PlannerConfigError(f"{here}: unknown `kind` {kind!r}") from None
         match = src.get("where") or {}
-        if not isinstance(match, Mapping):
-            raise PlannerConfigError(f"{here}: `where` must map field names to values")
+        drop = src.get("exclude") or {}
+        if not isinstance(match, Mapping) or not isinstance(drop, Mapping):
+            raise PlannerConfigError(
+                f"{here}: `where` and `exclude` must map field names to values")
         text = str(src["text"]) if src.get("text") else None
         if text is not None:
             try:
@@ -260,6 +265,7 @@ def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
             at=(str(src["at"]) if src.get("at") else None),
             link=(str(src["link"]) if src.get("link") else None),
             where=tuple((str(k), v) for k, v in match.items()),
+            exclude=tuple((str(k), v) for k, v in drop.items()),
         ))
     if not sources:
         raise PlannerConfigError(f"{where}: `sources` must declare at least one selector")
@@ -511,6 +517,8 @@ def _matches(ent: Any, src: AlertSource) -> bool:
         return False
     facets = ent.facets or {}
     if any(facets.get(k) != v for k, v in src.facets):
+        return False
+    if any(_field_value(ent, k) == v for k, v in src.exclude):
         return False
     return all(_field_value(ent, k) == v for k, v in src.where)
 

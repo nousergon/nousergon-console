@@ -269,7 +269,8 @@ def _alert_plan(alerts):
 
 
 PAGES = {"name": "page", "kind": "incident", "facets": {"pipeline": "pages"},
-         "text": "{rendered}", "at": "last_observed_utc", "where": {"sent": True}}
+         "text": "{rendered}", "at": "last_observed_utc", "where": {"sent": True},
+         "exclude": {"synthetic": True}}
 
 
 def test_alerts_list_newest_first_with_text_time_and_link():
@@ -282,6 +283,8 @@ def test_alerts_list_newest_first_with_text_time_and_link():
                    last_observed_utc="2026-10-15T00:00:00Z", sent=False),
         _alert_row("other", facets={"pipeline": "elsewhere"}, rendered="not mine",
                    sent=True),
+        _alert_row("drill", rendered="drill", sent=True, synthetic=True,
+                   last_observed_utc="2026-10-16T00:00:00Z"),
     ]
     a = planner.evaluate(_alert_index(_alert_plan({"sources": [PAGES]}), rows),
                          now=date(2026, 10, 14))[0]["alerts"]
@@ -292,7 +295,8 @@ def test_alerts_list_newest_first_with_text_time_and_link():
     # evidence is not http(s), so the link is the row's own console page
     assert first["url"] == first["entity_url"] == "/incident/a-new"
     assert a["sources"] == [{"name": "page", "selector":
-                             "kind=incident pipeline=pages sent=True", "matched": 2}]
+                             "kind=incident pipeline=pages sent=True synthetic!=True",
+                             "matched": 2}]
 
 
 def test_alerts_limit_link_field_and_as_of_fallback():
@@ -353,6 +357,7 @@ def test_alerts_render_on_both_pages_and_in_json():
                   {"name": "x", "facets": {"a": "c"}}]}, "twice"),
     ({"limit": 0, "sources": [{"name": "x", "facets": {"a": "b"}}]}, "limit"),
     ({"sources": [{"name": "x", "facets": {"a": "b"}, "text": "{oops"}]}, "template"),
+    ({"sources": [{"name": "x", "facets": {"a": "b"}, "exclude": ["s"]}]}, "exclude"),
     (["not", "a", "mapping"], "mapping"),
 ])
 def test_bad_alert_declarations_fail_by_name(alerts, needle):

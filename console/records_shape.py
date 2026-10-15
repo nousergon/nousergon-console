@@ -161,6 +161,34 @@ def project(body: Any, fmt: str, records_path: str | None,
     return select([{}], limit, order), parsed
 
 
+def parse_jsonl(body: Any) -> tuple[list[dict], int]:
+    """Split a JSON Lines body into `(records, malformed)`.
+
+    Every non-blank line must be one JSON OBJECT. A line that does not parse,
+    or parses to anything but an object, is skipped and counted, never
+    raised: one torn or foreign line in a log of hundreds is a finding about
+    that line, and failing the whole body would hide every good line beside
+    it (§2.3). Blank lines (a trailing newline, a delimiter) are not records
+    and are not counted.
+    """
+    text = body if isinstance(body, str) else bytes(body).decode("utf-8")
+    records: list[dict] = []
+    malformed = 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            malformed += 1
+            continue
+        if isinstance(parsed, dict):
+            records.append(parsed)
+        else:
+            malformed += 1
+    return records, malformed
+
+
 def _explode_grouped(cur: Any, parts: list[str],
                       group_field: str | None) -> list[dict]:
     """Resolve a `records_path` containing a `*` segment. `*` iterates a

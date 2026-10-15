@@ -623,10 +623,10 @@ facet — on the Component's own entity page with no new rendering path.
 
 | | |
 |---|---|
-| **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON or CSV) |
+| **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON, CSV, or date-partitioned JSON Lines) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`) |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`) |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -689,6 +689,24 @@ csv` ignores both — the whole file is the record list):
   body to fan out. Kind, id, state and facets stay declarations: a
   `job@date` Run id collapses a dated series to its newest row, which
   `object-store`'s per-key Artifact with a cadence-staleness state cannot do.
+- **`format: jsonl`** (alpha-engine-config-I12323): each non-blank line of a
+  body is one JSON object and one record, the shape a delivery stream writes
+  when it appends a newline to every event. The prefix is read as a
+  Hive-style date-partitioned tree, `{prefix}{partition_key}=YYYY-MM-DD/`
+  (`partition_key` defaults to `dt`), and the read is bounded on both axes:
+  only the last `days` UTC partitions, today included, are listed (default 7,
+  at most 90), one listing per day, and only the newest `max_objects`
+  matching objects are read (default 500, at most 5000). A read the object
+  cap cut short adds `max_objects` to `unavailable`. A line that does not
+  parse, or is not a JSON object, is skipped and counted as
+  `malformed_lines:N`; its neighbours still render. A window with no
+  partitions yet is an OK source with zero rows, not a failure. Field and
+  facet paths are dotted into each line (`detail.severity`); `id_template`
+  formats against the line's top-level scalars. The same `id` in two objects
+  (at-least-once delivery) is one row. `limit`/`order` bound the lines of
+  one object; `records_path`, `array_fields` and `body` are refused. A
+  console older than this value reads such a source as unparseable JSON and
+  lists its whole prefix, so deploy the console before the config.
 - **`body: text`** (with `format: object` only): the listing entry is still
   the record, and the object's UTF-8 text rides beside it as
   `detail["document"]` (`text`, `bytes`, `truncated`). The entity page shows

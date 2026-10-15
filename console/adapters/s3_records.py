@@ -41,6 +41,15 @@ different ways a body expresses that:
   ``detail["document"]`` and shown on the entity page (``body: markdown``
   carries it the same way and the page renders it as markdown); ``window_days`` has a
   list of the rows open on its last N days with an archive one link away.
+- **JSON Lines** (``format: jsonl``): each non-blank line of a body is one
+  JSON object and one record — a Firehose delivery of one event per line
+  (`alpha-engine-config-I12323`'s alert log). The prefix is read as a
+  Hive-style date-partitioned tree (``{prefix}dt=YYYY-MM-DD/``) and only the
+  last ``days`` partitions are listed, newest ``max_objects`` objects read, so
+  a log that grows forever is never listed whole. A line that is not a JSON
+  object is skipped and COUNTED (``malformed_lines:N`` in ``unavailable``);
+  it never drops its neighbours or the source. An empty window is zero rows
+  and an OK source, not a failure.
 
 Every field beyond id/state/provenance is declared in config (§5.8) — a
 ``{field_name: {path, unit, render, baseline}}`` map resolved against the
@@ -82,7 +91,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ..model.entity import (
@@ -92,8 +101,9 @@ from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
 from ..records_shape import (
-    build_fields, flat_context, get_path, project, resolve_dates, resolve_facets,
-    resolve_id, resolve_label, resolve_state, valid_date_fields,
+    build_fields, flat_context, get_path, parse_jsonl, project, resolve_dates,
+    resolve_facets, resolve_id, resolve_label, resolve_state, select,
+    valid_date_fields,
 )
 from .object_store import _parse_cadence  # second adoption, one repo — see below
 from ..aws import client as _aws_client
@@ -114,7 +124,8 @@ StoreLister = Callable[[str, str], list[StoredObject]]
 #: JSON, or the raw text for CSV. Raises when the object is unreadable.
 BodyReader = Callable[[str, str], Any]
 #: A text reader takes (bucket, key) and returns the body as UTF-8 text, never
-#: parsed. Used only by `format: object` with `body: text` or `body: markdown`.
+#: parsed. Used by `format: object` with `body: text` or `body: markdown`, and
+#: by `format: jsonl`, whose body this adapter splits into lines itself.
 TextReader = Callable[[str, str], str]
 
 
@@ -135,10 +146,17 @@ def fetch(
             missing.append("kind")
         return _failed(config, tuple(missing) or ("all",))
     fmt = config.get("format", "json")
-    if fmt == OBJECT_FORMAT and (config.get("records_path") or config.get("array_fields")):
-        # A listing entry is ONE record. A fan-out over a body this format
-        # never reads is a config typo, not something to guess around.
+    if fmt in (OBJECT_FORMAT, JSONL_FORMAT) and (config.get("records_path")
+                                                 or config.get("array_fields")):
+        # A listing entry is ONE record, and a JSON Lines line is ONE record.
+        # A fan-out these formats never perform is a config typo, not
+        # something to guess around.
         return _failed(config, ("format",))
+    jsonl_bounds = None
+    if fmt == JSONL_FORMAT:
+        jsonl_bounds, bad_bounds = _jsonl_bounds(config)
+        if bad_bounds:
+            return _failed(config, bad_bounds)
     body_mode = config.get("body")
     if body_mode is not None and (fmt != OBJECT_FORMAT or body_mode not in BODY_MODES):
         # `body` carries a document beside a listing record; on a parsed
@@ -158,13 +176,19 @@ def fetch(
         # Dates exist only to be formatted into a label; a typo in their
         # declaration must fail loudly, not render every row by its id.
         return _failed(config, ("date_fields",))
-    if lister is None or reader is None or (body_mode and text_reader is None):
+    # `format: object` reads no body at all, and `format: jsonl` reads its
+    # body as text: neither needs the parsing reader.
+    needs_reader = fmt not in (OBJECT_FORMAT, JSONL_FORMAT)
+    needs_text = bool(body_mode) or fmt == JSONL_FORMAT
+    if (lister is None or (needs_reader and reader is None)
+            or (needs_text and text_reader is None)):
         default_lister, default_reader, default_text = _default_s3()
         lister = lister or default_lister
         reader = reader or default_reader
         text_reader = text_reader or default_text
-        missing = [n for n, v in (("lister", lister), ("reader", reader)) if v is None]
-        if body_mode and text_reader is None:
+        missing = [n for n, v in (("lister", lister), ("reader", reader))
+                   if v is None and (n == "lister" or needs_reader)]
+        if needs_text and text_reader is None:
             missing.append("text_reader")
         if missing:
             return _failed(config, tuple(missing))
@@ -177,8 +201,13 @@ def fetch(
     now = now or datetime.now(timezone.utc)
     source_label = f"s3://{bucket}/{prefix}"
 
+    capped = False
     try:
-        objects = lister(bucket, prefix)
+        if jsonl_bounds is not None:
+            objects, capped = _list_partitions(lister, bucket, prefix, regex,
+                                               jsonl_bounds, now)
+        else:
+            objects = lister(bucket, prefix)
     except Exception:
         return AdapterResult(
             claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=config.get("_name", name),
@@ -189,6 +218,8 @@ def fetch(
     edges: list[Edge] = []
     partial = False
     unlabelled = False
+    malformed = 0
+    seen_ids: set[str] = set()
 
     for key, last_modified in objects:
         m = regex.search(key)
@@ -198,6 +229,13 @@ def fetch(
         if fmt == OBJECT_FORMAT:
             # The listing entry IS the record: no body is fetched or parsed.
             body = _listing_record(key, last_modified, groups)
+        elif fmt == JSONL_FORMAT:
+            try:
+                body, bad = parse_jsonl(text_reader(bucket, key))  # type: ignore[misc]
+            except Exception:
+                partial = True
+                continue
+            malformed += bad
         else:
             try:
                 body = reader(bucket, key)
@@ -222,6 +260,12 @@ def fetch(
             if mapped is None:
                 partial = True
                 continue
+            if fmt == JSONL_FORMAT:
+                # Firehose delivers at least once: the same event can land in
+                # two objects. One event is one row, whichever object held it.
+                if mapped.id in seen_ids:
+                    continue
+                seen_ids.add(mapped.id)
             if label_template and LABEL_DETAIL not in mapped.detail:
                 unlabelled = True
             if body_mode:
@@ -263,8 +307,74 @@ def fetch(
         status=AdapterStatus.OK,
         entities=tuple(entities),
         edges=tuple(edges),
-        unavailable=(("body",) if partial else ()) + (("label",) if unlabelled else ()),
+        unavailable=(("body",) if partial else ()) + (("label",) if unlabelled else ())
+        + ((f"malformed_lines:{malformed}",) if malformed else ())
+        + (("max_objects",) if capped else ()),
     )
+
+
+#: `format: jsonl` (alpha-engine-config-I12323). A body is UTF-8 JSON Lines,
+#: one JSON object per line, each one record — the shape a Firehose delivery
+#: stream writes when every event is followed by a newline. The prefix is a
+#: Hive-style date-partitioned tree, `{prefix}{partition_key}=YYYY-MM-DD/`,
+#: and the read is BOUNDED on both axes: only the last `days` UTC partitions
+#: (today included) are listed, and only the newest `max_objects` matching
+#: objects are read. A log that is appended to forever is therefore never
+#: listed whole, and a burst day cannot turn one rebuild into thousands of
+#: GETs; a read the object cap cut short says so (`max_objects`).
+JSONL_FORMAT = "jsonl"
+DEFAULT_JSONL_DAYS = 7
+DEFAULT_JSONL_MAX_OBJECTS = 500
+#: The ceilings a declaration may raise the bounds to. Past these the read is
+#: no longer the bounded one this format promises.
+MAX_JSONL_DAYS = 90
+MAX_JSONL_OBJECTS = 5000
+DEFAULT_PARTITION_KEY = "dt"
+
+
+def _positive_int(value: Any, ceiling: int) -> bool:
+    return (not isinstance(value, bool) and isinstance(value, int)
+            and 1 <= value <= ceiling)
+
+
+def _jsonl_bounds(config: dict[str, Any]) -> tuple[tuple, tuple[str, ...]]:
+    """`((days, max_objects, partition_key), malformed_keys)` for
+    `format: jsonl`. A malformed key FAILS the source rather than silently
+    widening or narrowing the read."""
+    days = config.get("days", DEFAULT_JSONL_DAYS)
+    max_objects = config.get("max_objects", DEFAULT_JSONL_MAX_OBJECTS)
+    partition_key = config.get("partition_key", DEFAULT_PARTITION_KEY)
+    bad = tuple(n for n, ok in (
+        ("days", _positive_int(days, MAX_JSONL_DAYS)),
+        ("max_objects", _positive_int(max_objects, MAX_JSONL_OBJECTS)),
+        ("partition_key", isinstance(partition_key, str)
+         and bool(partition_key.strip()) and "/" not in partition_key),
+    ) if not ok)
+    return (days, max_objects, partition_key), bad
+
+
+def _list_partitions(lister: StoreLister, bucket: str, prefix: str,
+                     regex: Any, bounds: tuple, now: datetime,
+                     ) -> tuple[list[StoredObject], bool]:
+    """The newest `max_objects` matching objects across the last `days`
+    date partitions, newest first, and whether that cap dropped any.
+
+    One listing per partition prefix, so the read never enumerates a day
+    outside the window. A partition that does not exist yet lists empty —
+    which is how a log that is not live yet reads: zero rows, not an error.
+    A listing that RAISES fails the whole source, as for every other format.
+    """
+    days, max_objects, partition_key = bounds
+    today = now.astimezone(timezone.utc).date()
+    found: list[StoredObject] = []
+    for back in range(days):
+        day = (today - timedelta(days=back)).isoformat()
+        found.extend(o for o in lister(bucket, f"{prefix}{partition_key}={day}/")
+                     if regex.search(o[0]))
+    # Newest first by the listing's own stamp, then by key: Firehose names
+    # carry the delivery time, so key order is arrival order within a day.
+    found.sort(key=lambda o: (o[1] or "", o[0]), reverse=True)
+    return found[:max_objects], len(found) > max_objects
 
 
 #: `format: object` (alpha-engine-config-I11816). The record is the LISTING
@@ -359,6 +469,11 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
     if fmt == OBJECT_FORMAT:
         # A whole-body projection of the synthetic listing record.
         fmt = "json"
+    if fmt == JSONL_FORMAT:
+        # Already split into records; each line stands alone, so there is no
+        # body root. `limit`/`order` bound the lines of ONE object, exactly as
+        # they bound one CSV body's rows.
+        return select(body, config.get("limit"), config.get("order")), {}
     return project(body, fmt, config.get("records_path"), config.get("array_fields"),
                     config.get("group_field"), config.get("limit"),
                     config.get("order"))

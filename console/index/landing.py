@@ -57,6 +57,13 @@ class LandingModel:
     milestones: list[dict[str, Any]]
     milestone_journal: list[dict[str, Any]]
     dashboards: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    #: The exception list as a reader sees it (alpha-engine-config-I11805):
+    #: each job's runs folded to the newest per state, every row named for a
+    #: reader. `exceptions` above stays the full list the §9 numbers count.
+    #: `None` only on a model built by hand; renderers then fold nothing.
+    exception_view: Any = None
+    #: Declared labels for the decision queue's rows, by id.
+    queue_labels: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def _dashboard_unhealthy(ent: Entity, is_exception: Any) -> bool:
@@ -122,6 +129,7 @@ def build(index: Any) -> LandingModel:
     added alongside this for the same reason.
     """
     from ..render.html import landing_exceptions
+    from ..render.json import declared_labels, latest_per_job
     from ..render.json import numbers as _numbers
     from .milestones import evaluate as evaluate_milestones
     from .milestones import journal_report as milestone_journal_report
@@ -151,4 +159,6 @@ def build(index: Any) -> LandingModel:
         milestones=milestones,
         milestone_journal=recorded,
         dashboards=dashboards(index),
+        exception_view=latest_per_job(index, exceptions, per_state=True),
+        queue_labels=declared_labels(queue),
     )

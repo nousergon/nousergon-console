@@ -674,18 +674,30 @@ _SEVERITY_ORDER = (
 _OPEN_STATES = frozenset({State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN})
 
 
-def exceptions_by_state(exceptions: list[Entity]) -> str:
+def exceptions_by_state(exceptions: list[Entity], view=None) -> str:
     """The §4.3 exception list, grouped by state, worst first (I11805).
 
-    The same rows as one flat table, newest first within a group; nothing is
-    filtered. A flat list of a few hundred rows in id order put a stale probe
-    from August above today's failure, so the reader could not tell what to
-    look at. A count line links to each group.
+    Newest first within a group. A flat list of a few hundred rows in id order
+    put a stale probe from August above today's failure, so the reader could
+    not tell what to look at. A count line links to each group.
+
+    ``view`` (`render.json.JobView`, from the landing model) folds each job's
+    runs to its newest run per state and names every row for a reader: a run
+    reads as its job, not as `job@timestamp` (the timestamp is the as-of
+    column). A folded row says how many runs it stands for, and the summary
+    says how many rows the fold came from, so nothing is hidden silently;
+    every run is still one click away on the run's page and in `?runs=all`.
     """
     if not exceptions:
         return '<h2>not healthy</h2><p class="absent">No exceptions — every row is HEALTHY.</p>'
+    rows = view.rows if view is not None else exceptions
+    labels = dict(view.labels) if view is not None else {}
+    runs = view.runs if view is not None else {}
+    for rid, n in runs.items():
+        if n > 1:
+            labels[rid] = f"{labels.get(rid, rid)} ({n} runs)"
     groups: dict[str, list[Entity]] = {}
-    newest_first = sorted(exceptions, key=lambda e: e.provenance.as_of or "", reverse=True)
+    newest_first = sorted(rows, key=lambda e: e.provenance.as_of or "", reverse=True)
     for e in newest_first:
         groups.setdefault(e.state_value, []).append(e)
     known = [s.value for s in _SEVERITY_ORDER]
@@ -698,11 +710,13 @@ def exceptions_by_state(exceptions: list[Entity]) -> str:
     sections = "".join(
         f'<details id="not-healthy-{esc(v)}"{" open" if v in open_values else ""}>'
         f'<summary class="state-{esc(v)}">{esc(v)} · {len(groups[v])}</summary>'
-        f"{_table(groups[v])}</details>"
+        f"{_table(groups[v], labels=labels)}</details>"
         for v in order
     )
+    folded = (f" (newest run per job, from {len(exceptions)} rows)"
+              if len(rows) != len(exceptions) else "")
     return (f"<h2>not healthy</h2>"
-            f'<p class="list-summary">{len(exceptions)} rows · {counts}</p>{sections}')
+            f'<p class="list-summary">{len(rows)} rows{folded} · {counts}</p>{sections}')
 
 
 def dashboard_links(dashboards: list[dict]) -> str:
@@ -786,9 +800,9 @@ def landing_page(index: Index) -> str:
 <h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(model.milestones, model.milestone_journal)}
-{exceptions_by_state(exceptions)}
+{exceptions_by_state(exceptions, model.exception_view)}
 <h2>waiting on Brian</h2>
-{_table(queue)}
+{_table(queue, labels=model.queue_labels)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
 {observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}

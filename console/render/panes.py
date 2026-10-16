@@ -59,6 +59,14 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
          "will each declared milestone land by its target date, and what is "
          "holding the ones that won't",
          None),
+    # Report feeds (`/reports`): a READING question. A list view answers which
+    # report rows exist; this shows what the latest said and the ones before
+    # it, and where the older ones are kept. Cross-cutting because a feed is a
+    # declared selector, not one kind's list.
+    Pane("reports",
+         "what did the latest report say, what did the ones before it say, and "
+         "where are the older ones kept",
+         None),
     Pane("milestones",
          "has the declared milestone been met, and which clause is holding it",
          None),

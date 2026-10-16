@@ -19,6 +19,10 @@ Routes:
                                 (alpha-engine-config-I12152).
 - ``/planner/<project>``      — one project's milestones, items and
                                 blockers.
+- ``/reports``                — the first declared report feed: the newest
+                                report in full, the recent window below it,
+                                every older report by date.
+- ``/reports/<feed>``         — one declared feed, the same view.
 - ``/doctor/<id>``            — why an identifier is or is not on the
                                 surface (§3.9). Addressable, because a
                                 diagnosis nobody can link to has to be re-run
@@ -65,6 +69,8 @@ class Resolved:
     days_all: bool = False
     #: Planner views only: the declared project id, or None for the calendar.
     project_id: str | None = None
+    #: Reports view only: the declared feed id, or None for the first feed.
+    feed_id: str | None = None
 
 
 class UnknownRoute(Exception):
@@ -102,6 +108,13 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         if len(segments) == 2:
             return Resolved(view="planner-project", project_id=segments[1])
         raise UnknownRoute(f"no planner view at {path!r}")
+
+    if segments[0] == "reports":
+        if len(segments) == 1:
+            return Resolved(view="reports")
+        if len(segments) == 2:
+            return Resolved(view="reports", feed_id=segments[1])
+        raise UnknownRoute(f"no reports view at {path!r}")
 
     if segments[0] == "search":
         return Resolved(view="search", query=params.get("q", ""))

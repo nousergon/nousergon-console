@@ -603,11 +603,19 @@ def document_section(ent: Entity) -> str:
     escaped text and says so. A cut document says so, and how large the whole
     object is.
     """
-    from . import markdown
-
     doc = ent.detail.get(DOCUMENT_DETAIL)
     if not isinstance(doc, dict) or not isinstance(doc.get("text"), str):
         return ""
+    return "<h2>document</h2>" + document_body(doc)
+
+
+def document_body(doc: dict) -> str:
+    """One carried document as HTML: markdown rendered with raw HTML off and
+    only http(s)/relative links, anything else escaped and preformatted. The
+    one rendering path for a document, shared by its entity page and a report
+    feed, so the two can never treat the same text differently."""
+    from . import markdown
+
     note = ""
     if doc.get("truncated"):
         note = (f'<p class="absent">document cut — showing the first part of '
@@ -615,10 +623,10 @@ def document_section(ent: Entity) -> str:
     if doc.get("format") == DOCUMENT_MARKDOWN:
         rendered = markdown.render(doc["text"])
         if rendered is not None:
-            return f'<h2>document</h2>{note}<div class="document markdown">{rendered}</div>'
+            return f'{note}<div class="document markdown">{rendered}</div>'
         note += ('<p class="absent">markdown renderer unavailable — '
                  'showing the document as text</p>')
-    return f'<h2>document</h2>{note}<pre class="document">{esc(doc["text"])}</pre>'
+    return f'{note}<pre class="document">{esc(doc["text"])}</pre>'
 
 
 def index_freshness(index: Index, now: datetime | None = None) -> str:
@@ -1128,12 +1136,97 @@ def planner_project_page(index: Index, project_id: str) -> str:
 </body></html>"""
 
 
+def _report_meta(row: dict) -> str:
+    """When a report was published and where its row and object are."""
+    parts = [f'published {esc(row["at"])}' if row.get("at")
+             else '<span class="absent">publish time unknown</span>',
+             f'<a href="{esc(row["url"])}">row</a>']
+    evidence = row.get("evidence")
+    if isinstance(evidence, str) and evidence:
+        parts.append(f'source <code>{esc(evidence)}</code>')
+    return f'<p class="report-meta">{" · ".join(parts)}</p>'
+
+
+def _report_text(row: dict) -> str:
+    doc = row.get("document")
+    if isinstance(doc, dict):
+        return document_body(doc)
+    why = row.get("document_unavailable")
+    reason = f"could not be read ({esc(why)})" if why else "is not carried by its row"
+    return (f'<p class="absent">this report\'s text {reason} — '
+            f'<a href="{esc(row["url"])}">open its row</a></p>')
+
+
+def reports_page(index: Index, feed_id: str | None = None) -> str:
+    """A report feed: the newest report rendered in full, the rest of the
+    recent window below it (collapsed, newest first), then every older report
+    as a dated link to its own page. Declared in config, evaluated per
+    request over the built index, nothing stored (§5.6)."""
+    from ..index import reports
+
+    feeds = reports.declared(index)
+    found = reports.feed(index, feed_id)
+    head = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">"""
+    question = f'<p class="pane-question">{esc(reports.REPORTS_QUESTION)}</p>'
+    if found is None:
+        what = (f"no report feed {esc(feed_id)}" if feed_id is not None
+                else "no report feeds declared — the `reports:` config block is empty")
+        return f"""{head}
+<title>reports</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; reports</nav>
+<h1>reports</h1>
+{question}
+{index_freshness(index)}
+<p class="absent">{what}</p>
+</body></html>"""
+    f = reports.evaluate(index, found)
+    others = " · ".join(
+        f'<a href="{esc(o.url)}">{esc(o.title)}</a>' for o in feeds if o.id != found.id)
+    switcher = f'<p class="report-feeds">other feeds: {others}</p>' if others else ""
+    archive = (f'older reports are kept at <code>{esc(f["archive"])}</code>; '
+               if f["archive"] else "")
+    window = (f'<p class="list-window">{archive}{f["matched"]} on record. The last '
+              f'{f["recent_days"]} days are shown here, newest first; every older '
+              f'report is listed by date below and opens on its own page. '
+              f'Nothing is deleted.</p>')
+    latest = f["latest"]
+    if latest is None:
+        body = (f'<p class="absent">no report yet — no row matches '
+                f'<code>{esc(f["selector"])}</code></p>')
+    else:
+        body = (f'<article class="report report-latest"><h2>{esc(latest["label"])}</h2>'
+                f'{_report_meta(latest)}{_report_text(latest)}</article>')
+        if f["recent"]:
+            body += (f'<h2>earlier in the last {f["recent_days"]} days</h2>' + "".join(
+                f'<details class="report"><summary>{esc(r["label"])}</summary>'
+                f'{_report_meta(r)}{_report_text(r)}</details>' for r in f["recent"]))
+        if f["older"]:
+            body += (f'<h2>older reports ({len(f["older"])})</h2><ul class="report-archive">'
+                     + "".join(
+                         f'<li><a href="{esc(r["url"])}">{esc(r["label"])}</a>'
+                         + (f' · {esc(r["at"][:10])}' if r.get("at") else "")
+                         + "</li>" for r in f["older"])
+                     + "</ul>")
+    return f"""{head}
+<title>{esc(f["title"])} · reports</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/reports">reports</a> &rsaquo; {esc(f["title"])}</nav>
+<h1>{esc(f["title"])}</h1>
+{question}
+{index_freshness(index)}
+{switcher}
+{window}
+{body}
+</body></html>"""
+
+
 def with_site_nav(page: str) -> str:
     """Prepend the one site menu to a rendered page: home · dashboards ·
     search. Applied once, at the server, so no page can ship without it."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
            '<a href="/dashboards">dashboards</a> · '
            '<a href="/planner">planner</a> · '
+           '<a href="/reports">reports</a> · '
            '<a href="/search">search</a></nav>')
     return page.replace("<body>", "<body>" + nav, 1)
 

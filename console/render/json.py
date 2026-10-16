@@ -139,6 +139,17 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "axis": ({"start": span[0].isoformat(), "end": span[1].isoformat()}
                         if span else None),
                "projects": projects}
+    elif req.view == "reports":
+        from ..index import reports
+
+        found = reports.feed(index, req.feed_id)
+        if found is None and req.feed_id is not None:  # pragma: no cover - app.py 404s first
+            raise KeyError(req.feed_id)
+        doc = {"schema_version": SCHEMA_VERSION, "view": "reports",
+               "question": reports.REPORTS_QUESTION,
+               "feeds": [{"id": f.id, "title": f.title, "url": f.url}
+                         for f in reports.declared(index)],
+               "feed": reports.evaluate(index, found) if found else None}
     elif req.view == "planner-project":
         from ..index import planner
 

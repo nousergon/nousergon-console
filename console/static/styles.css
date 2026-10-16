@@ -100,3 +100,11 @@ svg.ts-chart { width: 15rem; height: 4rem; vertical-align: middle; color: inheri
 svg.ts-chart rect { fill: currentColor; fill-opacity: .55; }
 svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .ts-summary { color: #4c5563; }
+
+/* A report feed (`/reports`): the newest report open, the recent window
+   collapsed below it, and the older ones as a dated list. */
+.report { max-width: 102ch; margin: 0 0 1rem; }
+.report-latest > h2 { margin-bottom: .2rem; }
+.report-meta { color: #4c5563; font-size: .9rem; margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
+details.report { border-top: 1px solid #4c5563; padding-top: .2rem; }
+.report-archive { columns: 2 22rem; }

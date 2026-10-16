@@ -1495,3 +1495,30 @@ planner:
             at: last_observed_utc
             where: {sent: true}
             exclude: {synthetic: true}
+
+# ── Report feeds (`/reports`) ──────────────────────────────────────────────
+# "What did the latest report say, what did the ones before it say, and where
+# are the older ones kept?" A feed is a SELECTOR over rows another adapter
+# already mints and that carry their own text — typically an `s3-records`
+# source with `format: object` and `body: markdown`, one row per dated report
+# key. Every entity whose facets equal `facets` (and whose kind is `kind`) is
+# one report. The page renders the newest in full, the rest of the last
+# `recent_days` (default 14) collapsed below it, and every older report as a
+# dated link to its own page, which renders it on demand.
+#
+# The console stores nothing: a report reaches the page on the next index
+# rebuild after it is written, and leaves the inline window by age only. It is
+# never deleted or moved. `archive` is a line naming where the reports are
+# kept, shown as written. `/reports` is the first feed; `/reports/<id>` each.
+#
+# A bad declaration (missing id or title, no facets, unknown kind,
+# `recent_days` outside 1..90) FAILS THE BUILD naming the feed. A selector
+# matching no row renders that absence, naming the selector.
+reports:
+  feeds:
+    - id: daily
+      title: Daily report
+      kind: run
+      facets: {pane: reports}
+      recent_days: 14
+      archive: s3://example-bucket/reports/YYYY-MM-DD.md

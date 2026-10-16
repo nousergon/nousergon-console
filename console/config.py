@@ -35,6 +35,7 @@ from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
 from .index import planner as delivery_planner
+from .index import citations as citation_links
 from .index import reports as report_feeds
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
@@ -189,6 +190,9 @@ def build_index(config: dict[str, Any]) -> Index:
     # And for report feeds (`/reports`): a feed whose selector this build
     # cannot evaluate fails the build by name, never renders an empty page.
     declared_feeds = report_feeds.parse(config.get("reports"))
+    # And for citation links: a `citations:` block the renderer could not use
+    # fails the build by name, never links nothing (or the wrong thing).
+    declared_citations = citation_links.parse(config.get("citations"))
     # One tolerance, set before any claim arrives: the merge's DISABLED/MISSED
     # comparison and §9.6's staleness audit both read it, and they must not be
     # able to disagree about one row (`index/cadence_state.py`).
@@ -290,6 +294,7 @@ def build_index(config: dict[str, Any]) -> Index:
     milestone_predicates.attach(index, declared_milestones)
     delivery_planner.attach(index, declared_plan)
     report_feeds.attach(index, declared_feeds)
+    citation_links.attach(index, declared_citations)
     # ONE OBSERVATION PER BUILD (§4.4, alpha-engine-config-I9083). `evaluate`
     # is per QUERY and a page refresh is not an observation, so the clause
     # journal — the durable record of every clause's status, and the only

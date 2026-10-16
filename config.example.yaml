@@ -1522,3 +1522,28 @@ reports:
       facets: {pane: reports}
       recent_days: 14
       archive: s3://example-bucket/reports/YYYY-MM-DD.md
+
+# ── Citation links (rendered markdown documents) ───────────────────────────
+# Reports cite work as plain text — `ex#12`, `example-repo-I12`,
+# `example-repo-PR34`, `ex#12 comment 5678`. This block lets the markdown
+# renderer (entity pages and `/reports`) turn each reference to a DECLARED
+# repository into a link, at render time: nothing is rewritten in the source,
+# so every document already stored gets links too.
+#
+#   <repo>#N, <repo>-IN   → <base_url>/<repo>/issues/N  (GitHub redirects a
+#                           pull-request number to the pull request)
+#   <repo>-PRN            → <base_url>/<repo>/pull/N
+#   … comment C           → … #issuecomment-C
+#   <repo>#N, #M and #K   → each bare #M continuing the list, same repository
+#
+# Only names under `repos` or `aliases` are linked; anything else stays text.
+# Text inside existing links, code spans and code blocks is never touched.
+# Bare http(s) URLs are linked whether or not this block is declared.
+#
+# A bad declaration (non-http(s) `base_url`, empty `repos`, a name that is not
+# one path segment, an alias naming an undeclared repository or shadowing a
+# different one) FAILS THE BUILD naming the entry.
+citations:
+  base_url: https://github.com/example-org
+  repos: [example-repo, example-config]
+  aliases: {ex: example-repo, cfg: example-config}

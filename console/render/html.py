@@ -22,6 +22,8 @@ import html
 import re
 from datetime import datetime, timezone
 
+from ..index import citations
+from ..index.citations import Citations
 from ..index.graph import Index
 from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, Entity
 from ..model.fields import (
@@ -471,7 +473,7 @@ def entity_page(index: Index, ent: Entity) -> str:
 {index_freshness(index)}
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
-{document_section(ent)}
+{document_section(ent, citations.declared(index))}
 <h2>relations</h2><ul>{rel_items}</ul>
 {fields_section(ent)}
 {_source_findings_section(ent)}
@@ -592,7 +594,7 @@ def _pager(kind: Kind, url_state: dict[str, str], page: int, rows: int) -> str:
     return f'<p class="pager">page {page} of {pages} · ' + " · ".join(links) + "</p>"
 
 
-def document_section(ent: Entity) -> str:
+def document_section(ent: Entity, links: Citations | None = None) -> str:
     """A source object's own text, shown where it is listed (`detail["document"]`).
 
     A plain-text document is preformatted and escaped: the console shows it as
@@ -606,14 +608,15 @@ def document_section(ent: Entity) -> str:
     doc = ent.detail.get(DOCUMENT_DETAIL)
     if not isinstance(doc, dict) or not isinstance(doc.get("text"), str):
         return ""
-    return "<h2>document</h2>" + document_body(doc)
+    return "<h2>document</h2>" + document_body(doc, links)
 
 
-def document_body(doc: dict) -> str:
+def document_body(doc: dict, links: Citations | None = None) -> str:
     """One carried document as HTML: markdown rendered with raw HTML off and
     only http(s)/relative links, anything else escaped and preformatted. The
     one rendering path for a document, shared by its entity page and a report
-    feed, so the two can never treat the same text differently."""
+    feed, so the two can never treat the same text differently. `links` is
+    the declared `citations:` block: references it names become links."""
     from . import markdown
 
     note = ""
@@ -621,7 +624,7 @@ def document_body(doc: dict) -> str:
         note = (f'<p class="absent">document cut — showing the first part of '
                 f'{esc(doc.get("bytes"))} bytes; the whole object is at the evidence link</p>')
     if doc.get("format") == DOCUMENT_MARKDOWN:
-        rendered = markdown.render(doc["text"])
+        rendered = markdown.render(doc["text"], links)
         if rendered is not None:
             return f'{note}<div class="document markdown">{rendered}</div>'
         note += ('<p class="absent">markdown renderer unavailable — '
@@ -1147,10 +1150,10 @@ def _report_meta(row: dict) -> str:
     return f'<p class="report-meta">{" · ".join(parts)}</p>'
 
 
-def _report_text(row: dict) -> str:
+def _report_text(row: dict, links: Citations | None = None) -> str:
     doc = row.get("document")
     if isinstance(doc, dict):
-        return document_body(doc)
+        return document_body(doc, links)
     why = row.get("document_unavailable")
     reason = f"could not be read ({esc(why)})" if why else "is not carried by its row"
     return (f'<p class="absent">this report\'s text {reason} — '
@@ -1181,6 +1184,7 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 <p class="absent">{what}</p>
 </body></html>"""
     f = reports.evaluate(index, found)
+    links = citations.declared(index)
     others = " · ".join(
         f'<a href="{esc(o.url)}">{esc(o.title)}</a>' for o in feeds if o.id != found.id)
     switcher = f'<p class="report-feeds">other feeds: {others}</p>' if others else ""
@@ -1196,11 +1200,11 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
                 f'<code>{esc(f["selector"])}</code></p>')
     else:
         body = (f'<article class="report report-latest"><h2>{esc(latest["label"])}</h2>'
-                f'{_report_meta(latest)}{_report_text(latest)}</article>')
+                f'{_report_meta(latest)}{_report_text(latest, links)}</article>')
         if f["recent"]:
             body += (f'<h2>earlier in the last {f["recent_days"]} days</h2>' + "".join(
                 f'<details class="report"><summary>{esc(r["label"])}</summary>'
-                f'{_report_meta(r)}{_report_text(r)}</details>' for r in f["recent"]))
+                f'{_report_meta(r)}{_report_text(r, links)}</details>' for r in f["recent"]))
         if f["older"]:
             body += (f'<h2>older reports ({len(f["older"])})</h2><ul class="report-archive">'
                      + "".join(

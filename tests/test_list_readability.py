@@ -135,3 +135,60 @@ def test_the_landing_view_groups_exceptions_by_state_worst_first():
     assert '<details id="not-healthy-FAILED" open>' in page
     assert '<details id="not-healthy-UNREPORTED">' in page  # collapsed, still present
     assert page.index("fresh-fail") < page.index("older-fail") < page.index("old-probe")
+
+
+# The next slice of I11805: the landing view's exception list reads the same
+# way a run list does — runs named by their job, one row per job per state.
+
+FAILING = [
+    _run("job-a@2026-10-01T01:00:00Z", State.FAILED, "2026-10-01T01:00:00Z"),
+    _run("job-a@2026-10-01T02:00:00Z", State.FAILED, "2026-10-01T02:00:00Z"),
+    _run("job-a@2026-10-01T03:00:00Z", State.DEGRADED, "2026-10-01T03:00:00Z"),
+    _run("job-b@2026-10-01T01:30:00Z", State.FAILED, "2026-10-01T01:30:00Z"),
+]
+
+
+def test_the_landing_names_a_run_by_its_job_and_folds_its_runs_per_state():
+    page = _page(_index(FAILING), "/")
+    failed = page.split('<details id="not-healthy-FAILED" open>')[1].split("</details>")[0]
+    # job-a's two FAILED runs read as one row, named for the job, newest run linked.
+    assert ">job-a (2 runs)</a>" in failed
+    assert "/run/job-a@2026-10-01T02:00:00Z" in failed
+    assert "job-a@2026-10-01T01:00:00Z" not in failed
+    assert ">job-b</a>" in failed
+    # A different state is a different fact: job-a DEGRADED still has its own row.
+    degraded = page.split('<details id="not-healthy-DEGRADED">')[1].split("</details>")[0]
+    assert ">job-a</a>" in degraded
+    assert "3 rows (newest run per job, from 4 rows)" in page
+    assert 'href="#not-healthy-FAILED">2 FAILED</a>' in page
+
+
+def test_the_landing_fold_never_changes_the_not_healthy_count():
+    page = _page(_index(FAILING), "/")
+    assert "· 4 not healthy ·" in page
+    doc = render_json.payload(_index(FAILING), resolve("/"))
+    assert len(doc["exceptions"]) == 4
+
+
+def test_landing_json_carries_the_same_fold_and_names():
+    doc = render_json.payload(_index(FAILING), resolve("/"))
+    view = doc["exception_view"]
+    assert set(view["latest_per_job"]) == {
+        "job-a@2026-10-01T02:00:00Z", "job-a@2026-10-01T03:00:00Z",
+        "job-b@2026-10-01T01:30:00Z"}
+    assert view["labels"]["job-a@2026-10-01T02:00:00Z"] == "job-a"
+    assert view["runs"] == {"job-a@2026-10-01T02:00:00Z": 2,
+                            "job-a@2026-10-01T03:00:00Z": 1,
+                            "job-b@2026-10-01T01:30:00Z": 1}
+
+
+def test_a_landing_row_that_is_not_a_run_keeps_its_declared_label():
+    comp = Entity(kind=Kind.COMPONENT, id="ae-x.service", state=State.FAILED,
+                  provenance=Provenance(source="fixture", as_of="2026-10-01T01:00:00Z"),
+                  detail={"label": "Nightly export"})
+    page = _page(_index([comp]), "/")
+    assert ">Nightly export</a>" in page and "/component/ae-x.service" in page
+    assert "newest run per job" not in page
+    view = render_json.payload(_index([comp]), resolve("/"))["exception_view"]
+    assert view == {"latest_per_job": ["ae-x.service"],
+                    "labels": {"ae-x.service": "Nightly export"}, "runs": {}}

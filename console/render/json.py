@@ -235,6 +235,18 @@ def _landing(index: Index) -> dict[str, Any]:
     # deployment that declares no milestone has no milestone pane, and an empty
     # `milestones: []` reads to a consumer like a declared predicate with no
     # clauses — which `parse` refuses to build in the first place.
+    # The same fold and names the HTML renders (§3.8, I11805). `exceptions`
+    # above stays every row; this says which of them the page shows, what
+    # each is called, and how many runs a shown row stands for.
+    view = model.exception_view
+    if view is not None:
+        doc["exception_view"] = {
+            "latest_per_job": [e.id for e in view.rows],
+            "labels": view.labels,
+            "runs": view.runs,
+        }
+    if model.queue_labels:
+        doc["decision_queue_labels"] = model.queue_labels
     if model.milestones:
         doc["milestones"] = model.milestones
     # What the clause journal did on THIS build: the transitions it recorded,
@@ -418,6 +430,68 @@ def declared_labels(entities: list[Entity]) -> dict[str, str]:
             if isinstance(e.detail.get(LABEL_DETAIL), str) and e.detail[LABEL_DETAIL]}
 
 
+@dataclass(frozen=True)
+class JobView:
+    """Rows with each job's runs folded to the newest one (I11805).
+
+    `rows` keeps every non-run row and, per job, the newest run, in the order
+    each was first seen. `labels` names a row for a reader: a folded run by its
+    job, any other row by the label it declares. `runs` says how many runs a
+    folded row stands for, so the projection is declared, never implied (§3.4).
+    """
+
+    rows: list[Entity]
+    labels: dict[str, str]
+    runs: dict[str, int]
+
+
+def latest_per_job(index: Index, entities: list[Entity],
+                   per_state: bool = False) -> JobView:
+    """Fold runs to the newest run per job; leave every other row alone.
+
+    A job is the run's `belongs-to` target, or else the id before `@`. With
+    `per_state`, a job's runs fold per state, so the landing view keeps one row
+    for "job X FAILED" and another for "job X DEGRADED": each is a different
+    fact, and the state groups render both.
+    """
+    job_of = {e.source: e.target for e in index.edges() if e.rel == "belongs-to"}
+    declared = declared_labels(entities)
+    order: list[object] = []
+    newest: dict[object, Entity] = {}
+    counts: dict[object, int] = {}
+    jobs: dict[object, str] = {}
+    for ent in entities:
+        if ent.kind is not Kind.RUN:
+            key: object = ("row", ent.id)
+        else:
+            job = job_of.get(ent.id) or ent.id.split("@", 1)[0]
+            key = ("job", job, ent.state_value if per_state else None)
+            jobs[key] = job
+        kept = newest.get(key)
+        if kept is None:
+            order.append(key)
+            newest[key] = ent
+        elif (ent.provenance.as_of or "") > (kept.provenance.as_of or ""):
+            newest[key] = ent
+        counts[key] = counts.get(key, 0) + 1
+    rows = [newest[k] for k in order]
+    labels: dict[str, str] = {}
+    runs: dict[str, int] = {}
+    for key in order:
+        ent = newest[key]
+        job = jobs.get(key)
+        if job is None:
+            if ent.id in declared:
+                labels[ent.id] = declared[ent.id]
+            continue
+        # A folded row stands for its JOB, so the job name is its label. A
+        # row that is its own job (no `@`, no belongs-to edge) keeps the label
+        # it declares, which names it better than its id does.
+        labels[ent.id] = declared.get(ent.id, job) if job == ent.id else job
+        runs[ent.id] = counts[key]
+    return JobView(rows=rows, labels=labels, runs=runs)
+
+
 def _as_of_time(ent: Entity) -> datetime | None:
     raw = ent.provenance.as_of
     if not raw:
@@ -472,19 +546,8 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
     labels: dict[str, str] = declared_labels(filtered)
     rows = filtered
     if collapsed:
-        job_of = {e.source: e.target for e in index.edges() if e.rel == "belongs-to"}
-        newest: dict[str, Entity] = {}
-        for ent in filtered:
-            job = job_of.get(ent.id) or ent.id.split("@", 1)[0]
-            kept = newest.get(job)
-            if kept is None or (ent.provenance.as_of or "") > (kept.provenance.as_of or ""):
-                newest[job] = ent
-        rows = list(newest.values())
-        # A collapsed row stands for its JOB, so the job name is its label.
-        # A row that is its own job (no `@`, no belongs-to edge) keeps the
-        # label it declares, which names it better than its id does.
-        labels = {ent.id: labels.get(ent.id, job) if job == ent.id else job
-                  for job, ent in newest.items()}
+        view = latest_per_job(index, filtered)
+        rows, labels = view.rows, view.labels
     rows = sorted(rows, key=lambda e: not is_exception(e))
     summary: dict[str, int] = {}
     for ent in rows:

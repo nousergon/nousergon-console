@@ -113,7 +113,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         ent = index.entity(req.entity_id or "")
         if ent is None:  # pragma: no cover - app.py 404s before reaching here
             raise KeyError(req.entity_id)
-        doc = _entity_page(index, ent)
+        doc = _entity_page(index, ent, all_runs=req.all_runs)
     elif req.view == "history":
         ent = index.entity(req.entity_id or "")
         if ent is None:
@@ -589,7 +589,7 @@ def _matches(entity: Entity, key: str, value: str) -> bool:
     return False
 
 
-def _entity_page(index: Index, ent: Entity) -> dict[str, Any]:
+def _entity_page(index: Index, ent: Entity, all_runs: bool = False) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "view": "entity",
@@ -598,7 +598,76 @@ def _entity_page(index: Index, ent: Entity) -> dict[str, Any]:
         # "who breaks if this is stale" exists nowhere unless the index
         # derives it, and an agent asking that question needs it here.
         "relations": [edge(e) for e in index.related(ent.id)],
+        # The page's projection of those edges, so HTML and JSON match (§3.8):
+        # one group per relation, the related rows' states counted, runs
+        # folded unless the URL says `runs=all` (alpha-engine-config-I11805).
+        "relation_view": {
+            "all_runs": all_runs,
+            "groups": [
+                {"rel": g.rel, "related": g.related, "summary": g.summary,
+                 "rows": [e.id for e in g.rows], "labels": g.labels,
+                 "runs": g.runs, "unresolved": g.unresolved}
+                for g in relation_groups(index, ent, all_runs=all_runs)
+            ],
+        },
     }
+
+
+@dataclass(frozen=True)
+class RelationGroup:
+    """One relation on an entity page, read as a list (I11805).
+
+    `rows` are the related entities, not healthy first and newest first
+    within that. Unless the URL says `runs=all`, a job's runs fold to its
+    newest run per state, so a component's page shows "FAILED, newest of 3"
+    rather than every run it ever had; `related` counts the rows before the
+    fold and `runs` how many runs each folded row stands for, so the fold is
+    declared (§3.4). `unresolved` names edge ends no entity carries: a
+    relation to nothing is still a fact, never dropped.
+    """
+
+    rel: str
+    rows: list[Entity]
+    labels: dict[str, str]
+    runs: dict[str, int]
+    summary: dict[str, int]
+    related: int
+    unresolved: list[str]
+
+
+def relation_groups(index: Index, ent: Entity, all_runs: bool = False) -> list[RelationGroup]:
+    """The entity page's relations, grouped by predicate, in first-seen order.
+
+    One implementation for both representations (§3.8). Each related id is
+    listed once per predicate, however many adapters declared the edge.
+    """
+    from .html import is_exception
+
+    others: dict[str, list[str]] = {}
+    for e in index.related(ent.id):
+        other = e.target if e.source == ent.id else e.source
+        ids = others.setdefault(e.rel, [])
+        if other not in ids:
+            ids.append(other)
+    groups: list[RelationGroup] = []
+    for rel, ids in others.items():
+        resolved = [index.entity(i) for i in ids]
+        found = [o for o in resolved if o is not None]
+        unresolved = [i for i, o in zip(ids, resolved) if o is None]
+        if all_runs:
+            rows, labels, runs = found, declared_labels(found), {}
+        else:
+            view = latest_per_job(index, found, per_state=True)
+            rows, labels, runs = view.rows, view.labels, view.runs
+        rows = sorted(rows, key=lambda o: o.provenance.as_of or "", reverse=True)
+        rows = sorted(rows, key=lambda o: not is_exception(o))
+        summary: dict[str, int] = {}
+        for o in rows:
+            summary[o.state_value] = summary.get(o.state_value, 0) + 1
+        groups.append(RelationGroup(rel=rel, rows=rows, labels=labels, runs=runs,
+                                    summary=dict(sorted(summary.items())),
+                                    related=len(found), unresolved=unresolved))
+    return groups
 
 
 def _search(index: Index, query: str) -> dict[str, Any]:

@@ -57,9 +57,10 @@ class Resolved:
     query: str | None = None
     page: int = 1
     window_hours: int | None = None
-    #: Run lists only: True shows every historical run instead of the newest
-    #: run per job (`?runs=all`, alpha-engine-config-I11805). Carried in the
-    #: URL, so both views of a run list reproduce cold (§3.2, §3.4).
+    #: Run lists and entity pages: True shows every historical run instead of
+    #: the newest run per job (`?runs=all`, alpha-engine-config-I11805) — on an
+    #: entity page, among its relations. Carried in the URL, so both views
+    #: reproduce cold (§3.2, §3.4).
     all_runs: bool = False
     #: List views only: a dated window (`?days=N`) or every row (`?days=all`),
     #: newest first either way. Absent, a list whose rows declare a window
@@ -168,7 +169,10 @@ def resolve(path: str, query_string: str = "") -> Resolved:
     # requires the identifier to be the URL verbatim. There is no route past
     # the entity (§4.1), so the remainder is always the id.
     entity_id = path.split("/", 2)[2]
-    return Resolved(view="entity", kind=kind, entity_id=entity_id)
+    # `?runs=all` lists every related run instead of the newest run per job
+    # and state (alpha-engine-config-I11805), the same switch as a run list.
+    return Resolved(view="entity", kind=kind, entity_id=entity_id,
+                    all_runs=params.get(RUNS_PARAM) == "all")
 
 
 def path_for_entity(kind: Kind, entity_id: str) -> str:

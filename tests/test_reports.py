@@ -3,6 +3,7 @@ s3-records adapter already mints, the recent window vs the dated archive, safe
 rendering, absence, and both representations."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -253,3 +254,130 @@ def test_example_config_declares_feeds_that_build():
                           / "config.example.yaml").read_text())
     feeds = reports.parse(cfg["reports"])
     assert feeds and feeds[0].recent_days == 14 and feeds[0].archive
+    assert feeds[0].lead and feeds[0].lead.sources
+
+
+# ------------------------------------------------------------- lead block --
+
+PLAN_ADAPTER = {
+    **ADAPTER, "_name": "daily-plan",
+    "key_pattern": r"^ops/daily/plan-(?P<cycle>\d{4}-\d{2}-\d{2})\.md$",
+    "id_template": "report:{cycle}:plan",
+    "label_template": "{day:%a %-m/%-d} plan",
+    "facets": {"pane": {"value": "reports"}, "report": {"value": "plan"}},
+}
+
+LEAD_OBJECTS = OBJECTS + [(f"{PREFIX}plan-2026-10-15.md", "2026-10-15T22:00:00+00:00")]
+
+LEAD_FEEDS = {"feeds": [{**FEEDS["feeds"][0], "lead": {
+    "title": "Merged by topic", "heading": "^merged (by topic|since)",
+    "sources": [{"kind": "run", "facets": {"report": "daily"}},
+                {"kind": "run", "facets": {"report": "plan"}}]}}]}
+
+
+def _merged_text(bucket, key):
+    name = key.rsplit("/", 1)[1][:-3]
+    return (f"# {name}\n\n## Needs you\n- answer one\n\n"
+            f"## Merged by topic ({name})\n**Governance**\n- ops#1718 five red lines\n"
+            "```\n## not a heading, inside a fence\n```\n"
+            "### Data\n- data#2179 FRED rows\n\n"
+            "## Plan vs done\n- C1 done\n")
+
+
+def _lead_index(feeds=LEAD_FEEDS, objects=LEAD_OBJECTS, text_reader=_merged_text):
+    index = Index()
+    for adapter in (ADAPTER, PLAN_ADAPTER):
+        index.add_result(s3_records.fetch(
+            adapter, lister=lambda b, p: list(objects),
+            reader=lambda b, k: pytest.fail("format: object reads no parsed body"),
+            text_reader=text_reader, now=NOW))
+    reports.attach(index, reports.parse(feeds))
+    index.finalize()
+    return index
+
+
+def test_section_cuts_to_the_next_heading_of_its_level_and_skips_fences():
+    text = _merged_text("b", "ops/daily/2026-10-15.md")
+    got = reports.section(text, re.compile("^merged by topic", re.IGNORECASE))
+    assert got.startswith("## Merged by topic (2026-10-15)")
+    assert "### Data" in got and "## not a heading, inside a fence" in got
+    assert "Plan vs done" not in got and "Needs you" not in got
+    assert reports.section("# a\n## b\n", re.compile("zzz")) is None
+    # The last section runs to the end of the text.
+    assert reports.section("## x\nmore\n", re.compile("x")) == "## x\nmore"
+
+
+def test_lead_block_shows_each_sources_section_newest_first():
+    lead = _feed(_lead_index())["lead"]
+    assert lead["title"] == "Merged by topic"
+    assert [i["id"] for i in lead["items"]] == [
+        "report:2026-10-15:plan", "report:2026-10-15:daily"]
+    for item in lead["items"]:
+        assert item["section"]["text"].startswith("## Merged by topic")
+        assert "Plan vs done" not in item["section"]["text"]
+        assert "document" not in item  # the lead carries the section only
+
+
+def test_lead_block_renders_above_the_latest_report_with_citations_safe():
+    from console.server.app import _html
+
+    html = _html(_lead_index(), resolve("/reports"))
+    block = html.split('<section class="report-lead">', 1)[1].split("</section>", 1)[0]
+    assert html.index('class="report-lead"') < html.index("report-latest")
+    assert "<h2>Merged by topic</h2>" in block
+    assert block.count('<article class="report report-lead-item">') == 2
+    assert 'from <a href="/run/report:2026-10-15:plan">Thu 10/15 plan</a>' in block
+    assert "ops#1718 five red lines" in block and "Plan vs done" not in block
+    # The report itself is not edited: the section still reads in place.
+    latest = html.split('<article class="report report-latest">', 1)[1]
+    assert "Merged by topic (2026-10-15)" in latest.split("</article>", 1)[0]
+
+
+def test_lead_without_sources_reads_the_feeds_own_newest_report():
+    feeds = {"feeds": [{**FEEDS["feeds"][0],
+                        "lead": {"title": "Merged", "heading": "merged by topic"}}]}
+    lead = _feed(_lead_index(feeds=feeds))["lead"]
+    assert [i["id"] for i in lead["items"]] == ["report:2026-10-15:daily"]
+
+
+def test_a_lead_source_that_cannot_supply_its_section_says_why():
+    from console.server.app import _html
+
+    feeds = {"feeds": [{**FEEDS["feeds"][0], "lead": {
+        "title": "Merged by topic", "heading": "^merged by topic",
+        "sources": [{"facets": {"report": "daily"}}, {"facets": {"report": "nope"}}]}}]}
+    index = _lead_index(feeds=feeds, text_reader=_text)  # no such heading
+    lead = _feed(index)["lead"]
+    assert lead["items"][0]["section"] is None
+    assert "no heading matches '^merged by topic'" in lead["items"][0]["section_unavailable"]
+    html = _html(index, resolve("/reports"))
+    assert "no report — no row matches <code>report=nope</code>" in html
+    assert "Merged by topic: no heading matches" in html
+
+
+def test_no_lead_declared_renders_no_block():
+    from console.server.app import _html
+
+    assert _feed(_index())["lead"] is None
+    assert "report-lead" not in _html(_index(), resolve("/reports"))
+
+
+def test_json_carries_the_lead_block():
+    doc = render_json.payload(_lead_index(), resolve("/reports/daily"))
+    assert doc["feed"]["lead"]["items"][0]["section"]["format"] == "markdown"
+    render_json.dumps(doc)
+
+
+@pytest.mark.parametrize("lead, needle", [
+    ("x", "lead: must be a mapping"),
+    ({"heading": "a"}, "`title` is required"),
+    ({"title": "t"}, "`heading` is required"),
+    ({"title": "t", "heading": "("}, "not a regex"),
+    ({"title": "t", "heading": "a", "sources": "x"}, "list of selectors"),
+    ({"title": "t", "heading": "a", "sources": [{"facets": {}}]}, "`facets`"),
+    ({"title": "t", "heading": "a", "sources": [{"facets": {"a": "b"}, "kind": "z"}]},
+     "unknown `kind`"),
+])
+def test_bad_lead_declarations_fail_by_name(lead, needle):
+    with pytest.raises(reports.ReportsConfigError, match=needle):
+        reports.parse({"feeds": [{"id": "a", "title": "t", "facets": {"a": "b"}, "lead": lead}]})

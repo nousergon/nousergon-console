@@ -192,3 +192,84 @@ def test_a_landing_row_that_is_not_a_run_keeps_its_declared_label():
     view = render_json.payload(_index([comp]), resolve("/"))["exception_view"]
     assert view == {"latest_per_job": ["ae-x.service"],
                     "labels": {"ae-x.service": "Nightly export"}, "runs": {}}
+
+
+# The next slice of I11805: an entity page's relations read as a list — one
+# table per predicate, each row with its state and its job's name, runs folded
+# to the newest per job and state, a count by state, not healthy first.
+
+COMPONENT = Entity(kind=Kind.COMPONENT, id="job-a", state=State.FAILED,
+                   provenance=Provenance(source="fixture", as_of="2026-10-01T03:00:00Z"))
+JOB_A_RUNS = [
+    _run("job-a@2026-10-01T01:00:00Z", State.HEALTHY, "2026-10-01T01:00:00Z"),
+    _run("job-a@2026-10-01T02:00:00Z", State.HEALTHY, "2026-10-01T02:00:00Z"),
+    _run("job-a@2026-10-01T03:00:00Z", State.FAILED, "2026-10-01T03:00:00Z"),
+]
+BELONGS = [Edge(source=r.id, rel="belongs-to", target="job-a") for r in JOB_A_RUNS]
+
+
+def _component_index():
+    edges = BELONGS + [Edge(source="job-a", rel="produces", target="s3://b/missing.json")]
+    return _index([COMPONENT, *JOB_A_RUNS], edges)
+
+
+def test_an_entity_page_folds_its_runs_and_counts_them_by_state():
+    page = _page(_component_index(), "/component/job-a")
+    rel = page.split("<h2>relations</h2>")[1]
+    contains = rel.split('<h3 class="list-group">contains</h3>')[1].split("<h3")[0]
+    assert "2 rows (from 3 related)" in contains
+    assert '1 FAILED</span>' in contains and '1 HEALTHY</span>' in contains
+    # Not healthy first; the folded HEALTHY row is the newest one, named for its job.
+    assert contains.index("2026-10-01T03:00:00Z") < contains.index("2026-10-01T02:00:00Z")
+    assert ">job-a (2 runs)</a>" in contains
+    assert "/run/job-a@2026-10-01T02:00:00Z" in contains
+    assert "/run/job-a@2026-10-01T01:00:00Z" not in contains
+    assert 'href="/component/job-a?runs=all">show every run</a>' in rel
+
+
+def test_an_entity_page_lists_every_run_when_the_url_says_so():
+    page = _page(_component_index(), "/component/job-a?runs=all")
+    rel = page.split("<h2>relations</h2>")[1]
+    assert "/run/job-a@2026-10-01T01:00:00Z" in rel
+    assert "3 rows ·" in rel and "from 3 related" not in rel
+    assert 'href="/component/job-a">show newest run per job and state</a>' in rel
+
+
+def test_a_relation_to_nothing_in_the_index_is_still_shown():
+    page = _page(_component_index(), "/component/job-a")
+    produces = page.split('<h3 class="list-group">produces</h3>')[1]
+    assert "0 rows ·" in produces and "1 not in the index:" in produces
+    assert "<li>s3://b/missing.json</li>" in produces
+
+
+def test_a_run_page_names_its_job_and_shows_no_fold_toggle():
+    page = _page(_component_index(), "/run/job-a@2026-10-01T01:00:00Z")
+    rel = page.split("<h2>relations</h2>")[1]
+    assert '<h3 class="list-group">belongs-to</h3>' in rel
+    assert '1 FAILED</span>' in rel and "show every run" not in rel
+
+
+def test_entity_json_carries_the_same_relation_view():
+    index = _component_index()
+    doc = render_json.payload(index, resolve("/component/job-a"))
+    groups = {g["rel"]: g for g in doc["relation_view"]["groups"]}
+    assert doc["relation_view"]["all_runs"] is False
+    assert groups["contains"]["rows"] == ["job-a@2026-10-01T03:00:00Z",
+                                          "job-a@2026-10-01T02:00:00Z"]
+    assert groups["contains"]["related"] == 3
+    assert groups["contains"]["summary"] == {"FAILED": 1, "HEALTHY": 1}
+    assert groups["contains"]["labels"]["job-a@2026-10-01T02:00:00Z"] == "job-a"
+    assert groups["contains"]["runs"]["job-a@2026-10-01T02:00:00Z"] == 2
+    assert groups["produces"]["unresolved"] == ["s3://b/missing.json"]
+    # The raw edges are unchanged: the projection is added beside them.
+    assert len(doc["relations"]) == 4
+    every = render_json.payload(index, resolve("/component/job-a", "runs=all"))
+    assert every["relation_view"]["all_runs"] is True
+    assert len({g["rel"]: g for g in every["relation_view"]["groups"]}["contains"]["rows"]) == 3
+
+
+def test_an_entity_with_no_relations_says_so():
+    page = _page(_index([COMPONENT]), "/component/job-a")
+    assert '<h2>relations</h2><p class="absent">no relations</p>' in page
+    assert render_json.payload(_index([COMPONENT]), resolve("/component/job-a"))[
+        "relation_view"]["groups"] == []

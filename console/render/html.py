@@ -455,13 +455,8 @@ def _value_of(value: object) -> str:
     return value.value if isinstance(value, State) else str(value)
 
 
-def entity_page(index: Index, ent: Entity) -> str:
+def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
     """Everything known about one thing, including its relations (§4.1)."""
-    related = index.related(ent.id)
-    rel_items = "".join(
-        f'<li>{esc(e.rel)} → <a href="{esc(_edge_href(index, e))}">{esc(_edge_other(ent, e))}</a></li>'
-        for e in related
-    ) or '<li class="absent">no relations</li>'
     # A declared label heads the page; the id stays in the breadcrumb and the
     # row below it, so the identifier is never hidden by the name.
     label = ent.detail.get(LABEL_DETAIL)
@@ -474,11 +469,68 @@ def entity_page(index: Index, ent: Entity) -> str:
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
 {_table([ent])}
 {document_section(ent, citations.declared(index))}
-<h2>relations</h2><ul>{rel_items}</ul>
+{relations_section(index, ent, all_runs)}
 {fields_section(ent)}
 {_source_findings_section(ent)}
 {_claims_section(ent)}
 </body></html>"""
+
+
+def relations_section(index: Index, ent: Entity, all_runs: bool = False) -> str:
+    """An entity's relations, one table per predicate (I11805).
+
+    Each related row shows its state, source and as-of, and is named by its
+    job or declared label rather than its id. A group opens with a count by
+    state, rows that are not healthy come first, and a job's runs fold to its
+    newest run per state unless the URL says `runs=all`: a component's page
+    used to list every run it ever had as a bare `job@timestamp` link, with no
+    state, so the one failure among a hundred healthy runs could not be seen.
+    The fold is declared on the page and the link to every run sits beside
+    it. The rows come from `render.json.relation_groups`, which the JSON
+    representation reads too (§3.8).
+    """
+    from ..server.router import RUNS_PARAM
+    from .json import relation_groups
+
+    groups = relation_groups(index, ent, all_runs=all_runs)
+    if not groups:
+        return '<h2>relations</h2><p class="absent">no relations</p>'
+    here = path_for_entity(ent.kind, ent.id)
+    toggle = ""
+    if all_runs:
+        toggle = (f'<p>every related run · <a href="{esc(here)}">'
+                  "show newest run per job and state</a></p>")
+    elif any(len(g.rows) < g.related for g in groups):
+        toggle = (f'<p>newest run per job and state · <a href="'
+                  f'{esc(here)}?{RUNS_PARAM}=all">show every run</a></p>')
+    parts = []
+    for g in groups:
+        counts = " · ".join(
+            f'<span class="state-{esc(state)}">{n} {esc(state)}</span>'
+            for state, n in g.summary.items()
+        ) or '<span class="absent">no rows in the index</span>'
+        folded = f" (from {g.related} related)" if len(g.rows) < g.related else ""
+        missing = ""
+        if g.unresolved:
+            items = "".join(f"<li>{esc(i)}</li>" for i in g.unresolved)
+            missing = (f'<p class="absent">{len(g.unresolved)} not in the index:</p>'
+                       f"<ul>{items}</ul>")
+        table = _table(g.rows, labels=_with_run_counts(g.labels, g.runs)) if g.rows else ""
+        parts.append(
+            f'<h3 class="list-group">{esc(g.rel)}</h3>'
+            f'<p class="list-summary">{len(g.rows)} rows{folded} · {counts}</p>'
+            f"{table}{missing}"
+        )
+    return "<h2>relations</h2>" + toggle + "".join(parts)
+
+
+def _with_run_counts(labels: dict[str, str], runs: dict[str, int]) -> dict[str, str]:
+    """Labels with how many runs a folded row stands for, e.g. `job (3 runs)`."""
+    out = dict(labels)
+    for rid, n in runs.items():
+        if n > 1:
+            out[rid] = f"{out.get(rid, rid)} ({n} runs)"
+    return out
 
 
 def history_page(index: Index, ent: Entity, window_hours: int) -> str:
@@ -702,11 +754,7 @@ def exceptions_by_state(exceptions: list[Entity], view=None) -> str:
     if not exceptions:
         return '<h2>not healthy</h2><p class="absent">No exceptions — every row is HEALTHY.</p>'
     rows = view.rows if view is not None else exceptions
-    labels = dict(view.labels) if view is not None else {}
-    runs = view.runs if view is not None else {}
-    for rid, n in runs.items():
-        if n > 1:
-            labels[rid] = f"{labels.get(rid, rid)} ({n} runs)"
+    labels = _with_run_counts(view.labels, view.runs) if view is not None else {}
     groups: dict[str, list[Entity]] = {}
     newest_first = sorted(rows, key=lambda e: e.provenance.as_of or "", reverse=True)
     for e in newest_first:
@@ -1687,14 +1735,3 @@ def search_page(hits: list, query: str) -> str:
 <title>search · {esc(query)}</title></head><body>
 <h1>search</h1><p>results for &ldquo;{esc(query)}&rdquo;</p><ul>{items}</ul>
 </body></html>"""
-
-
-def _edge_other(ent: Entity, edge) -> str:
-    return edge.target if edge.source == ent.id else edge.source
-
-
-def _edge_href(index: Index, edge) -> str:
-    other = index.entity(edge.target) or index.entity(edge.source)
-    if other is None:
-        return "#"
-    return path_for_entity(other.kind, other.id)

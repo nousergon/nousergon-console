@@ -158,7 +158,8 @@ def _page(index: Index, req) -> str:
                                      all_runs=req.all_runs, days=req.days,
                                      days_all=req.days_all)
     if req.view == "entity":
-        return render_html.entity_page(index, index.entity(req.entity_id))
+        return render_html.entity_page(index, index.entity(req.entity_id),
+                                       all_runs=req.all_runs)
     if req.view == "history":
         return render_html.history_page(index, index.entity(req.entity_id), req.window_hours or 24)
     if req.view == "doctor":

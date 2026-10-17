@@ -108,3 +108,7 @@ svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasha
 .report-meta { color: #4c5563; font-size: .9rem; margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
 details.report { border-top: 1px solid #4c5563; padding-top: .2rem; }
 .report-archive { columns: 2 22rem; }
+/* The declared lead block (`lead:`), above the newest report: one section
+   of each source's newest report, read first. */
+.report-lead { border-left: .35rem solid #0b5fa5; padding-left: .8rem; margin: 0 0 1.5rem; }
+.report-lead > h2 { margin-top: 0; }

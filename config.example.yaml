@@ -1511,9 +1511,17 @@ planner:
 # never deleted or moved. `archive` is a line naming where the reports are
 # kept, shown as written. `/reports` is the first feed; `/reports/<id>` each.
 #
+# `lead` (optional) puts ONE SECTION first: for each selector in `sources`
+# (default: the feed's own), the newest matching row's section under the first
+# markdown heading matching `heading` (a case-insensitive regex over the
+# heading text) is shown above the newest report, newest source first. The
+# report is not edited; the section also stays in place. A source with no row,
+# no readable text or no matching heading says which.
+#
 # A bad declaration (missing id or title, no facets, unknown kind,
-# `recent_days` outside 1..90) FAILS THE BUILD naming the feed. A selector
-# matching no row renders that absence, naming the selector.
+# `recent_days` outside 1..90, a lead without title or a valid `heading`
+# regex) FAILS THE BUILD naming the feed. A selector matching no row renders
+# that absence, naming the selector.
 reports:
   feeds:
     - id: daily
@@ -1522,6 +1530,11 @@ reports:
       facets: {pane: reports}
       recent_days: 14
       archive: s3://example-bucket/reports/YYYY-MM-DD.md
+      lead:
+        title: Merged by topic
+        heading: "^merged by topic"
+        sources:
+          - {kind: run, facets: {pane: reports}}
 
 # ── Citation links (rendered markdown documents) ───────────────────────────
 # Reports cite work as plain text — `ex#12`, `example-repo-I12`,

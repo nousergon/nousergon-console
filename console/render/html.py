@@ -1139,11 +1139,12 @@ def planner_project_page(index: Index, project_id: str) -> str:
 </body></html>"""
 
 
-def _report_meta(row: dict) -> str:
+def _report_meta(row: dict, lead: str = "") -> str:
     """When a report was published and where its row and object are."""
-    parts = [f'published {esc(row["at"])}' if row.get("at")
-             else '<span class="absent">publish time unknown</span>',
-             f'<a href="{esc(row["url"])}">row</a>']
+    parts = [lead] if lead else []
+    parts += [f'published {esc(row["at"])}' if row.get("at")
+              else '<span class="absent">publish time unknown</span>',
+              f'<a href="{esc(row["url"])}">row</a>']
     evidence = row.get("evidence")
     if isinstance(evidence, str) and evidence:
         parts.append(f'source <code>{esc(evidence)}</code>')
@@ -1160,8 +1161,33 @@ def _report_text(row: dict, links: Citations | None = None) -> str:
             f'<a href="{esc(row["url"])}">open its row</a></p>')
 
 
+def _report_lead(lead: dict | None, links: Citations | None = None) -> str:
+    """The declared lead block: one section of each source's newest report,
+    above everything else, each naming the report it was cut from. A source
+    that could not supply its section says why, with a link to its row."""
+    if not lead:
+        return ""
+    items = []
+    for item in lead["items"]:
+        if item.get("id") is None:
+            items.append(f'<p class="absent">no report — no row matches '
+                         f'<code>{esc(item["selector"])}</code></p>')
+            continue
+        source = f'from <a href="{esc(item["url"])}">{esc(item["label"])}</a>'
+        meta = _report_meta(item, source)
+        if item.get("section"):
+            text = document_body(item["section"], links)
+        else:
+            text = (f'<p class="absent">{esc(lead["title"])}: '
+                    f'{esc(item.get("section_unavailable") or "not found")}</p>')
+        items.append(f'<article class="report report-lead-item">{meta}{text}</article>')
+    return (f'<section class="report-lead"><h2>{esc(lead["title"])}</h2>'
+            + "".join(items) + "</section>")
+
+
 def reports_page(index: Index, feed_id: str | None = None) -> str:
-    """A report feed: the newest report rendered in full, the rest of the
+    """A report feed: the declared lead block (one section of each source's
+    newest report), the newest report rendered in full, the rest of the
     recent window below it (collapsed, newest first), then every older report
     as a dated link to its own page. Declared in config, evaluated per
     request over the built index, nothing stored (§5.6)."""
@@ -1220,6 +1246,7 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 {index_freshness(index)}
 {switcher}
 {window}
+{_report_lead(f.get("lead"), links)}
 {body}
 </body></html>"""
 

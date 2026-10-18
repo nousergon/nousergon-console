@@ -23,7 +23,6 @@ from ..index import planner, reports
 from ..index.graph import Index
 from ..render import html as render_html
 from ..render import json as render_json
-from ..search.resolve import search
 from .negotiate import negotiate
 from .router import UnknownRoute, resolve
 
@@ -172,7 +171,7 @@ def _page(index: Index, req) -> str:
         return render_html.reports_page(index, req.feed_id)
     if req.view == "registry":
         return render_html.registry_page(index, req.registry_name or "")
-    return render_html.search_page(search(index, req.query or ""), req.query or "")
+    return render_html.search_page(index, req.query or "", all_runs=req.all_runs)
 
 
 def _routable(path: str, query: str) -> bool:

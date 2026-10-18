@@ -122,7 +122,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = {"schema_version": SCHEMA_VERSION, "view": "history",
                "entity": entity(ent), "history": history_query(ent, req.window_hours or 24)}
     elif req.view == "search":
-        doc = _search(index, req.query or "")
+        doc = _search(index, req.query or "", all_runs=req.all_runs)
     elif req.view == "doctor":
         from ..diagnose import as_dict, doctor
 
@@ -670,13 +670,103 @@ def relation_groups(index: Index, ent: Entity, all_runs: bool = False) -> list[R
     return groups
 
 
-def _search(index: Index, query: str) -> dict[str, Any]:
+#: The question the search page answers, rendered on it and carried in its
+#: JSON (§4.4).
+SEARCH_QUESTION = "What in the fleet does this identifier name, and what state is it in?"
+
+
+@dataclass(frozen=True)
+class SearchGroup:
+    """The search hits of one kind, read as a list (I11805).
+
+    `rows` keep the resolver's rank (prefix before substring) within each
+    half, not healthy first. Unless the URL says `runs=all`, a job's runs fold
+    to its newest run per state: a job name used to return every run it ever
+    had as a bare `job@timestamp` id. `matched` counts the hits before the
+    fold and `runs` how many runs a folded row stands for, so the fold is
+    declared (§3.4).
+    """
+
+    kind: Kind
+    rows: list[Entity]
+    labels: dict[str, str]
+    runs: dict[str, int]
+    summary: dict[str, int]
+    matched: int
+
+
+@dataclass(frozen=True)
+class SearchView:
+    """One search, computed once for both representations (§3.8).
+
+    `exact` are the hits whose id IS the query (§3.7): never folded, so
+    pasting a full run id lands on that run even when a newer one exists.
+    `groups` hold every other hit, one per kind in the model's order.
+    """
+
+    query: str
+    all_runs: bool
+    exact: list[Entity]
+    exact_labels: dict[str, str]
+    groups: list[SearchGroup]
+    hits: int
+
+
+def search_view(index: Index, query: str, all_runs: bool = False) -> SearchView:
+    """Resolve a query and shape its hits the way lists read (I11805)."""
+    from .html import is_exception
+
     hits = search(index, query)
+    exact = [h.entity for h in hits if h.exact]
+    by_kind: dict[Kind, list[Entity]] = {}
+    for h in hits:
+        if not h.exact:
+            by_kind.setdefault(h.entity.kind, []).append(h.entity)
+    groups: list[SearchGroup] = []
+    for kind in Kind:
+        found = by_kind.get(kind)
+        if not found:
+            continue
+        if all_runs:
+            rows, labels, runs = found, declared_labels(found), {}
+        else:
+            view = latest_per_job(index, found, per_state=True)
+            rows, labels, runs = view.rows, view.labels, view.runs
+        rows = sorted(rows, key=lambda e: not is_exception(e))
+        summary: dict[str, int] = {}
+        for e in rows:
+            summary[e.state_value] = summary.get(e.state_value, 0) + 1
+        groups.append(SearchGroup(kind=kind, rows=rows, labels=labels, runs=runs,
+                                  summary=dict(sorted(summary.items())),
+                                  matched=len(found)))
+    return SearchView(query=query, all_runs=all_runs, exact=exact,
+                      exact_labels=latest_per_job(index, exact).labels,
+                      groups=groups, hits=len(hits))
+
+
+def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
+    hits = search(index, query)
+    view = search_view(index, query, all_runs=all_runs)
     return {
         "schema_version": SCHEMA_VERSION,
         "view": "search",
+        "question": SEARCH_QUESTION,
         "query": query,
         "hits": [{"exact": h.exact, "entity": entity(h.entity)} for h in hits],
+        # The page's projection of those hits, so HTML and JSON match (§3.8):
+        # exact matches first, then one group per kind with its rows' states
+        # counted and runs folded unless the URL says `runs=all`
+        # (alpha-engine-config-I11805). `hits` above is unchanged.
+        "search_view": {
+            "all_runs": all_runs,
+            "exact": [e.id for e in view.exact],
+            "exact_labels": view.exact_labels,
+            "groups": [
+                {"kind": g.kind.value, "matched": g.matched, "summary": g.summary,
+                 "rows": [e.id for e in g.rows], "labels": g.labels, "runs": g.runs}
+                for g in view.groups
+            ],
+        },
     }
 
 

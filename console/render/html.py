@@ -1724,14 +1724,76 @@ def doctor_page(index: Index, identifier: str) -> str:
 </body></html>"""
 
 
-def search_page(hits: list, query: str) -> str:
-    items = "".join(
-        f'<li><a href="{esc(path_for_entity(h.entity.kind, h.entity.id))}">'
-        f"{esc(h.entity.id)}</a> <small>{esc(h.entity.kind.value)}"
-        f'{" · exact" if h.exact else ""}</small></li>'
-        for h in hits
-    ) or '<li class="absent">no matches — this identifier is not in the fleet</li>'
-    return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>search · {esc(query)}</title></head><body>
-<h1>search</h1><p>results for &ldquo;{esc(query)}&rdquo;</p><ul>{items}</ul>
-</body></html>"""
+def search_page(index: Index, query: str, all_runs: bool = False) -> str:
+    """Search results read the way lists read (alpha-engine-config-I11805).
+
+    An exact identifier match leads (§3.7). Every other hit sits in one table
+    per kind, each row with its state, source and as-of and named by its job
+    or declared label rather than its id; a group opens with a count by
+    state, rows that are not healthy come first, and a job's runs fold to its
+    newest run per state unless the URL says `runs=all` — a job name used to
+    return every run it ever had as a bare `job@timestamp` id. The rows come
+    from `render.json.search_view`, which the JSON representation reads too
+    (§3.8).
+    """
+    from urllib.parse import urlencode
+
+    from ..server.router import RUNS_PARAM
+    from .json import SEARCH_QUESTION, search_view
+
+    view = search_view(index, query, all_runs=all_runs)
+    form = ('<form action="/search" method="get"><label for="search-q">search fleet</label> '
+            f'<input id="search-q" name="q" value="{esc(query)}" autocomplete="off">'
+            '<button type="submit">search</button></form>')
+    head = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>search{" · " + esc(query) if query.strip() else ""}</title></head><body>
+<h1>search</h1>
+<p class="pane-question">{esc(SEARCH_QUESTION)}</p>
+{form}"""
+    if not query.strip():
+        return head + ('<p class="absent">Type an identifier or part of one: a component, '
+                       "run, artifact key, tracker ref or incident.</p></body></html>")
+    if not view.hits:
+        return head + (f"<p>results for &ldquo;{esc(query)}&rdquo;</p>"
+                       '<p class="absent">no matches — this identifier is not in the fleet</p>'
+                       "</body></html>")
+    shown = len(view.exact) + sum(len(g.rows) for g in view.groups)
+    totals: dict[str, int] = {}
+    for e in view.exact + [e for g in view.groups for e in g.rows]:
+        totals[e.state_value] = totals.get(e.state_value, 0) + 1
+    folded = f" (from {view.hits} matches)" if shown < view.hits else ""
+    summary = (f'<p class="list-summary">results for &ldquo;{esc(query)}&rdquo;: '
+               f"{_rows(shown)}{folded} · {_state_counts(dict(sorted(totals.items())))}</p>")
+    toggle = ""
+    here = "/search?" + urlencode({"q": query})
+    if all_runs:
+        toggle = (f'<p>every matching run · <a href="{esc(here)}">'
+                  "show newest run per job and state</a></p>")
+    elif folded:
+        toggle = (f'<p>newest run per job and state · <a href="'
+                  f'{esc(here)}&amp;{RUNS_PARAM}=all">show every run</a></p>')
+    parts = []
+    if view.exact:
+        parts.append('<h2 class="list-group">exact match</h2>'
+                     + _table(view.exact, labels=view.exact_labels))
+    for g in view.groups:
+        note = f" (from {g.matched} matches)" if len(g.rows) < g.matched else ""
+        parts.append(
+            f'<h2 class="list-group">{esc(g.kind.value)}s</h2>'
+            f'<p class="list-summary">{_rows(len(g.rows))}{note} · '
+            f"{_state_counts(g.summary)}</p>"
+            + _table(g.rows, labels=_with_run_counts(g.labels, g.runs))
+        )
+    return head + summary + toggle + "".join(parts) + "</body></html>"
+
+
+def _rows(n: int) -> str:
+    return f"{n} row" if n == 1 else f"{n} rows"
+
+
+def _state_counts(summary: dict[str, int]) -> str:
+    """`2 FAILED · 9 HEALTHY`, each count in its state's colour."""
+    return " · ".join(
+        f'<span class="state-{esc(state)}">{n} {esc(state)}</span>'
+        for state, n in summary.items()
+    ) or '<span class="absent">no rows</span>'

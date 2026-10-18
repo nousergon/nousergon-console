@@ -57,9 +57,10 @@ class Resolved:
     query: str | None = None
     page: int = 1
     window_hours: int | None = None
-    #: Run lists and entity pages: True shows every historical run instead of
-    #: the newest run per job (`?runs=all`, alpha-engine-config-I11805) — on an
-    #: entity page, among its relations. Carried in the URL, so both views
+    #: Run lists, entity pages and search: True shows every historical run
+    #: instead of the newest run per job (`?runs=all`,
+    #: alpha-engine-config-I11805) — on an entity page, among its relations;
+    #: on search, among the hits. Carried in the URL, so both views
     #: reproduce cold (§3.2, §3.4).
     all_runs: bool = False
     #: List views only: a dated window (`?days=N`) or every row (`?days=all`),
@@ -118,7 +119,11 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         raise UnknownRoute(f"no reports view at {path!r}")
 
     if segments[0] == "search":
-        return Resolved(view="search", query=params.get("q", ""))
+        # `?runs=all` lists every matching run instead of the newest run per
+        # job and state (alpha-engine-config-I11805), the same switch as a
+        # run list and an entity page.
+        return Resolved(view="search", query=params.get("q", ""),
+                        all_runs=params.get(RUNS_PARAM) == "all")
 
     if segments[0] == "doctor":
         # §3.9. Addressable like everything else — a diagnosis nobody can link

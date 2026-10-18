@@ -273,3 +273,76 @@ def test_an_entity_with_no_relations_says_so():
     assert '<h2>relations</h2><p class="absent">no relations</p>' in page
     assert render_json.payload(_index([COMPONENT]), resolve("/component/job-a"))[
         "relation_view"]["groups"] == []
+
+
+# ------------------------------------------------------------------ search --
+
+def _search_index() -> Index:
+    return _index(RUNS + [
+        _run("job-alpha@2026-10-01T04:00:00Z", State.HEALTHY, "2026-10-01T04:00:00Z"),
+        Entity(kind=Kind.COMPONENT, id="job-a", state=State.HEALTHY,
+               provenance=Provenance(source="fixture", as_of="2026-10-01T00:00:00Z"),
+               detail={"label": "Job A pipeline"}),
+    ])
+
+
+def test_search_names_runs_by_job_and_folds_them_per_state():
+    page = _page(_search_index(), "/search?q=job-a")
+    assert ">Job A pipeline</a>" in page  # the exact hit, by its declared label
+    runs = page.split('<h2 class="list-group">runs</h2>')[1]
+    # job-a's two runs differ in state, so each is its own row, named by job.
+    assert ">job-a</a>" in runs and "job-a@2026-10-01T02:00:00Z" in runs
+    assert ">job-alpha</a>" in runs
+    assert "3 rows · " in runs
+    assert "1 FAILED</span>" in runs and "2 HEALTHY</span>" in runs
+    # Not healthy first: the FAILED run leads its group.
+    assert runs.index("state-FAILED") < runs.index('class="state-HEALTHY"')
+
+
+def test_search_declares_the_fold_and_links_every_run():
+    index = _index([
+        _run("job-a@2026-10-01T01:00:00Z", State.HEALTHY, "2026-10-01T01:00:00Z"),
+        _run("job-a@2026-10-01T02:00:00Z", State.HEALTHY, "2026-10-01T02:00:00Z"),
+    ])
+    page = _page(index, "/search?q=job-a")
+    assert ">job-a (2 runs)</a>" in page
+    assert "1 row (from 2 matches)" in page
+    assert "job-a@2026-10-01T01:00:00Z" not in page  # the older run is folded
+    assert 'href="/search?q=job-a&amp;runs=all">show every run</a>' in page
+    every = _page(index, "/search?q=job-a&runs=all")
+    assert "job-a@2026-10-01T01:00:00Z" in every
+    assert "show newest run per job and state" in every
+
+
+def test_an_exact_run_id_is_never_folded_away():
+    index = _index([
+        _run("job-a@2026-10-01T01:00:00Z", State.FAILED, "2026-10-01T01:00:00Z"),
+        _run("job-a@2026-10-01T02:00:00Z", State.FAILED, "2026-10-01T02:00:00Z"),
+    ])
+    page = _page(index, "/search?q=job-a@2026-10-01T01:00:00Z")
+    exact = page.split('<h2 class="list-group">exact match</h2>')[1]
+    assert 'href="/run/job-a@2026-10-01T01:00:00Z"' in exact
+
+
+def test_search_with_no_query_asks_for_one_rather_than_reporting_no_match():
+    page = _page(_search_index(), "/search")
+    assert "Type an identifier" in page and "no matches" not in page
+    assert "no matches — this identifier is not in the fleet" in _page(
+        _search_index(), "/search?q=nothing-here")
+
+
+def test_search_json_carries_the_same_view():
+    index = _search_index()
+    doc = render_json.payload(index, resolve("/search", "q=job-a"))
+    view = doc["search_view"]
+    assert view["all_runs"] is False
+    assert view["exact"] == ["job-a"] and view["exact_labels"] == {"job-a": "Job A pipeline"}
+    runs = {g["kind"]: g for g in view["groups"]}["run"]
+    assert runs["matched"] == 3
+    assert runs["rows"][0] == "job-a@2026-10-01T01:00:00Z"  # FAILED first
+    assert runs["summary"] == {"FAILED": 1, "HEALTHY": 2}
+    assert runs["labels"]["job-alpha@2026-10-01T04:00:00Z"] == "job-alpha"
+    # The raw hits are unchanged: the projection is added beside them.
+    assert len(doc["hits"]) == 4 and doc["hits"][0]["exact"]
+    every = render_json.payload(index, resolve("/search", "q=job-a&runs=all"))
+    assert every["search_view"]["all_runs"] is True

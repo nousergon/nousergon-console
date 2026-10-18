@@ -67,6 +67,19 @@ def _feed(index):
     return reports.evaluate(index, reports.feed(index, None), now=NOW)
 
 
+@pytest.fixture(autouse=True)
+def _pinned_clock(monkeypatch):
+    """The pages read the window against the wall clock; the fixtures are
+    dated around NOW. Unpinned, the page tests passed only until the recent
+    window slid past the fixture dates (they failed from 2026-10-18)."""
+    evaluate = reports.evaluate
+
+    def at_now(index, f, now=None):
+        return evaluate(index, f, now=now or NOW)
+
+    monkeypatch.setattr(reports, "evaluate", at_now)
+
+
 # ------------------------------------------------------------- selection --
 
 def test_newest_report_first_recent_window_then_dated_archive():

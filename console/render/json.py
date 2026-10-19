@@ -37,7 +37,7 @@ from ..index.numbers import not_healthy as _not_healthy
 from ..model.entity import DOCUMENT_DETAIL, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity
 from ..model.kinds import STATE_FILTER, Kind, State
 from ..model.fields import parse as parse_fields
-from ..search.resolve import search
+from ..search.resolve import MATCHED_ON_LABEL, search
 from ..server.router import Resolved
 
 #: The wire version of this projection. Distinct from the adapter envelope's
@@ -672,15 +672,16 @@ def relation_groups(index: Index, ent: Entity, all_runs: bool = False) -> list[R
 
 #: The question the search page answers, rendered on it and carried in its
 #: JSON (§4.4).
-SEARCH_QUESTION = "What in the fleet does this identifier name, and what state is it in?"
+SEARCH_QUESTION = ("What in the fleet does this identifier or name point to, "
+                   "and what state is it in?")
 
 
 @dataclass(frozen=True)
 class SearchGroup:
     """The search hits of one kind, read as a list (I11805).
 
-    `rows` keep the resolver's rank (prefix before substring) within each
-    half, not healthy first. Unless the URL says `runs=all`, a job's runs fold
+    `rows` keep the resolver's rank (id prefix, id substring, then label)
+    within each half, not healthy first. Unless the URL says `runs=all`, a job's runs fold
     to its newest run per state: a job name used to return every run it ever
     had as a bare `job@timestamp` id. `matched` counts the hits before the
     fold and `runs` how many runs a folded row stands for, so the fold is
@@ -702,6 +703,8 @@ class SearchView:
     `exact` are the hits whose id IS the query (§3.7): never folded, so
     pasting a full run id lands on that run even when a newer one exists.
     `groups` hold every other hit, one per kind in the model's order.
+    `by_label` counts the hits found by their declared label alone — the id
+    did not match — so the page can say a plain-language query found them.
     """
 
     query: str
@@ -710,6 +713,7 @@ class SearchView:
     exact_labels: dict[str, str]
     groups: list[SearchGroup]
     hits: int
+    by_label: int = 0
 
 
 def search_view(index: Index, query: str, all_runs: bool = False) -> SearchView:
@@ -741,7 +745,8 @@ def search_view(index: Index, query: str, all_runs: bool = False) -> SearchView:
                                   matched=len(found)))
     return SearchView(query=query, all_runs=all_runs, exact=exact,
                       exact_labels=latest_per_job(index, exact).labels,
-                      groups=groups, hits=len(hits))
+                      groups=groups, hits=len(hits),
+                      by_label=sum(1 for h in hits if h.matched_on == MATCHED_ON_LABEL))
 
 
 def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
@@ -752,7 +757,10 @@ def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
         "view": "search",
         "question": SEARCH_QUESTION,
         "query": query,
-        "hits": [{"exact": h.exact, "entity": entity(h.entity)} for h in hits],
+        # `matched_on` says whether the id or only the declared label matched
+        # (alpha-engine-config-I11805); identifier matches always rank first.
+        "hits": [{"exact": h.exact, "matched_on": h.matched_on, "entity": entity(h.entity)}
+                 for h in hits],
         # The page's projection of those hits, so HTML and JSON match (§3.8):
         # exact matches first, then one group per kind with its rows' states
         # counted and runs folded unless the URL says `runs=all`
@@ -761,6 +769,7 @@ def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
             "all_runs": all_runs,
             "exact": [e.id for e in view.exact],
             "exact_labels": view.exact_labels,
+            "by_label": view.by_label,
             "groups": [
                 {"kind": g.kind.value, "matched": g.matched, "summary": g.summary,
                  "rows": [e.id for e in g.rows], "labels": g.labels, "runs": g.runs}

@@ -327,7 +327,7 @@ def test_an_exact_run_id_is_never_folded_away():
 def test_search_with_no_query_asks_for_one_rather_than_reporting_no_match():
     page = _page(_search_index(), "/search")
     assert "Type an identifier" in page and "no matches" not in page
-    assert "no matches — this identifier is not in the fleet" in _page(
+    assert "no matches — no identifier or name in the fleet contains this" in _page(
         _search_index(), "/search?q=nothing-here")
 
 
@@ -346,3 +346,22 @@ def test_search_json_carries_the_same_view():
     assert len(doc["hits"]) == 4 and doc["hits"][0]["exact"]
     every = render_json.payload(index, resolve("/search", "q=job-a&runs=all"))
     assert every["search_view"]["all_runs"] is True
+
+
+def test_search_finds_a_row_by_the_name_its_page_shows():
+    # A reader types what a page showed them, not the id behind it.
+    page = _page(_search_index(), "/search?q=job+a+pipeline")
+    assert ">Job A pipeline</a>" in page and 'href="/component/job-a"' in page
+    assert "1 row · 1 by name · " in page
+    assert "no matches" not in page
+
+
+def test_search_json_says_which_hits_a_name_found():
+    doc = render_json.payload(_search_index(), resolve("/search", "q=pipeline"))
+    assert [(h["entity"]["id"], h["matched_on"]) for h in doc["hits"]] == [
+        ("job-a", "label")]
+    assert doc["search_view"]["by_label"] == 1
+    assert doc["search_view"]["groups"][0]["labels"] == {"job-a": "Job A pipeline"}
+    by_id = render_json.payload(_search_index(), resolve("/search", "q=job-a"))
+    assert by_id["search_view"]["by_label"] == 0
+    assert {h["matched_on"] for h in by_id["hits"]} == {"id"}

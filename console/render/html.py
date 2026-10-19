@@ -1734,7 +1734,9 @@ def search_page(index: Index, query: str, all_runs: bool = False) -> str:
     newest run per state unless the URL says `runs=all` — a job name used to
     return every run it ever had as a bare `job@timestamp` id. The rows come
     from `render.json.search_view`, which the JSON representation reads too
-    (§3.8).
+    (§3.8). A name a page shows (a declared label) finds its row as well,
+    ranked after every identifier match, and the summary counts how many
+    rows only a name found.
     """
     from urllib.parse import urlencode
 
@@ -1752,18 +1754,24 @@ def search_page(index: Index, query: str, all_runs: bool = False) -> str:
 {form}"""
     if not query.strip():
         return head + ('<p class="absent">Type an identifier or part of one: a component, '
-                       "run, artifact key, tracker ref or incident.</p></body></html>")
+                       "run, artifact key, tracker ref or incident. A name shown on a "
+                       "page works too.</p></body></html>")
     if not view.hits:
         return head + (f"<p>results for &ldquo;{esc(query)}&rdquo;</p>"
-                       '<p class="absent">no matches — this identifier is not in the fleet</p>'
+                       '<p class="absent">no matches — no identifier or name in the fleet '
+                       "contains this</p>"
                        "</body></html>")
     shown = len(view.exact) + sum(len(g.rows) for g in view.groups)
     totals: dict[str, int] = {}
     for e in view.exact + [e for g in view.groups for e in g.rows]:
         totals[e.state_value] = totals.get(e.state_value, 0) + 1
     folded = f" (from {view.hits} matches)" if shown < view.hits else ""
+    # Hits found by their declared label alone are counted, so a reader who
+    # typed a name sees that the name, not an id, found them (I11805).
+    named = f" · {view.by_label} by name" if view.by_label else ""
     summary = (f'<p class="list-summary">results for &ldquo;{esc(query)}&rdquo;: '
-               f"{_rows(shown)}{folded} · {_state_counts(dict(sorted(totals.items())))}</p>")
+               f"{_rows(shown)}{folded}{named} · "
+               f"{_state_counts(dict(sorted(totals.items())))}</p>")
     toggle = ""
     here = "/search?" + urlencode({"q": query})
     if all_runs:

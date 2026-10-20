@@ -239,3 +239,13 @@ def test_the_json_doctor_view_carries_the_facts():
     doc = payload(_build(), resolve(f"/doctor/{ID}"))
     assert doc["facts"]["entity_state"] == "HEALTHY"
     assert doc["facts"]["reporting_claims"] == 1
+
+
+def test_doctor_page_links_a_known_identifier_to_its_entity_page():
+    from console.render.html import doctor_page
+
+    html = doctor_page(_build(), ID)
+    assert "<p>component <a href=\"/component/" in html
+    assert "no entity" not in html
+    # An identifier nothing knows has no entity page to link to.
+    assert "<p>component <a" not in doctor_page(_build(), "nothing-knows-this")

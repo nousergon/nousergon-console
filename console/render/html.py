@@ -467,6 +467,7 @@ def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
 <h1>{esc(heading)}</h1>
 {index_freshness(index)}
 <p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
+{_entity_links(ent)}
 {_table([ent])}
 {document_section(ent, citations.declared(index))}
 {relations_section(index, ent, all_runs)}
@@ -474,6 +475,20 @@ def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
 {_source_findings_section(ent)}
 {_claims_section(ent)}
 </body></html>"""
+
+
+def _entity_links(ent: Entity) -> str:
+    """Where to go from an entity page: its history, and why it is here (§3.9).
+
+    History is offered only where a source declares retained history; offering
+    a link that always answers "unavailable" would be a dead end. The doctor
+    link is always there: it is the question a reader asks of any row.
+    """
+    links = []
+    if ent.detail.get("history_retention_hours"):
+        links.append(f'<a href="/history/{esc(ent.kind.route)}/{esc(ent.id)}">history</a>')
+    links.append(f'<a href="/doctor/{esc(ent.id)}">doctor: why is this here?</a>')
+    return '<p class="entity-links">' + " · ".join(links) + "</p>"
 
 
 def relations_section(index: Index, ent: Entity, all_runs: bool = False) -> str:
@@ -533,18 +548,78 @@ def _with_run_counts(labels: dict[str, str], runs: dict[str, int]) -> dict[str, 
     return out
 
 
-def history_page(index: Index, ent: Entity, window_hours: int) -> str:
+#: The windows the history page offers as links; the URL carries the choice
+#: (`?window_hours=N`, §3.2), so a pasted link reproduces the view cold.
+HISTORY_WINDOWS: tuple[tuple[int, str], ...] = ((24, "24h"), (168, "7d"), (720, "30d"))
+
+
+def _entity_heading(ent: Entity) -> str:
+    """The name a page shows for an entity: its declared label, else its id."""
+    label = ent.detail.get(LABEL_DETAIL)
+    return label if isinstance(label, str) and label else ent.id
+
+
+def _history_cell(value: object) -> str:
+    cell = esc(value) if value not in (None, "") else '<em class="absent">none</em>'
+    return f"<td>{cell}</td>"
+
+
+def _history_table(points: list[dict]) -> str:
+    """Retained observations as a table, oldest first, not a dict per line.
+
+    `as_of` leads; every other key a source retained is a column, in the order
+    first seen, so nothing a source recorded is dropped (§5.8: this path knows
+    nothing about who emitted the point).
+    """
+    columns = ["as_of"]
+    for point in points:
+        for key in point:
+            if key not in columns:
+                columns.append(key)
+    head = "".join(f"<th>{esc(c)}</th>" for c in columns)
+    body = "".join(
+        "<tr>" + "".join(_history_cell(p.get(c)) for c in columns) + "</tr>"
+        for p in points
+    )
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def history_page(index: Index, ent: Entity, window_hours: int,
+                 now: datetime | None = None) -> str:
+    """What a source retained about one entity over a window.
+
+    Reads like the entity page it hangs off (alpha-engine-config-I11805): a
+    breadcrumb back to the list and the entity, the entity's declared name, its
+    current state, and each retained observation as a table row. The window
+    choices are links, so the view needs no client state (§3.2).
+    """
     from ..history import query as history_query
-    result = history_query(ent, window_hours)
+    result = history_query(ent, window_hours, now=now)
+    here = f"/history/{ent.kind.route}/{ent.id}"
+    entity_href = path_for_entity(ent.kind, ent.id)
+    windows = " · ".join(
+        f"<strong>{esc(name)}</strong>" if hours == window_hours
+        else f'<a href="{esc(here)}?window_hours={hours}">{esc(name)}</a>'
+        for hours, name in HISTORY_WINDOWS
+    )
     if not result["available"]:
         body = f'<p class="absent">history unavailable — {esc(result["reason"])}</p>'
     else:
         bound = (f' requested {result["requested_hours"]}h, bounded to {result["effective_hours"]}h by source retention'
                  if result["bounded"] else f' {result["effective_hours"]}h retained window')
-        rows = "".join(f'<li>{esc(point)}</li>' for point in result["points"]) or '<li class="absent">no observations in this retained window</li>'
-        body = f'<p>history window:{esc(bound)}</p><ul>{rows}</ul>'
-    return f'<!doctype html><html><head><meta charset="utf-8"><title>history · {esc(ent.id)}</title></head><body><h1>history: {esc(ent.id)}</h1>{index_freshness(index)}{body}</body></html>'
-
+        count = len(result["points"])
+        table = (_history_table(result["points"]) if count
+                 else '<p class="absent">no observations in this retained window</p>')
+        body = (f'<p>history window:{esc(bound)} · {count} observation{"" if count == 1 else "s"}'
+                f'</p><p>window: {windows}</p>{table}')
+    heading = _entity_heading(ent)
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>history · {esc(heading)}</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/{esc(ent.kind.route)}">{esc(ent.kind.value)}</a> &rsaquo; <a href="{esc(entity_href)}">{esc(ent.id)}</a> &rsaquo; history</nav>
+<h1>history: {esc(heading)}</h1>
+<p class="state-{esc(ent.state_value)}">state now: {esc(ent.state_value)} · <a href="{esc(entity_href)}">back to {esc(ent.kind.value)}</a></p>
+{index_freshness(index)}{body}
+</body></html>"""
 
 def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
               all_runs: bool = False, days: int | None = None,
@@ -1688,6 +1763,15 @@ def registry_page(index: Index, name: str) -> str:
 </body></html>"""
 
 
+def _doctor_entity_line(index: Index, identifier: str) -> str:
+    """Link the diagnosed identifier to its entity page when the index has one."""
+    ent = index.entity(identifier)
+    if ent is None:
+        return ""
+    return (f'<p>{esc(ent.kind.value)} <a href="{esc(path_for_entity(ent.kind, ent.id))}">'
+            f"{esc(_entity_heading(ent))}</a> · state: {esc(ent.state_value)}</p>")
+
+
 def doctor_page(index: Index, identifier: str) -> str:
     """Why an identifier is or is not on the surface (§3.9).
 
@@ -1717,6 +1801,7 @@ def doctor_page(index: Index, identifier: str) -> str:
 <title>doctor · {esc(identifier)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; doctor</nav>
 <h1>doctor: {esc(identifier)}</h1>
+{_doctor_entity_line(index, identifier)}
 {index_freshness(index)}
 <p class="{"state-HEALTHY" if d.ok else "state-FAILED"}">{esc(d.summary())}</p>
 <table><thead><tr><th>link</th><th></th><th>detail</th></tr></thead>

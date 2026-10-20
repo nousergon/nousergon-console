@@ -365,3 +365,68 @@ def test_search_json_says_which_hits_a_name_found():
     by_id = render_json.payload(_search_index(), resolve("/search", "q=job-a"))
     assert by_id["search_view"]["by_label"] == 0
     assert {h["matched_on"] for h in by_id["hits"]} == {"id"}
+
+
+# --------------------------------------- history and doctor pages (I11805) ---
+
+def _history_entity(label=None):
+    from datetime import datetime, timezone  # noqa: F401
+    from console.model.entity import Entity, Provenance
+    from console.model.kinds import Kind, State
+
+    detail = {
+        "history_retention_hours": 48,
+        "history": [
+            {"as_of": "2026-08-04T10:00:00Z", "value": 3, "state": "HEALTHY"},
+            {"as_of": "2026-08-04T11:00:00Z", "value": 4},
+        ],
+    }
+    if label:
+        detail["label"] = label
+    return Entity(kind=Kind.COMPONENT, id="ae-writer.service", state=State.FAILED,
+                  provenance=Provenance(source="fixture"), detail=detail)
+
+
+def _history_html(ent):
+    from datetime import datetime, timezone
+    from console.render.html import history_page
+
+    return history_page(Index(), ent, 24, now=datetime(2026, 8, 4, 12, tzinfo=timezone.utc))
+
+
+def test_history_page_is_a_table_with_a_breadcrumb_and_window_links():
+    html = _history_html(_history_entity(label="Nightly writer"))
+    assert "{'as_of'" not in html  # no dict repr
+    assert "<h1>history: Nightly writer</h1>" in html
+    assert 'href="/component/ae-writer.service"' in html
+    assert 'href="/component"' in html
+    assert "<th>as_of</th><th>value</th><th>state</th>" in html
+    assert "<td>2026-08-04T11:00:00Z</td><td>4</td>" in html
+    assert "2 observations" in html and "state now: FAILED" in html
+    # The current window is plain text; the others are links that carry the URL.
+    assert "<strong>24h</strong>" in html
+    assert 'href="/history/component/ae-writer.service?window_hours=168"' in html
+
+
+def test_history_page_without_retention_says_so_and_still_links_back():
+    from console.model.entity import Entity, Provenance
+    from console.model.kinds import Kind, State
+    from console.render.html import history_page
+
+    ent = Entity(kind=Kind.COMPONENT, id="x", state=State.HEALTHY,
+                 provenance=Provenance(source="fixture"))
+    html = history_page(Index(), ent, 24)
+    assert "history unavailable" in html and 'href="/component/x"' in html
+
+
+def test_entity_page_links_history_only_where_retained_and_always_doctor():
+    from console.render.html import _entity_links
+
+    assert 'href="/history/component/ae-writer.service"' in _entity_links(_history_entity())
+    assert 'href="/doctor/ae-writer.service"' in _entity_links(_history_entity())
+    from console.model.entity import Entity, Provenance
+    from console.model.kinds import Kind, State
+    bare = Entity(kind=Kind.COMPONENT, id="x", state=State.HEALTHY,
+                  provenance=Provenance(source="fixture"))
+    assert "/history/" not in _entity_links(bare)
+    assert 'href="/doctor/x"' in _entity_links(bare)

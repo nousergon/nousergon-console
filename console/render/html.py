@@ -110,14 +110,16 @@ def esc(s: object) -> str:
     return html.escape(str(s), quote=True)
 
 
-def row(ent: Entity, columns: list[str] | None = None, label: str | None = None) -> str:
+def row(ent: Entity, columns: list[str] | None = None, label: str | None = None,
+        links: Citations | None = None) -> str:
     """One row: id, state, then any declared field columns, then the rest of
     §5.1's four fields (source · as-of · evidence).
 
     ``columns`` names the declared fields a filtered list such as a dashboard
     shows, one column each, so its rows read without a click per row. Values
     are rendered by `format_value` alone, the same path as the entity page
-    (§5.8): nothing here knows who emitted a field.
+    (§5.8): nothing here knows who emitted a field. ``links`` is the declared
+    `citations:` block, so a cited issue in a text column is a link.
     """
     p = ent.provenance
     as_of = esc(p.as_of) if p.as_of else '<em class="absent">no freshness stamp</em>'
@@ -129,7 +131,7 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None)
         f'<tr class="state-{esc(ent.state_value)}">'
         f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(label or ent.id)}</a></td>'
         f"<td>{esc(ent.state_value)}</td>"
-        + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or []))
+        + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or [], links))
         + f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"
         f"<td>{evidence}</td>"
@@ -137,7 +139,8 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None)
     )
 
 
-def _field_cells(ent: Entity, columns: list[str]) -> list[str]:
+def _field_cells(ent: Entity, columns: list[str],
+                 links: Citations | None = None) -> list[str]:
     by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))}
     out = []
     for name in columns:
@@ -145,18 +148,27 @@ def _field_cells(ent: Entity, columns: list[str]) -> list[str]:
         if f is None:
             out.append('<em class="absent">—</em>')
         else:
-            out.append(_value_html(f, by_name))
+            out.append(_value_html(f, by_name, links=links))
     return out
 
 
-def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True) -> str:
+def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True,
+                links: Citations | None = None) -> str:
     """A field's rendered value; a part-of-whole field adds a bar (I11805).
 
     The bar is a native `<progress>` capped at the whole, with the numbers and
     percentage beside it in text, so nothing is carried by length alone
     (§5.7). It is uncoloured: `of` declares a relation, not a baseline, and
     §5.4 colours only a declared baseline.
+
+    Everything else is text a reader should be able to click through
+    (alpha-engine-config-I11805): a `render: link` field is one link, read as
+    its citation when it points at a declared repository's issue or pull
+    request, and any other value links its bare URLs and declared citations
+    (``repo-I12``, ``repo#12``, ``repo-PR34``). Numbers never match either.
     """
+    from . import markdown
+
     unit = f" {esc(f.unit)}" if f.unit and with_unit else ""
     if f.render is Render.TIMESERIES:
         chart = _timeseries_html(f, by_name.get(f.of or ""))
@@ -164,7 +176,9 @@ def _value_html(f: Field, by_name: dict[str, Field], with_unit: bool = True) -> 
             return chart
     pair = part_of_whole(f, by_name.get(f.of or ""))
     if pair is None:
-        return esc(format_value(f)) + unit
+        if f.render is Render.LINK and isinstance(f.value, str):
+            return markdown.link_value(f.value, links) + unit
+        return markdown.link_text(format_value(f), links) + unit
     value, whole = pair
     whole_txt = esc(format_value(by_name[f.of]))  # type: ignore[index]
     if whole <= 0:
@@ -278,14 +292,15 @@ def _field_columns(entities: list[Entity]) -> list[str]:
 
 
 def _table(entities: list[Entity], with_fields: bool = False,
-           labels: dict[str, str] | None = None) -> str:
+           labels: dict[str, str] | None = None,
+           links: Citations | None = None) -> str:
     if not entities:
         # Absence renders as itself — an empty state is a rendered fact, not
         # a blank region (§5.5).
         return '<p class="absent">No entities — the source reported none.</p>'
     columns = _field_columns(entities) if with_fields else []
     labels = labels or {}
-    rows = "".join(row(e, columns, labels.get(e.id)) for e in entities)
+    rows = "".join(row(e, columns, labels.get(e.id), links) for e in entities)
     return (
         "<table><thead><tr>"
         "<th>id</th><th>state</th>"
@@ -296,7 +311,8 @@ def _table(entities: list[Entity], with_fields: bool = False,
 
 
 def _grouped_tables(entities: list[Entity],
-                    labels: dict[str, str] | None = None) -> str:
+                    labels: dict[str, str] | None = None,
+                    links: Citations | None = None) -> str:
     """One table per source when the rows come from more than one (I11805).
 
     A dashboard is a pane filter, so it can gather rows from several sources
@@ -312,7 +328,7 @@ def _grouped_tables(entities: list[Entity],
     for e in entities:
         groups.setdefault(e.provenance.source or "", []).append(e)
     if len(groups) == 1:
-        return _table(entities, with_fields=True, labels=labels)
+        return _table(entities, with_fields=True, labels=labels, links=links)
     parts = []
     for source, rows in groups.items():
         not_healthy = sum(1 for e in rows if is_exception(e))
@@ -322,7 +338,7 @@ def _grouped_tables(entities: list[Entity],
             f'<h2 class="list-group">{esc(heading)}</h2>'
             f'<p class="list-summary">{len(rows)} rows{note} · {esc(source)}</p>'
             + _table(rows, with_fields=any(e.detail.get("fields") for e in rows),
-                     labels=labels)
+                     labels=labels, links=links)
         )
     return "\n".join(parts)
 
@@ -344,7 +360,7 @@ def _group_question(rows: list[Entity]) -> str | None:
     return questions.pop() if len(questions) == 1 else None
 
 
-def fields_section(ent: Entity) -> str:
+def fields_section(ent: Entity, links: Citations | None = None) -> str:
     """A module's own data, rendered from its descriptors alone (§5.8).
 
     Nothing below branches on WHO emitted the field. That is the whole claim:
@@ -357,7 +373,7 @@ def fields_section(ent: Entity) -> str:
         return ""
     undeclared = [f for f in declared if not f.declared]
     by_name = {f.name: f for f in declared}
-    rows = "".join(_field_row(f, by_name) for f in declared)
+    rows = "".join(_field_row(f, by_name, links) for f in declared)
     # §5.8: an undeclared field renders opaque and is COUNTED. A dropped field
     # is a fact the emitter believes is on the surface and is not, and it fails
     # on their side of a boundary they cannot see.
@@ -375,7 +391,8 @@ def fields_section(ent: Entity) -> str:
     )
 
 
-def _field_row(f: Field, by_name: dict[str, Field] | None = None) -> str:
+def _field_row(f: Field, by_name: dict[str, Field] | None = None,
+               links: Citations | None = None) -> str:
     """One field. Colour appears only where a baseline was declared (§5.4)."""
     unit = esc(f.unit) if f.unit else '<em class="absent">no unit</em>'
     if f.comparable:
@@ -395,7 +412,7 @@ def _field_row(f: Field, by_name: dict[str, Field] | None = None) -> str:
     return (
         f'<tr class="{css} render-{esc(f.render.value)}">'
         f"<td>{esc(f.name)}{defect}</td>"
-        f"<td>{_value_html(f, by_name or {}, with_unit=False)}</td>"
+        f"<td>{_value_html(f, by_name or {}, with_unit=False, links=links)}</td>"
         f"<td>{unit}</td><td>{baseline}</td></tr>"
     )
 
@@ -471,7 +488,7 @@ def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
 {_table([ent])}
 {document_section(ent, citations.declared(index))}
 {relations_section(index, ent, all_runs)}
-{fields_section(ent)}
+{fields_section(ent, citations.declared(index))}
 {_source_findings_section(ent)}
 {_claims_section(ent)}
 </body></html>"""
@@ -664,7 +681,8 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
             toggle = (f'<p>every run · <a href="{esc(path_for_list(kind, facets))}">'
                       "show newest run per job</a></p>")
     title = f"{kind.value}s"
-    table = _grouped_tables(visible, labels=listing.labels)
+    table = _grouped_tables(visible, labels=listing.labels,
+                            links=citations.declared(index))
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>

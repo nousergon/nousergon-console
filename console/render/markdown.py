@@ -38,6 +38,7 @@ so a missing library degrades the page rather than breaking it.
 """
 from __future__ import annotations
 
+import html
 import re
 from functools import lru_cache
 from typing import Any, Iterator
@@ -203,6 +204,49 @@ def _text_token(token_cls: Any, content: str, level: int) -> Any:
     tok = token_cls("text", "", 0, level=level)
     tok.content = content
     return tok
+
+
+def link_text(text: str, citations: Citations | None = None) -> str:
+    """Plain text — a declared field's value, not a document — as escaped
+    HTML in which every bare URL, and every reference to a repository
+    `citations` declares, is a link (alpha-engine-config-I11805).
+
+    The same `_links` pass a markdown document gets, over text that is not
+    markdown: nothing in it is parsed as markup, everything outside a link is
+    escaped, the link text is the text as written, and every href passes
+    `safe_link`. Needs no markdown library, so it never degrades."""
+    out, cursor = [], 0
+    for start, end, url in _links(text, citations):
+        if not safe_link(url):
+            continue
+        out.append(html.escape(text[cursor:start], quote=True))
+        out.append(f'<a href="{html.escape(url, quote=True)}">'
+                   f"{html.escape(text[start:end], quote=True)}</a>")
+        cursor = end
+    out.append(html.escape(text[cursor:], quote=True))
+    return "".join(out)
+
+
+#: A value that IS one address: an absolute http(s) URL, or a site path.
+_WHOLE_LINK = re.compile(r"^(?:https?://|/(?!/))\S*$", re.IGNORECASE)
+
+
+def link_value(value: str, citations: Citations | None = None) -> str:
+    """A `render: link` field's value as one link (alpha-engine-config-I11805).
+
+    A URL to a declared repository's issue or pull request reads as its
+    citation (``repo-I12``), with the full address kept in the ``title``; any
+    other http(s) URL or site path reads as itself. A value that is not one
+    address (``s3://…``, prose) is never made a link to itself — it renders
+    as `link_text`, so only the http(s) URLs or citations inside it link."""
+    value = value.strip()
+    if not value or not _WHOLE_LINK.match(value) or not safe_link(value):
+        return link_text(value, citations)
+    href = html.escape(value, quote=True)
+    ref = citations.reference_for(value) if citations is not None else None
+    if ref is None:
+        return f'<a href="{href}">{href}</a>'
+    return f'<a href="{href}" title="{href}">{html.escape(ref, quote=True)}</a>'
 
 
 def render(text: str, citations: Citations | None = None) -> str | None:

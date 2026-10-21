@@ -61,6 +61,28 @@ class Citations:
         url = f"{self.base_url}/{repo}/pull/{number}"
         return f"{url}#issuecomment-{comment}" if comment else url
 
+    def reference_for(self, url: str) -> str | None:
+        """The citation a URL to a declared repository's issue or pull
+        request reads as — ``repo-I12``, ``repo-PR34``, plus `` comment C`` —
+        or None for any other URL. The inverse of `issue_url`/`pull_url`, so a
+        field holding a tracker URL can show what a reader would write
+        instead of the whole address. The repository's own name is used,
+        never an alias: a page should not depend on a reader knowing them."""
+        m = _REFERENCE_URL.match(url.strip())
+        if m is None or m.group("base").rstrip("/") != self.base_url:
+            return None
+        repo = m.group("repo")
+        if repo not in {r for _, r in self.names}:
+            return None
+        ref = f"{repo}-{'PR' if m.group('what') == 'pull' else 'I'}{m.group('n')}"
+        return f"{ref} comment {m.group('c')}" if m.group("c") else ref
+
+
+#: An issue or pull-request URL in the shape `issue_url`/`pull_url` produce.
+_REFERENCE_URL = re.compile(
+    r"^(?P<base>https?://.+)/(?P<repo>[A-Za-z0-9._-]+)/(?P<what>issues|pull)/"
+    r"(?P<n>\d+)/?(?:#issuecomment-(?P<c>\d+))?$", re.IGNORECASE)
+
 
 def parse(raw: Any) -> Citations | None:
     """Validate and freeze the `citations:` block. None when undeclared."""

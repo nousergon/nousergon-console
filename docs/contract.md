@@ -93,6 +93,7 @@ A generic surface renders a module's own numbers **without knowing anything abou
 **Every field beyond the model's own carries a descriptor: `type`, `unit`, `baseline` (or an explicit declaration of none), and one `render` hint from the closed vocabulary** `value` · `duration` · `bytes` · `ratio` · `count` · `timeseries` · `link` · `text`. The console renders any declared field generically from its descriptor, on the entity page and as a facet where the type admits one.
 
 - **`unit` is required**, carried in the descriptor or in the field name.
+- **`link` renders as a link** when its value is an http(s) URL or a site path; a URL to an issue or pull request in a repository the `citations:` block declares reads as its reference (`repo-I12`, `repo-PR34`). Any other value is never made a link to itself. In every text value, bare http(s) URLs and declared references are links, as written.
 - **`baseline: none` is a declaration**, and the number then renders as telemetry rather than being coloured a verdict.
 - **An undeclared field renders as opaque text and is counted, never dropped.**
 

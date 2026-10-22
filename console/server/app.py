@@ -170,7 +170,8 @@ def _page(index: Index, req) -> str:
     if req.view == "reports":
         return render_html.reports_page(index, req.feed_id)
     if req.view == "registry":
-        return render_html.registry_page(index, req.registry_name or "")
+        return render_html.registry_page(index, req.registry_name or "",
+                                         all_runs=req.all_runs)
     return render_html.search_page(index, req.query or "", all_runs=req.all_runs)
 
 

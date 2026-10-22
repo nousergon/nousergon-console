@@ -395,6 +395,16 @@ def _list(index: Index, req: Resolved) -> dict[str, Any]:
     labels = {e.id: listing.labels[e.id] for e in shown if e.id in listing.labels}
     if labels:
         doc["labels"] = labels
+    from ..index import planner
+    from ..index.landing import PANE_FACET
+
+    # A dashboard's dated plan (`panes:` on a planner project): the same
+    # projects, evaluated the same way, as the HTML list shows above its rows.
+    planned = planner.for_pane(index, req.facets.get(PANE_FACET))
+    if planned:
+        doc["planner"] = {"question": planner.PLANNER_QUESTION,
+                          "states": list(planner.SCHEDULE_STATES),
+                          "projects": planned}
     return doc
 
 

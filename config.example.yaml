@@ -1476,6 +1476,9 @@ planner:
           # only AT the target by design (a gate read on the day): closure
           # count cannot show pace, so date and blockers alone decide.
           # pace: false
+      # Optional: dashboards (`pane` facet values) whose list pages also show
+      # this project's milestones, with the same computed state as /planner.
+      # panes: [example-pane]
       # Optional: the project's ALERT UPDATES, newest first. Each source is a
       # SELECTOR over rows other adapters already mint: every entity whose
       # facets equal `facets` (whose declared fields equal `where`, and none

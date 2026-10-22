@@ -687,7 +687,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
 <h1>{esc(title)}</h1>
-{index_freshness(index)}{summary_line}{toggle}{shown}
+{index_freshness(index)}{summary_line}{toggle}{_pane_planner(index, facets)}{shown}
 {table}
 {_pager(kind, url_state, page, len(entities))}
 </body></html>"""
@@ -1191,6 +1191,29 @@ def _planner_milestone_rows(project: dict, with_items: bool) -> str:
     head = ("<tr><th>state</th><th>milestone</th><th>target</th>"
             "<th>items closed</th><th>why</th></tr>")
     return f'<table class="plan-table">{head}{"".join(out)}</table>'
+
+
+def _pane_planner(index: Index, facets: dict[str, str]) -> str:
+    """A dashboard's dated plan: every planner project whose `panes:` names
+    this list's `pane` facet, with each milestone's computed schedule state
+    and reason — the same evaluation /planner renders, read rather than
+    copied, so the dates keep one home (`_planner.yaml`). Empty on any list
+    that is not a dashboard or that no project names."""
+    from ..index import planner
+    from ..index.landing import PANE_FACET
+
+    projects = planner.for_pane(index, facets.get(PANE_FACET))
+    return "".join(
+        f'<section class="pane-planner"><h2>milestones · '
+        f'<a href="{esc(p["url"])}">{esc(p["title"])}</a></h2>'
+        f'<p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>'
+        f'<p>{_planner_counts(p)}'
+        + (f' · owner {esc(p["owner"])}' if p.get("owner") else "")
+        + (f' · <a href="{esc(p["tracker"])}">tracker</a>' if p.get("tracker") else "")
+        + "</p>"
+        + _planner_milestone_rows(p, with_items=False)
+        + "</section>"
+        for p in projects)
 
 
 def _planner_alerts(project: dict) -> str:

@@ -430,3 +430,105 @@ def test_entity_page_links_history_only_where_retained_and_always_doctor():
                   provenance=Provenance(source="fixture"))
     assert "/history/" not in _entity_links(bare)
     assert 'href="/doctor/x"' in _entity_links(bare)
+
+
+# ------------------------------------------------- registry pages (I11805) ---
+
+def _registry_index(status=AdapterStatus.OK, unavailable=()):
+    """A registry `reg` declaring two components and three runs of one job,
+    beside an unrelated source whose rows must not appear on its page."""
+    index = Index()
+    index.add_result(AdapterResult(
+        name="reg", status=status, claim_class=ClaimClass.DECLARATION,
+        fetched_at="2026-10-01T04:00:00Z", declared_cadence_seconds=900,
+        unavailable=tuple(unavailable),
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-ok", state=State.HEALTHY,
+                   provenance=Provenance(source="reg", as_of="2026-10-01T04:00:00Z"),
+                   detail={"label": "Nightly export"}),
+            Entity(kind=Kind.COMPONENT, id="comp-bad", state=State.FAILED,
+                   provenance=Provenance(source="reg", as_of="2026-10-01T04:00:00Z")),
+            *RUNS[:3],
+        ),
+    ))
+    index.add_result(AdapterResult(
+        name="other", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="elsewhere", state=State.HEALTHY,
+                         provenance=Provenance(source="other")),),
+    ))
+    index.render_registry("reg")
+    index.finalize()
+    return index
+
+
+def test_a_registry_page_lists_its_rows_by_kind_with_states_and_names():
+    page = _page(_registry_index(), "/registry/reg")
+    assert "<h1>registry: reg</h1>" in page
+    assert 'href="/dashboards"' in page  # breadcrumb back to the index of registries
+    assert "elsewhere" not in page  # only this registry's rows
+    assert '<h2 class="list-group">components</h2>' in page
+    assert '<h2 class="list-group">runs</h2>' in page
+    assert ">Nightly export</a>" in page  # declared label, not the id
+    # Not healthy first within a group.
+    assert page.index("comp-bad") < page.index("comp-ok")
+    assert "2 rows · " in page and "1 FAILED" in page
+    assert "source ok · fetched 2026-10-01T04:00:00Z · re-read every 900s" in page
+
+
+def test_a_registry_page_folds_runs_per_state_and_links_every_run():
+    page = _page(_registry_index(), "/registry/reg")
+    # job-a's FAILED and HEALTHY runs stay apart; nothing folds here, so the
+    # whole page shows 5 rows from 5 declared.
+    assert ">job-a</a>" in page and ">job-b</a>" in page
+    assert "job-a@" not in page.split("<tbody>", 1)[1].split("</a>", 1)[0]
+    assert "show every run" not in page
+    runs = [_run(f"job-c@2026-10-01T0{h}:00:00Z", State.HEALTHY,
+                 f"2026-10-01T0{h}:00:00Z") for h in (1, 2, 3)]
+    index = Index()
+    index.add_result(AdapterResult(
+        name="reg", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=tuple(runs)))
+    index.render_registry("reg")
+    folded = _page(index, "/registry/reg")
+    assert "1 row (from 3 declared)" in folded and ">job-c (3 runs)</a>" in folded
+    assert 'href="/registry/reg?runs=all"' in folded
+    every = _page(index, "/registry/reg?runs=all")
+    assert "job-c@2026-10-01T01:00:00Z" in every
+    assert "show newest run per job and state" in every
+
+
+def test_a_failed_registry_read_says_so_and_names_what_it_could_not_give():
+    page = _page(_registry_index(status=AdapterStatus.FAILED,
+                                 unavailable=("components.d/",)), "/registry/reg")
+    assert 'class="state-FAILED">source failed' in page
+    assert "1 not available from this source" in page and "components.d/" in page
+    # The rows still render, UNREPORTED rather than vanished (§5.5).
+    assert "UNREPORTED" in page
+
+
+def test_a_registry_with_no_rows_says_so():
+    index = Index()
+    index.add_result(AdapterResult(
+        name="reg", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION))
+    index.render_registry("reg")
+    page = _page(index, "/registry/reg")
+    assert "this registry declared no rows this pass" in page
+    doc = render_json.payload(index, resolve("/registry/reg"))
+    assert doc["registry_view"]["rows"] == 0 and doc["registry_view"]["groups"] == []
+
+
+def test_registry_json_carries_the_same_view():
+    doc = render_json.payload(_registry_index(), resolve("/registry/reg"))
+    # The fields the page carried before are unchanged.
+    assert (doc["name"], doc["status"], doc["fetched_at"]) == (
+        "reg", "ok", "2026-10-01T04:00:00Z")
+    view = doc["registry_view"]
+    assert view["rows"] == 5 and view["cadence_seconds"] == 900
+    assert [g["kind"] for g in view["groups"]] == ["component", "run"]
+    comps = view["groups"][0]
+    assert comps["rows"] == ["comp-bad", "comp-ok"]
+    assert comps["labels"] == {"comp-ok": "Nightly export"}
+    assert comps["summary"] == {"FAILED": 1, "HEALTHY": 1}
+    assert view["summary"] == {"DEGRADED": 1, "FAILED": 2, "HEALTHY": 2}
+    every = render_json.payload(_registry_index(), resolve("/registry/reg", "runs=all"))
+    assert every["registry_view"]["all_runs"] is True

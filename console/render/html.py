@@ -1796,11 +1796,70 @@ def _format_number(value: object) -> str:
     return str(value)
 
 
-def registry_page(index: Index, name: str) -> str:
-    source = next(a for a in index.build_info.adapters if a.name == name)
-    return f"""<!doctype html><html><head><meta charset=\"utf-8\"><title>{esc(name)} registry</title></head><body>
-<nav><a href=\"/\">fleet</a> &rsaquo; registry</nav><h1>registry: {esc(name)}</h1>
-{index_freshness(index)}<p>source status: {esc(source.status)} · fetched: {esc(source.fetched_at or 'no freshness stamp')}</p>
+def registry_page(index: Index, name: str, all_runs: bool = False) -> str:
+    """A registry's own page reads like a list (alpha-engine-config-I11805).
+
+    It used to show only its read's status and time, so a registry linked from
+    home and `/dashboards` named none of the rows it declares. It now shows the
+    read (status in its colour, fetch time, cadence, what the source could not
+    give) and then every row it declares: one table per kind, each opening with
+    a count by state, rows that are not healthy first, each row named by its
+    job or declared label, and a job's runs folded to its newest run per state
+    unless the URL says `runs=all`. The rows come from
+    `render.json.registry_view`, which the JSON representation reads too (§3.8).
+    """
+    from urllib.parse import quote
+
+    from ..server.router import RUNS_PARAM
+    from .json import REGISTRY_QUESTION, registry_view
+
+    view = registry_view(index, name, all_runs=all_runs)
+    src = view.source
+    read = (f'source {esc(src.status)} · fetched '
+            f'{esc(src.fetched_at or "no freshness stamp")}')
+    if src.cadence_seconds:
+        read += f" · re-read every {src.cadence_seconds:g}s"
+    if src.elapsed_seconds is not None:
+        read += f" · read took {src.elapsed_seconds:.1f}s"
+    state_class = "state-HEALTHY" if src.status == "ok" else "state-FAILED"
+    unavailable = ""
+    if src.unavailable:
+        items = "".join(f"<li>{esc(u)}</li>" for u in src.unavailable)
+        unavailable = (f'<p class="absent">{len(src.unavailable)} not available '
+                       f"from this source:</p><ul>{items}</ul>")
+    here = f"/registry/{quote(name, safe='')}"
+    shown = sum(len(g.rows) for g in view.groups)
+    if not view.groups:
+        rows = '<p class="absent">this registry declared no rows this pass</p>'
+    else:
+        folded = f" (from {view.rows} declared)" if shown < view.rows else ""
+        toggle = ""
+        if all_runs:
+            toggle = (f'<p>every declared run · <a href="{esc(here)}">'
+                      "show newest run per job and state</a></p>")
+        elif folded:
+            toggle = (f'<p>newest run per job and state · <a href="'
+                      f'{esc(here)}?{RUNS_PARAM}=all">show every run</a></p>')
+        parts = []
+        for g in view.groups:
+            note = f" (from {g.matched} declared)" if len(g.rows) < g.matched else ""
+            parts.append(
+                f'<h2 class="list-group">{esc(g.kind.value)}s</h2>'
+                f'<p class="list-summary">{_rows(len(g.rows))}{note} · '
+                f"{_state_counts(g.summary)}</p>"
+                + _table(g.rows, labels=_with_run_counts(g.labels, g.runs))
+            )
+        rows = (f'<p class="list-summary">{_rows(shown)}{folded} · '
+                f"{_state_counts(view.summary)}</p>" + toggle + "".join(parts))
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{esc(name)} registry</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/dashboards">dashboards</a> &rsaquo; registry</nav>
+<h1>registry: {esc(name)}</h1>
+<p class="pane-question">{esc(REGISTRY_QUESTION)}</p>
+{index_freshness(index)}
+<p class="{state_class}">{read}</p>
+{unavailable}
+{rows}
 </body></html>"""
 
 

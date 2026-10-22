@@ -160,10 +160,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "question": planner.PLANNER_QUESTION,
                "states": list(planner.SCHEDULE_STATES), "project": found}
     elif req.view == "registry":
-        source = next(a for a in index.build_info.adapters if a.name == req.registry_name)
-        doc = {"schema_version": SCHEMA_VERSION, "view": "registry", "name": source.name,
-               "status": source.status, "fetched_at": source.fetched_at,
-               "unavailable": list(source.unavailable)}
+        doc = _registry(index, req.registry_name or "", all_runs=req.all_runs)
     else:
         raise ValueError(f"no JSON representation for view {req.view!r}")
     # §5.9 on every payload, exactly as on every page: a consumer that trusts a
@@ -728,14 +725,29 @@ class SearchView:
 
 def search_view(index: Index, query: str, all_runs: bool = False) -> SearchView:
     """Resolve a query and shape its hits the way lists read (I11805)."""
-    from .html import is_exception
-
     hits = search(index, query)
     exact = [h.entity for h in hits if h.exact]
+    groups = kind_groups(index, [h.entity for h in hits if not h.exact], all_runs)
+    return SearchView(query=query, all_runs=all_runs, exact=exact,
+                      exact_labels=latest_per_job(index, exact).labels,
+                      groups=groups, hits=len(hits),
+                      by_label=sum(1 for h in hits if h.matched_on == MATCHED_ON_LABEL))
+
+
+def kind_groups(index: Index, entities: list[Entity],
+                all_runs: bool = False) -> list[SearchGroup]:
+    """Rows read as lists read: one group per kind, in the model's order.
+
+    Within a group the incoming order is kept, not healthy first; unless
+    `all_runs`, a job's runs fold to its newest run per state, and the group
+    counts its rows by state. Shared by search and the registry page, so the
+    two cannot fold or count differently (I11805).
+    """
+    from .html import is_exception
+
     by_kind: dict[Kind, list[Entity]] = {}
-    for h in hits:
-        if not h.exact:
-            by_kind.setdefault(h.entity.kind, []).append(h.entity)
+    for ent in entities:
+        by_kind.setdefault(ent.kind, []).append(ent)
     groups: list[SearchGroup] = []
     for kind in Kind:
         found = by_kind.get(kind)
@@ -753,10 +765,7 @@ def search_view(index: Index, query: str, all_runs: bool = False) -> SearchView:
         groups.append(SearchGroup(kind=kind, rows=rows, labels=labels, runs=runs,
                                   summary=dict(sorted(summary.items())),
                                   matched=len(found)))
-    return SearchView(query=query, all_runs=all_runs, exact=exact,
-                      exact_labels=latest_per_job(index, exact).labels,
-                      groups=groups, hits=len(hits),
-                      by_label=sum(1 for h in hits if h.matched_on == MATCHED_ON_LABEL))
+    return groups
 
 
 def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
@@ -780,6 +789,67 @@ def _search(index: Index, query: str, all_runs: bool = False) -> dict[str, Any]:
             "exact": [e.id for e in view.exact],
             "exact_labels": view.exact_labels,
             "by_label": view.by_label,
+            "groups": [
+                {"kind": g.kind.value, "matched": g.matched, "summary": g.summary,
+                 "rows": [e.id for e in g.rows], "labels": g.labels, "runs": g.runs}
+                for g in view.groups
+            ],
+        },
+    }
+
+
+REGISTRY_QUESTION = "What does this registry declare, and what state is each row in?"
+
+
+@dataclass(frozen=True)
+class RegistryView:
+    """One registry's page, computed once for both representations (§3.8).
+
+    `source` is the registry's own read this pass. `groups` hold the rows it
+    declares, read the way lists read (I11805): one group per kind, counted
+    by state, not healthy first, a job's runs folded to its newest run per
+    state unless the URL says `runs=all`. `rows` counts the rows before the
+    fold. The page used to show only the read's status and time, so a link
+    from home or `/dashboards` led to a page that named none of its rows.
+    """
+
+    name: str
+    source: Any
+    all_runs: bool
+    groups: list[SearchGroup]
+    rows: int
+    summary: dict[str, int]
+
+
+def registry_view(index: Index, name: str, all_runs: bool = False) -> RegistryView:
+    source = next(a for a in index.build_info.adapters if a.name == name)
+    claimed = index.claimed_by(name)
+    groups = kind_groups(index, claimed, all_runs)
+    summary: dict[str, int] = {}
+    for g in groups:
+        for state, n in g.summary.items():
+            summary[state] = summary.get(state, 0) + n
+    return RegistryView(name=name, source=source, all_runs=all_runs, groups=groups,
+                        rows=len(claimed), summary=dict(sorted(summary.items())))
+
+
+def _registry(index: Index, name: str, all_runs: bool = False) -> dict[str, Any]:
+    view = registry_view(index, name, all_runs=all_runs)
+    source = view.source
+    return {
+        "schema_version": SCHEMA_VERSION, "view": "registry", "name": source.name,
+        "status": source.status, "fetched_at": source.fetched_at,
+        "unavailable": list(source.unavailable),
+        "question": REGISTRY_QUESTION,
+        # The page's rows, so HTML and JSON match (§3.8): one group per kind,
+        # counted by state, runs folded unless the URL says `runs=all`
+        # (alpha-engine-config-I11805). The fields above are unchanged.
+        "registry_view": {
+            "all_runs": all_runs,
+            "cadence_seconds": source.cadence_seconds,
+            "elapsed_seconds": source.elapsed_seconds,
+            "rows": view.rows,
+            "summary": view.summary,
             "groups": [
                 {"kind": g.kind.value, "matched": g.matched, "summary": g.summary,
                  "rows": [e.id for e in g.rows], "labels": g.labels, "runs": g.runs}

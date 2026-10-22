@@ -713,6 +713,18 @@ class Index:
         """
         return list(self._claims.get(entity_id, []))
 
+    def claimed_by(self, adapter: str) -> list[Entity]:
+        """The resolved rows one source made a claim about, in ingest order.
+
+        A registry page lists these (alpha-engine-config-I11805): the rows a
+        registry declares, each as the index resolved it. A merged row another
+        source also claims is still this registry's row, and shows the merged
+        state, because that is the row every other page shows.
+        """
+        entities = self.finalize()._entities
+        return [entities[eid] for eid, claims in self._claims.items()
+                if eid in entities and any(c.adapter == adapter for c in claims)]
+
     def entity(self, entity_id: str) -> Entity | None:
         return self.finalize()._entities.get(entity_id)
 

@@ -133,7 +133,10 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         return Resolved(view="doctor", query=rest)
 
     if segments[0] == "registry" and len(segments) == 2:
-        return Resolved(view="registry", registry_name=segments[1])
+        # `?runs=all` lists every run the registry declares instead of the
+        # newest run per job and state (alpha-engine-config-I11805).
+        return Resolved(view="registry", registry_name=segments[1],
+                        all_runs=params.get(RUNS_PARAM) == "all")
 
     if segments[0] == "history" and len(segments) >= 3:
         kind = Kind.from_route(segments[1])

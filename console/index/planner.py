@@ -48,6 +48,12 @@ no source of its own: an alert is visible here exactly when the adapter that
 records it is healthy, and a selector that matches nothing says so by name
 rather than rendering an empty list as "no alerts".
 
+**On a dashboard** (Director plan 2026-10-21 C18). A project may declare
+`panes:`, a list of `pane` facet values; every list page filtered to one of
+them (`/<kind>?pane=<v>`) shows that project's milestones above its rows,
+evaluated by `for_pane` exactly as here. The dates keep one home, this
+declaration; a dashboard never carries a second copy of them.
+
 "Behind the calendar" is one comparison: the fraction of the window
 ``start -> target`` already elapsed, minus the fraction of required items
 closed. It is deliberately linear and deliberately simple — a reader can redo
@@ -168,6 +174,11 @@ class Project:
     owner: str | None = None
     tracker: str | None = None
     alerts: Alerts | None = None
+    #: Dashboards (`pane` facet values) whose list pages also show this
+    #: project's milestones. A dashboard is a `pane` facet the rows stamp
+    #: (`index/landing.py::dashboards`); this lets a dated plan sit beside the
+    #: live rows it is judged by without a second copy of its dates.
+    panes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -272,6 +283,20 @@ def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
     return Alerts(sources=tuple(sources), limit=limit)
 
 
+def _parse_panes(raw: Any, pid: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    where = f"planner project {pid!r} panes"
+    if isinstance(raw, str) or not isinstance(raw, Sequence):
+        raise PlannerConfigError(f"{where}: must be a list of `pane` facet values")
+    panes = tuple(str(v).strip() for v in raw)
+    if not all(panes):
+        raise PlannerConfigError(f"{where}: a pane value must not be empty")
+    if len(set(panes)) != len(panes):
+        raise PlannerConfigError(f"{where}: a pane is named twice")
+    return panes
+
+
 def parse(raw: Any) -> Plan:
     """Validate and freeze the `planner:` block. Raises on anything it could
     not evaluate honestly later."""
@@ -340,6 +365,7 @@ def parse(raw: Any) -> Plan:
             owner=(str(p["owner"]) if p.get("owner") else None),
             tracker=(str(p["tracker"]) if p.get("tracker") else None),
             alerts=_parse_alerts(p.get("alerts"), pid),
+            panes=_parse_panes(p.get("panes"), pid),
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -583,6 +609,7 @@ def evaluate(index: Any, now: datetime | date | None = None,
         out.append({
             "id": p.id, "title": p.title, "owner": p.owner, "tracker": p.tracker,
             "url": f"/planner/{p.id}",
+            "panes": list(p.panes),
             # Declared position: the project's colour on the calendar follows
             # the project, so a project page draws it in the same colour.
             "slot": slot,
@@ -593,6 +620,17 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "alerts": evaluate_alerts(index, p.alerts),
         })
     return out
+
+
+def for_pane(index: Any, pane: str | None,
+             now: datetime | date | None = None) -> list[dict[str, Any]]:
+    """The projects that declare `pane` in their `panes:`, evaluated exactly as
+    /planner evaluates them, so a dashboard and the planner can never show one
+    milestone in two states. Empty when the pane is unset or nothing names it,
+    and then nothing is evaluated."""
+    if not pane or not any(pane in p.panes for p in declared(index).projects):
+        return []
+    return [p for p in evaluate(index, now) if pane in p["panes"]]
 
 
 def project(index: Any, project_id: str,

@@ -371,3 +371,50 @@ def test_equal_instants_break_on_id_descending():
     a = planner.evaluate(_alert_index(_alert_plan({"sources": [src]}), rows))[0]["alerts"]
     assert [i["entity"] for i in a["items"]] == [
         "day:2026-10-07", "day:2026-10-04", "day:2026-10-02"]
+
+
+# --- a project's milestones on a dashboard (`panes:`, Director plan C18) ----
+
+def _pane_plan(panes):
+    return planner.parse({"org": "o", "projects": [
+        {"id": "p", "title": "Project", "panes": panes,
+         "milestones": [_ms(["repo-I1", "repo-I4"])]},
+        {"id": "q", "title": "Other", "milestones": [_ms(["repo-I1"], target="2026-11-30")]}]})
+
+
+def test_panes_put_a_projects_milestones_on_that_dashboard_in_both_representations():
+    from console.server.app import _html
+
+    index = _index(_pane_plan(["director"]))
+    for path in ("/decision", "/run"):
+        req = resolve(path, "pane=director")
+        html = _html(index, req)
+        assert 'class="pane-planner"' in html and 'href="/planner/p"' in html
+        assert "schedule-" in html and "/planner/q" not in html
+        doc = render_json.payload(index, req)
+        assert [p["id"] for p in doc["planner"]["projects"]] == ["p"]
+        assert doc["planner"]["question"] == planner.PLANNER_QUESTION
+    # The same evaluation /planner shows, never a second copy of it.
+    planned = render_json.payload(index, resolve("/run", "pane=director"))["planner"]
+    assert planned["projects"][0]["milestones"] == \
+        render_json.payload(index, resolve("/planner/p"))["project"]["milestones"]
+
+
+def test_a_list_no_project_names_shows_no_plan():
+    from console.server.app import _html
+
+    index = _index(_pane_plan(["director"]))
+    for query in ("pane=reports", ""):
+        req = resolve("/run", query)
+        assert "pane-planner" not in _html(index, req)
+        assert "planner" not in render_json.payload(index, req)
+    assert planner.for_pane(_index(_pane_plan(None)), "director") == []
+
+
+@pytest.mark.parametrize("panes, needle", [
+    ("director", "list"), (["director", ""], "empty"),
+    (["director", "director"], "twice"), ({"a": 1}, "list"),
+])
+def test_bad_panes_fail_by_name(panes, needle):
+    with pytest.raises(planner.PlannerConfigError, match=needle):
+        _pane_plan(panes)

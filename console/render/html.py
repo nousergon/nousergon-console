@@ -1224,20 +1224,34 @@ def _planner_alerts(project: dict) -> str:
     if not a.get("declared"):
         return ('<p class="absent plan-alerts">alert updates: no alert source '
                 'declared for this project</p>')
-    rows = "".join(
-        f'<li><time>{esc(i["at"] or "time unknown")}</time> · '
-        f'<span class="plan-source">{esc(i["source"])}</span> · '
-        f'<a href="{esc(i["url"])}">{esc(i["text"])}</a>'
-        + (f' · <a href="{esc(i["entity_url"])}">row</a>'
-           if i["entity_url"] != i["url"] else "")
-        + "</li>"
-        for i in a["items"])
+    def _li(i: dict) -> str:
+        return (f'<li><time>{esc(i["at"] or "time unknown")}</time> · '
+                f'<span class="plan-source">{esc(i["source"])}</span> · '
+                f'<a href="{esc(i["url"])}">{esc(i["text"])}</a>'
+                + (f' · <a href="{esc(i["entity_url"])}">row</a>'
+                   if i["entity_url"] != i["url"] else "")
+                + "</li>")
+
+    rows = "".join(_li(i) for i in a["items"])
     empty = "".join(
         f'<li class="absent">{esc(s["name"])}: no row matches '
         f'<code>{esc(s["selector"])}</code></li>'
         for s in a["sources"] if not s["matched"])
     body = (f'<ul class="plan-alerts">{rows}{empty}</ul>' if rows or empty
             else '<p class="absent">no alert rows</p>')
+    n_folded = a.get("n_collapsed") or 0
+    if n_folded:
+        # Collapsed by default: finished asks stay one click away rather than
+        # leading the list (Director S39). The summary names the declared
+        # rule and the full count, even when only the newest `limit` list.
+        rules = ", ".join(sorted({s["collapsed_by"] for s in a["sources"]
+                                  if s.get("collapsed_by")}))
+        shown = len(a["collapsed"])
+        more = f", newest {shown} shown" if shown < n_folded else ""
+        body += (f'<details class="plan-fold"><summary>{n_folded} collapsed '
+                 f'(<code>{esc(rules)}</code>{more})</summary>'
+                 f'<ul class="plan-alerts">{"".join(_li(i) for i in a["collapsed"])}</ul>'
+                 "</details>")
     return f'<h3>alert updates (latest {a["limit"]})</h3>{body}'
 
 

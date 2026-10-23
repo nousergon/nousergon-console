@@ -34,7 +34,7 @@ from ..index.graph import Index
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
 from ..index.numbers import not_healthy as _not_healthy
-from ..model.entity import DOCUMENT_DETAIL, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity
+from ..model.entity import DOCUMENT_DETAIL, JOB_LABEL_DETAIL, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity
 from ..model.kinds import STATE_FILTER, Kind, State
 from ..model.fields import parse as parse_fields
 from ..search.resolve import MATCHED_ON_LABEL, search
@@ -448,6 +448,15 @@ def declared_labels(entities: list[Entity]) -> dict[str, str]:
             if isinstance(e.detail.get(LABEL_DETAIL), str) and e.detail[LABEL_DETAIL]}
 
 
+def job_label(ent: Entity) -> str | None:
+    """The name a run's source declares for its job (`detail["job_label"]`).
+
+    None when it declares none, and the job is then named by itself.
+    """
+    raw = ent.detail.get(JOB_LABEL_DETAIL)
+    return raw.strip() if isinstance(raw, str) and raw.strip() else None
+
+
 @dataclass(frozen=True)
 class JobView:
     """Rows with each job's runs folded to the newest one (I11805).
@@ -502,10 +511,12 @@ def latest_per_job(index: Index, entities: list[Entity],
             if ent.id in declared:
                 labels[ent.id] = declared[ent.id]
             continue
-        # A folded row stands for its JOB, so the job name is its label. A
-        # row that is its own job (no `@`, no belongs-to edge) keeps the label
-        # it declares, which names it better than its id does.
-        labels[ent.id] = declared.get(ent.id, job) if job == ent.id else job
+        # A folded row stands for its JOB, so the job's name is its label:
+        # the name the source declares for the job (`job_label`), else the job
+        # itself. A row that is its own job (no `@`, no belongs-to edge) keeps
+        # the label it declares, which names it better than its id does.
+        name = job_label(ent) or job
+        labels[ent.id] = declared.get(ent.id, name) if job == ent.id else name
         runs[ent.id] = counts[key]
     return JobView(rows=rows, labels=labels, runs=runs)
 

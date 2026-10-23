@@ -626,7 +626,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON, CSV, or date-partitioned JSON Lines) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`) |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`), `job_label` |
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into
@@ -755,6 +755,21 @@ has. A row whose label cannot be resolved (a missing name, a value that is
 not a date, a spec the value cannot take) keeps its id and the source reports
 `label` unavailable; a malformed `label_template` or `date_fields` fails the
 source. A console that predates these keys ignores them and shows ids.
+
+**`job_label`** (a Python format string, the same names and `date_fields` as
+`label_template`) names the JOB a run belongs to. A run list folds each job's
+runs to the newest one and names the folded row by its job, which is otherwise
+the id before `@`: `director:plan@2026-10-22` folds to a row reading
+`director:plan`. With `job_label: "Evening plan"` it reads "Evening plan", and
+`?runs=all`, where each row is one run, still shows each run's own
+`label_template`. Search finds a row by its job's name too. The ids, and so
+the URLs, are unchanged. One adapter that mints several jobs names them from
+the key's named groups (`"Nightly run: {marker}"`), or, when no group spells
+a readable name, declares a map from job id (the id before `@`) to a name:
+`{"director:plan": "Evening plan", "director:run": "Nightly run record"}`. A
+job the map leaves out keeps its id. An unresolvable name keeps
+the job's id and reports `label` unavailable; a malformed `job_label` fails
+the source; a console that predates it ignores it.
 
 `id_template` is a Python format string resolved against regex named groups
 ∪ body-level scalars ∪ the current record (record wins on collision) — e.g.

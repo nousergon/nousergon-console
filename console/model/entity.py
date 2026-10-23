@@ -187,3 +187,9 @@ WINDOW_DETAIL = "window_days"
 #: when the source declares one (s3-records `label_template`). The id is
 #: still the identifier and the URL; a label is display only.
 LABEL_DETAIL = "label"
+#: `job_label`: the name of the JOB a run belongs to, when the source declares
+#: one (s3-records `job_label`). A run list folds each job's runs to the newest
+#: one and names the folded row by its job; this is that name, in place of the
+#: id before `@` (`director:plan` reads "Evening plan"). Display only, like
+#: `label`: the job is still the id before `@`, or the `belongs-to` target.
+JOB_LABEL_DETAIL = "job_label"

@@ -65,6 +65,14 @@ dates, optionally shifted by ``offset_days``, that take a ``strftime`` spec),
 it is carried as ``detail["label"]``, shown by a list in place of the id and
 as the entity page's heading. The id stays the link.
 
+``job_label`` (any format) names the JOB a run belongs to, formatted against
+the same names: a run list folds each job to its newest run and names that row
+by its job, and this replaces the bare id before ``@``
+(``director:plan@<cycle>`` folds to "Evening plan", not ``director:plan``). It
+is carried as ``detail["job_label"]``. It may instead be a map from job id
+to name, for one adapter that mints several jobs (``{"director:plan":
+"Evening plan", "director:run": "Nightly run record"}``).
+
 **Component/Run state** comes from ``state_field`` (a dotted path), resolved in
 this order: an optional ``state_map`` translating the source's own vocabulary
 (``{"passed": "HEALTHY", "failed": "FAILED"}``) into
@@ -95,7 +103,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from ..model.entity import (
-    DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity, Provenance,
+    DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, JOB_LABEL_DETAIL, LABEL_DETAIL, WINDOW_DETAIL, Edge, Entity, Provenance,
 )
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -171,6 +179,9 @@ def fetch(
     if label_template is not None and (not isinstance(label_template, str)
                                        or not label_template.strip()):
         return _failed(config, ("label_template",))
+    job_label = config.get("job_label")
+    if job_label is not None and not _valid_job_label(job_label):
+        return _failed(config, ("job_label",))
     date_fields = config.get("date_fields")
     if date_fields is not None and not valid_date_fields(date_fields):
         # Dates exist only to be formatted into a label; a typo in their
@@ -267,6 +278,8 @@ def fetch(
                     continue
                 seen_ids.add(mapped.id)
             if label_template and LABEL_DETAIL not in mapped.detail:
+                unlabelled = True
+            if job_label and JOB_LABEL_DETAIL not in mapped.detail:
                 unlabelled = True
             if body_mode:
                 mapped, readable = _with_document(
@@ -527,15 +540,25 @@ def _one_entity(
 
     detail: dict[str, Any] = {"fields": fields_out, "key": key}
     label_template = config.get("label_template")
-    if label_template:
+    job_label = config.get("job_label")
+    if label_template or job_label:
         # A row's reader-facing name (`label_template`, with `date_fields`
         # for dates the key does not spell, such as a cycle's next day). The
         # id stays the source's identifier and the URL; only what a list and
         # the entity page SHOW changes. Unresolvable: the row keeps its id.
+        # `job_label` names the run's job the same way, for the folded row a
+        # run list shows per job (alpha-engine-config-I11805).
         dates = resolve_dates(config.get("date_fields"), {**context, **path_root})
-        label = resolve_label(label_template, context, dates) if dates is not None else None
-        if label is not None:
-            detail[LABEL_DETAIL] = label
+        if isinstance(job_label, dict):
+            # One adapter minting several jobs names each by its job id (the
+            # id before `@`); a job the map does not name keeps its id.
+            job_label = job_label.get(entity_id.split("@", 1)[0])
+        for template, slot in ((label_template, LABEL_DETAIL), (job_label, JOB_LABEL_DETAIL)):
+            if not template:
+                continue
+            name = resolve_label(template, context, dates) if dates is not None else None
+            if name is not None:
+                detail[slot] = name
 
     return Entity(
         kind=kind,
@@ -546,6 +569,17 @@ def _one_entity(
         detail=detail,
     )
 
+
+
+def _valid_job_label(job_label: Any) -> bool:
+    """A `job_label` is a non-blank format string, or a non-empty map from a
+    job id (the id before `@`) to one."""
+    def _ok(value: Any) -> bool:
+        return isinstance(value, str) and bool(value.strip())
+    if isinstance(job_label, dict):
+        return bool(job_label) and all(_ok(k) and "@" not in k and _ok(v)
+                                       for k, v in job_label.items())
+    return _ok(job_label)
 
 
 def _default_s3() -> tuple[StoreLister | None, BodyReader | None, TextReader | None]:

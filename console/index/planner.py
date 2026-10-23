@@ -150,6 +150,11 @@ class AlertSource:
     where: tuple[tuple[str, Any], ...] = ()
     #: Declared field values that drop a row (e.g. `synthetic: true` drills).
     exclude: tuple[tuple[str, Any], ...] = ()
+    #: Declared field values that keep a row MATCHED but fold it out of the
+    #: newest-`limit` list into a collapsed group (e.g. `status: done` asks).
+    #: A finished ask is still a fact worth one click; it is not one of the
+    #: five things a reader should see first (Director S39, 2026-10-23).
+    collapse: tuple[tuple[str, Any], ...] = ()
 
     @property
     def selector(self) -> str:
@@ -158,6 +163,10 @@ class AlertSource:
             f"{k}={v}" for k, v in self.where] + [
             f"{k}!={v}" for k, v in self.exclude]
         return " ".join(parts)
+
+    @property
+    def collapsed_by(self) -> str:
+        return " ".join(f"{k}={v}" for k, v in self.collapse)
 
 
 @dataclass(frozen=True)
@@ -260,9 +269,10 @@ def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
                 raise PlannerConfigError(f"{here}: unknown `kind` {kind!r}") from None
         match = src.get("where") or {}
         drop = src.get("exclude") or {}
-        if not isinstance(match, Mapping) or not isinstance(drop, Mapping):
+        fold = src.get("collapse") or {}
+        if not all(isinstance(m, Mapping) for m in (match, drop, fold)):
             raise PlannerConfigError(
-                f"{here}: `where` and `exclude` must map field names to values")
+                f"{here}: `where`, `exclude` and `collapse` must map field names to values")
         text = str(src["text"]) if src.get("text") else None
         if text is not None:
             try:
@@ -277,6 +287,7 @@ def _parse_alerts(raw: Any, pid: str) -> Alerts | None:
             link=(str(src["link"]) if src.get("link") else None),
             where=tuple((str(k), v) for k, v in match.items()),
             exclude=tuple((str(k), v) for k, v in drop.items()),
+            collapse=tuple((str(k), v) for k, v in fold.items()),
         ))
     if not sources:
         raise PlannerConfigError(f"{where}: `sources` must declare at least one selector")
@@ -549,12 +560,23 @@ def _matches(ent: Any, src: AlertSource) -> bool:
     return all(_field_value(ent, k) == v for k, v in src.where)
 
 
+def _collapses(ent: Any, src: AlertSource) -> bool:
+    return bool(src.collapse) and all(_field_value(ent, k) == v for k, v in src.collapse)
+
+
 def evaluate_alerts(index: Any, alerts: Alerts | None) -> dict[str, Any]:
     """A project's newest alert updates across its declared selectors, newest
-    first. Pure over the built index: the same rows give the same list."""
+    first. Pure over the built index: the same rows give the same list.
+
+    A row its source declares `collapse:` for is still counted as matched,
+    but leaves the newest-`limit` list for `collapsed` (newest first, the
+    same limit) with its total in `n_collapsed` — so a future-dated done ask
+    no longer leads the list, and is never silently gone either."""
     if alerts is None:
-        return {"declared": False, "limit": 0, "sources": [], "items": []}
+        return {"declared": False, "limit": 0, "sources": [], "items": [],
+                "collapsed": [], "n_collapsed": 0}
     rows: list[tuple[datetime | None, str, dict[str, Any]]] = []
+    folded: list[tuple[datetime | None, str, dict[str, Any]]] = []
     sources = []
     entities = list(index.all())
     for src in alerts.sources:
@@ -569,20 +591,24 @@ def evaluate_alerts(index: Any, alerts: Alerts | None) -> dict[str, Any]:
             link = _field_value(ent, src.link) if src.link else None
             if not _is_url(link):
                 link = ent.provenance.evidence if _is_url(ent.provenance.evidence) else ent.route
-            rows.append((when, ent.id, {
+            (folded if _collapses(ent, src) else rows).append((when, ent.id, {
                 "source": src.name, "at": at, "text": _alert_text(ent, src),
                 "url": link, "entity": ent.id, "entity_url": ent.route,
                 "state": ent.state_value,
             }))
-        sources.append({"name": src.name, "selector": src.selector, "matched": matched})
+        sources.append({"name": src.name, "selector": src.selector, "matched": matched,
+                        "collapsed_by": src.collapsed_by or None})
     # Newest first; an undatable row after every dated one. Equal instants
     # (a replay re-observes many incidents in one pass) break on the id,
     # descending, so the order is the same on every request and dated ids
     # list their newest day first.
     floor = datetime.min.replace(tzinfo=timezone.utc)
-    rows.sort(key=lambda r: (r[0] is not None, r[0] or floor, r[1]), reverse=True)
+    for group in (rows, folded):
+        group.sort(key=lambda r: (r[0] is not None, r[0] or floor, r[1]), reverse=True)
     return {"declared": True, "limit": alerts.limit, "sources": sources,
-            "items": [r[2] for r in rows[:alerts.limit]]}
+            "items": [r[2] for r in rows[:alerts.limit]],
+            "collapsed": [r[2] for r in folded[:alerts.limit]],
+            "n_collapsed": len(folded)}
 
 
 def evaluate(index: Any, now: datetime | date | None = None,

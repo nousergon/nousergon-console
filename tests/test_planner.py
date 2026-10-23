@@ -296,7 +296,7 @@ def test_alerts_list_newest_first_with_text_time_and_link():
     assert first["url"] == first["entity_url"] == "/incident/a-new"
     assert a["sources"] == [{"name": "page", "selector":
                              "kind=incident pipeline=pages sent=True synthetic!=True",
-                             "matched": 2}]
+                             "matched": 2, "collapsed_by": None}]
 
 
 def test_alerts_limit_link_field_and_as_of_fallback():
@@ -358,11 +358,72 @@ def test_alerts_render_on_both_pages_and_in_json():
     ({"limit": 0, "sources": [{"name": "x", "facets": {"a": "b"}}]}, "limit"),
     ({"sources": [{"name": "x", "facets": {"a": "b"}, "text": "{oops"}]}, "template"),
     ({"sources": [{"name": "x", "facets": {"a": "b"}, "exclude": ["s"]}]}, "exclude"),
+    ({"sources": [{"name": "x", "facets": {"a": "b"}, "collapse": ["s"]}]}, "collapse"),
     (["not", "a", "mapping"], "mapping"),
 ])
 def test_bad_alert_declarations_fail_by_name(alerts, needle):
     with pytest.raises(planner.PlannerConfigError, match=needle):
         _alert_plan(alerts)
+
+
+ASKS = {"name": "deadline ask", "kind": "decision", "facets": {"record": "deadline-ask"},
+        "text": "Ask ({status}): {title}", "at": "deadline_utc",
+        "collapse": {"status": "done"}}
+
+
+def _ask(eid, status, deadline):
+    return _alert_row(eid, kind="decision", facets={"record": "deadline-ask"},
+                      status=status, title=eid, deadline_utc=deadline)
+
+
+def test_done_asks_fold_out_of_the_newest_list_but_stay_counted():
+    """Director S39: a future-dated done ask led the list sorted by deadline."""
+    rows = [
+        _ask("done-far", "done", "2026-11-30T00:00:00Z"),
+        _ask("done-near", "done", "2026-10-25T00:00:00Z"),
+        _ask("open-1", "open", "2026-10-24T00:00:00Z"),
+        _ask("open-2", "open", "2026-10-28T00:00:00Z"),
+    ]
+    a = planner.evaluate(_alert_index(_alert_plan({"sources": [ASKS]}), rows))[0]["alerts"]
+    assert [i["entity"] for i in a["items"]] == ["open-2", "open-1"]
+    assert [i["entity"] for i in a["collapsed"]] == ["done-far", "done-near"]
+    assert a["n_collapsed"] == 2
+    assert a["sources"][0]["matched"] == 4
+    assert a["sources"][0]["collapsed_by"] == "status=done"
+
+
+def test_collapsed_asks_render_folded_with_their_count():
+    from console.render.html import planner_page, planner_project_page
+
+    rows = [_ask(f"done-{n}", "done", f"2026-11-0{n}T00:00:00Z") for n in range(1, 8)]
+    rows.append(_ask("open-1", "open", "2026-10-24T00:00:00Z"))
+    index = _alert_index(_alert_plan({"sources": [ASKS]}), rows)
+    for page in (planner_page(index), planner_project_page(index, "p")):
+        top, _, folded = page.partition('<details class="plan-fold">')
+        assert "open-1" in top and "done-" not in top.split("alert updates")[-1]
+        assert "<summary>7 collapsed (<code>status=done</code>, newest 5 shown)</summary>" in folded
+        assert folded.count("<li>") == 5
+    doc = render_json.payload(index, resolve("/planner"))
+    assert doc["projects"][0]["alerts"]["n_collapsed"] == 7
+
+
+def test_a_source_whose_rows_are_all_collapsed_is_not_reported_unmatched():
+    from console.render.html import planner_project_page
+
+    index = _alert_index(_alert_plan({"sources": [ASKS]}),
+                         [_ask("done-1", "done", "2026-11-01T00:00:00Z")])
+    page = planner_project_page(index, "p")
+    assert "no row matches" not in page and "no alert rows" in page
+    assert "<summary>1 collapsed (<code>status=done</code>)</summary>" in page
+
+
+def test_without_collapse_nothing_folds():
+    src = {k: v for k, v in ASKS.items() if k != "collapse"}
+    a = planner.evaluate(_alert_index(_alert_plan({"sources": [src]}), [
+        _ask("done-1", "done", "2026-11-01T00:00:00Z")]))[0]["alerts"]
+    assert [i["entity"] for i in a["items"]] == ["done-1"]
+    assert a["collapsed"] == [] and a["n_collapsed"] == 0
+    assert a["sources"][0]["collapsed_by"] is None
 
 
 def test_equal_instants_break_on_id_descending():

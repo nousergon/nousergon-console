@@ -11,7 +11,9 @@ negative (the identifier is not in the fleet), never a silently-excluded kind.
 Every kind is in scope; an absent kind would be unreachable on path one of
 three and its absence would be invisible.
 
-A row's declared label (`detail["label"]`) is searched too, so a reader can
+A row's declared label (`detail["label"]`), and the name its source declares
+for its job (`detail["job_label"]`, the name a folded run list shows), are
+searched too, so a reader can
 type the name a page shows them instead of the id behind it
 (alpha-engine-config-I11805). Labels only ever ADD hits and always rank after
 every identifier match: §3.7 forbids a search that matches display labels but
@@ -23,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..index.graph import Index
-from ..model.entity import LABEL_DETAIL, Entity
+from ..model.entity import JOB_LABEL_DETAIL, LABEL_DETAIL, Entity
 
 #: `Hit.matched_on` values: the identifier itself, or only the declared label.
 MATCHED_ON_ID = "id"
@@ -39,9 +41,14 @@ class Hit:
     matched_on: str = MATCHED_ON_ID
 
 
-def _label(ent: Entity) -> str:
-    raw = ent.detail.get(LABEL_DETAIL)
-    return raw.strip().lower() if isinstance(raw, str) else ""
+def _labels(ent: Entity) -> list[str]:
+    """Every declared name of a row, lower-cased: its label, then its job's."""
+    out = []
+    for slot in (LABEL_DETAIL, JOB_LABEL_DETAIL):
+        raw = ent.detail.get(slot)
+        if isinstance(raw, str) and raw.strip():
+            out.append(raw.strip().lower())
+    return out
 
 
 def search(index: Index, query: str) -> list[Hit]:
@@ -75,14 +82,14 @@ def search(index: Index, query: str) -> list[Hit]:
         elif ql in eid:
             substring.append(Hit(ent, exact=False))
         else:
-            label = _label(ent)
-            if not label:
+            labels = _labels(ent)
+            if not labels:
                 continue
             hit = Hit(ent, exact=False, matched_on=MATCHED_ON_LABEL)
-            if label == ql:
+            if any(label == ql for label in labels):
                 label_exact.append(hit)
-            elif label.startswith(ql):
+            elif any(label.startswith(ql) for label in labels):
                 label_prefix.append(hit)
-            elif all(w in label for w in words):
+            elif any(all(w in label for w in words) for label in labels):
                 label_words.append(hit)
     return exact + prefix + substring + label_exact + label_prefix + label_words

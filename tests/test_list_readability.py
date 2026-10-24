@@ -532,3 +532,68 @@ def test_registry_json_carries_the_same_view():
     assert view["summary"] == {"DEGRADED": 1, "FAILED": 2, "HEALTHY": 2}
     every = render_json.payload(_registry_index(), resolve("/registry/reg", "runs=all"))
     assert every["registry_view"]["all_runs"] is True
+
+
+# ------------------------------------ registry links on home and /dashboards ---
+
+def test_registry_links_say_what_the_registry_page_holds():
+    index = _registry_index()
+    for route in ("/", "/dashboards"):
+        page = _page(index, route)
+        assert ('<li><a href="/registry/reg">reg</a> · <span class="state-HEALTHY">source ok'
+                '</span> · 5 rows · <span class="state-DEGRADED">3 not healthy</span></li>'
+                ) in page, route
+
+
+def test_registry_link_counts_match_the_registry_page():
+    index = _registry_index()
+    (link,) = index.landing_model().registry_links
+    view = render_json.payload(index, resolve("/registry/reg"))["registry_view"]
+    shown = sum(len(g["rows"]) for g in view["groups"])
+    assert (link["rows"], link["declared"]) == (shown, view["rows"])
+    unhealthy = sum(n for state, n in view["summary"].items() if state != "HEALTHY")
+    assert link["not_healthy"] == unhealthy == 3
+
+
+def test_a_registry_link_names_a_folded_count_and_an_all_healthy_registry():
+    runs = [_run(f"job-c@2026-10-01T0{h}:00:00Z", State.HEALTHY,
+                 f"2026-10-01T0{h}:00:00Z") for h in (1, 2, 3)]
+    index = Index()
+    index.add_result(AdapterResult(
+        name="reg", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=tuple(runs)))
+    index.render_registry("reg")
+    page = _page(index, "/dashboards")
+    assert "1 row (from 3 declared) · all healthy</li>" in page
+
+
+def test_a_failed_registry_read_shows_on_its_link():
+    index = _registry_index(status=AdapterStatus.FAILED)
+    page = _page(index, "/")
+    assert '<span class="state-FAILED">source failed</span>' in page
+
+
+def test_a_registry_with_no_read_this_pass_says_so_on_its_link():
+    index = Index()
+    index.render_registry("ghost")
+    page = _page(index, "/dashboards")
+    assert ('<a href="/registry/ghost">ghost</a> · <span class="state-UNREPORTED">'
+            'no read this pass</span> · 0 rows · no rows</li>') in page
+    assert index.landing_model().registry_links[0]["status"] is None
+
+
+def test_no_registries_reads_none_declared():
+    page = _page(Index(), "/dashboards")
+    assert '<h2>registries</h2><ul><li class="absent">none declared</li></ul>' in page
+
+
+def test_registry_links_are_in_both_json_representations():
+    index = _registry_index()
+    links = index.landing_model().registry_links
+    assert links[0] == {"name": "reg", "url": "/registry/reg", "status": "ok",
+                        "fetched_at": "2026-10-01T04:00:00Z", "rows": 5, "declared": 5,
+                        "not_healthy": 3}
+    assert render_json.payload(index, resolve("/"))["registry_links"] == links
+    dash = render_json.payload(index, resolve("/dashboards"))
+    assert dash["registry_links"] == links
+    assert dash["registries"] == ["reg"]  # unchanged beside it

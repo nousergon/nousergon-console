@@ -64,6 +64,10 @@ class LandingModel:
     exception_view: Any = None
     #: Declared labels for the decision queue's rows, by id.
     queue_labels: dict[str, str] = dataclasses.field(default_factory=dict)
+    #: One entry per rendered registry, with its read status and the row and
+    #: not-healthy counts its page shows (alpha-engine-config-I11805), so a
+    #: registry link on home and `/dashboards` says what it leads to.
+    registry_links: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
 
 def _dashboard_unhealthy(ent: Entity, is_exception: Any) -> bool:
@@ -119,6 +123,43 @@ def dashboards(index: Any) -> list[dict[str, Any]]:
     ]
 
 
+def registry_links(index: Any) -> list[dict[str, Any]]:
+    """Every rendered registry, as its link should read (I11805).
+
+    A registry link used to be a bare name, while a dashboard link beside it
+    carried its rows and how many were not healthy. The counts come from
+    `render.json.registry_view`, the computation the registry page itself
+    renders, so a link cannot promise a count its page does not show: `rows`
+    is what the page lists (a job's runs folded to the newest per state),
+    `declared` is what the registry declared before the fold. A registry
+    with no recorded read this pass says so (`status: None`) rather than
+    borrowing another source's.
+    """
+    from urllib.parse import quote
+
+    from ..render.html import is_exception
+    from ..render.json import registry_view
+
+    fetched = {a.name for a in index.build_info.adapters}
+    out: list[dict[str, Any]] = []
+    for name in index.registry_names():
+        link: dict[str, Any] = {"name": name, "url": f"/registry/{quote(name, safe='')}"}
+        if name not in fetched:
+            link.update(status=None, fetched_at=None, rows=0, declared=0, not_healthy=0)
+        else:
+            view = registry_view(index, name)
+            shown = [e for g in view.groups for e in g.rows]
+            link.update(
+                status=view.source.status,
+                fetched_at=view.source.fetched_at,
+                rows=len(shown),
+                declared=view.rows,
+                not_healthy=sum(1 for e in shown if _dashboard_unhealthy(e, is_exception)),
+            )
+        out.append(link)
+    return out
+
+
 def build(index: Any) -> LandingModel:
     """Compute every landing fact once, from an already-finalized `Index`.
 
@@ -161,4 +202,5 @@ def build(index: Any) -> LandingModel:
         dashboards=dashboards(index),
         exception_view=latest_per_job(index, exceptions, per_state=True),
         queue_labels=declared_labels(queue),
+        registry_links=registry_links(index),
     )

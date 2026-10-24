@@ -889,6 +889,29 @@ def dashboard_links(dashboards: list[dict]) -> str:
     return f'<p class="dashboard-links">dashboards: {links} · <a href="/dashboards">all</a></p>'
 
 
+def registry_link_items(links: list[dict]) -> str:
+    """The registry links on home and `/dashboards`, each saying what its page
+    holds (alpha-engine-config-I11805): the read's status as a word in its
+    colour (§5.7), the rows the page lists, and how many are not healthy, the
+    way a dashboard link already reads. From `LandingModel.registry_links`, so
+    both pages and both representations read one computation (§3.8)."""
+    if not links:
+        return '<li class="absent">none declared</li>'
+    items = []
+    for r in links:
+        if r["status"] is None:
+            read = '<span class="state-UNREPORTED">no read this pass</span>'
+        else:
+            cls = "state-HEALTHY" if r["status"] == "ok" else "state-FAILED"
+            read = f'<span class="{cls}">source {esc(r["status"])}</span>'
+        folded = f' (from {r["declared"]} declared)' if r["rows"] < r["declared"] else ""
+        health = (f'<span class="state-DEGRADED">{r["not_healthy"]} not healthy</span>'
+                  if r["not_healthy"] else ("all healthy" if r["rows"] else "no rows"))
+        items.append(f'<li><a href="{esc(r["url"])}">{esc(r["name"])}</a> · {read} · '
+                     f'{_rows(r["rows"])}{folded} · {health}</li>')
+    return "".join(items)
+
+
 def landing_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
     state and age · the transparency-gap count · what is waiting on Brian
@@ -949,7 +972,7 @@ def landing_page(index: Index) -> str:
 {dashboard_links(model.dashboards)}
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
-<h2>registries</h2><ul>{''.join(f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>' for name in index.registry_names()) or '<li class="absent">none declared</li>'}</ul>
+<h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
 {milestones_section(model.milestones, model.milestone_journal)}
 {exceptions_by_state(exceptions, model.exception_view)}
@@ -995,10 +1018,7 @@ def dashboards_page(index: Index) -> str:
         + "</li>"
         for m in model.milestones
     ) or '<li class="absent">none declared</li>'
-    registries = "".join(
-        f'<li><a href="/registry/{esc(name)}">{esc(name)}</a></li>'
-        for name in index.registry_names()
-    ) or '<li class="absent">none declared</li>'
+    registries = registry_link_items(model.registry_links)
     lists = "".join(
         f'<li><a href="/{esc(k.route)}">{esc(k.value)}s</a> · '
         f'{len(index.of_kind(k))} rows</li>'

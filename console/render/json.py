@@ -107,6 +107,9 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                                "unreported": m.get("unreported", 0)}
                               for m in model.milestones],
                "registries": index.registry_names(),
+               # What each registry link says (I11805): read status, rows
+               # shown, rows declared, not healthy. `registries` is unchanged.
+               "registry_links": model.registry_links,
                "kinds": [{"kind": k.route, "url": f"/{k.route}",
                           "rows": len(index.of_kind(k))} for k in Kind]}
     elif req.view == "entity":
@@ -255,6 +258,8 @@ def _landing(index: Index) -> dict[str, Any]:
         }
     if model.queue_labels:
         doc["decision_queue_labels"] = model.queue_labels
+    # The registry links the page lists, with what each says (I11805, §3.8).
+    doc["registry_links"] = model.registry_links
     if model.milestones:
         doc["milestones"] = model.milestones
     # What the clause journal did on THIS build: the transitions it recorded,

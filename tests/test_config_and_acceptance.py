@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 
+import pytest
 import yaml
 
 from console.config import build_index
 from console.model.kinds import Kind
+from console.model.envelope import AdapterStatus
 
 
 def _write_registry(dirpath, components):
@@ -75,6 +77,56 @@ def test_registry_coverage_names_a_declared_registry_without_a_generated_page(tm
     assert index.registry_coverage() == {
         "count": 1, "of": 2, "missing": ["missing"],
     }
+
+
+def test_registry_manifest_widens_the_denominator_to_unwired_registries(tmp_path):
+    """alpha-engine-config-I10035: the §7 denominator is the fleet's declared
+    registry set, so a registry nobody wired to an adapter reads as missing
+    instead of not being counted (live 2026-09-04: `1 of 1`, `missing: []`)."""
+    reg = tmp_path / "observability.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-one": {}})
+    index = build_index({
+        "registries": [{"name": "fleet", "adapter": "yaml-directory",
+                        "path": str(reg), "id_field": "component_id"}],
+        "registry_manifest": [
+            {"name": "fleet", "location": "governance/observability.d"},
+            {"name": "policy-clauses", "location": "governance/policy-clauses.d"},
+            "timeout-chains",
+        ],
+    })
+    assert index.registry_coverage() == {
+        "count": 1, "of": 3, "missing": ["policy-clauses", "timeout-chains"],
+    }
+    # An unwired manifest registry is a missing PAGE, not a failed read:
+    # §9.1/§9.6's broken-registry population is unchanged by the manifest.
+    assert index.broken_registries() == []
+
+
+def test_registry_coverage_without_a_manifest_is_unchanged(tmp_path):
+    reg = tmp_path / "first.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-one": {}})
+    index = build_index({"registries": [
+        {"name": "first", "adapter": "yaml-directory", "path": str(reg),
+         "id_field": "component_id"},
+    ]})
+    assert index.registry_coverage() == {"count": 1, "of": 1, "missing": []}
+
+
+@pytest.mark.parametrize("manifest", [
+    "fleet", [{"location": "governance/x.d"}], [""], [None],
+])
+def test_a_malformed_registry_manifest_fails_by_name(manifest):
+    from console.config import ConfigError, validate_config
+
+    with pytest.raises(ConfigError, match="registry_manifest"):
+        validate_config({"registry_manifest": manifest})
+    # In the live build it fails only its own source, never the whole index.
+    index = build_index({"registry_manifest": manifest}).finalize()
+    adapters = {a.name: a for a in index.build_info.adapters}
+    assert adapters["registry_manifest"].status == AdapterStatus.FAILED.value
+    assert "registry_manifest" in adapters["registry_manifest"].unavailable[0]
 
 
 def test_adding_a_component_requires_no_console_edit(tmp_path):

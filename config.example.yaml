@@ -61,6 +61,17 @@ console:
 #
 # Without a registry the console still runs: it indexes whatever the adapters
 # return and reports population completeness as unknown rather than as 1.0.
+# §7 registry-page coverage (`registry_pages` on the surface). Optional. Its
+# denominator is every registry configured above PLUS every registry listed
+# here, so a registry the fleet holds but no adapter reads is named in
+# `missing` instead of not being counted. Without this block the denominator
+# is "registries someone remembered to configure", which reads complete by
+# construction. A wired registry is matched by its configured `name`
+# (`registry-<n>` by position when it sets none). `location` is descriptive.
+registry_manifest:
+  - {name: registry-1, location: ./example/registry.d}
+  - {name: playbooks, location: ./example/playbooks.d}
+
 registry:
   adapter: yaml-directory
   path: ./example/registry.d          # one file per component

@@ -91,6 +91,14 @@ class Index:
         self._in: dict[str, list[Edge]] = {}
         self._declared_registries: set[str] = set()
         self._rendered_registries: set[str] = set()
+        # §7's fleet-declared registry set (alpha-engine-config-I10035): the
+        # registries the FLEET holds, from the `registry_manifest:` config
+        # block, independent of which ones an adapter is pointed at. Kept
+        # apart from _declared_registries because that set is also §9.1/§9.6's
+        # "configured and expected to be read this pass" population
+        # (`broken_registries`), and an unwired registry is a missing PAGE,
+        # not a failed read.
+        self._manifest_registries: set[str] = set()
         # §9.1's per-registry row count, keyed by registry name — populated by
         # config.build_index right after each registry adapter runs. Separate
         # from _rendered_registries (§7's PAGE coverage): a registry can have
@@ -138,6 +146,16 @@ class Index:
     def declare_registry(self, name: str) -> None:
         """Record a configured registry even when its adapter cannot build it."""
         self._declared_registries.add(name)
+        self._landing_model = None
+
+    def declare_manifest_registry(self, name: str) -> None:
+        """Record a registry the fleet declares, wired to an adapter or not.
+
+        Widens §7's page-coverage denominator only. Without it the
+        denominator is "registries someone remembered to configure", which
+        reads complete by construction (alpha-engine-config-I10035).
+        """
+        self._manifest_registries.add(name)
         self._landing_model = None
 
     def render_registry(self, name: str) -> None:
@@ -267,10 +285,16 @@ class Index:
         return self._onboarding_cost
 
     def registry_coverage(self) -> dict[str, object]:
-        """The denominator-backed generated-page coverage required by §7."""
-        missing = sorted(self._declared_registries - self._rendered_registries)
-        return {"count": len(self._rendered_registries),
-                "of": len(self._declared_registries), "missing": missing}
+        """The denominator-backed generated-page coverage required by §7.
+
+        The denominator is every configured registry plus every registry the
+        fleet's `registry_manifest:` declares, so an unwired registry is
+        named in `missing` rather than absent from the count.
+        """
+        declared = self._declared_registries | self._manifest_registries
+        missing = sorted(declared - self._rendered_registries)
+        return {"count": len(self._rendered_registries & declared),
+                "of": len(declared), "missing": missing}
 
     def registry_names(self) -> list[str]:
         return sorted(self._rendered_registries)

@@ -114,6 +114,9 @@ def validate_config(config: dict[str, Any]) -> None:
     """
     for label, cfg in _declared_registry_configs(config):
         _check_declared_registry_default_state(label, cfg)
+    # Second rule (alpha-engine-config-I10035): a malformed
+    # `registry_manifest:` would shrink §7's denominator unseen.
+    registry_manifest_names(config)
 
 
 def _check_declared_registry_default_state(label: str, cfg: dict[str, Any]) -> None:
@@ -161,6 +164,31 @@ def _declared_registry_configs(config: dict[str, Any]) -> list[tuple[str, dict[s
     return out
 
 
+def registry_manifest_names(config: dict[str, Any]) -> list[str]:
+    """Names in the optional `registry_manifest:` block (console-policy §7).
+
+    Each entry is a registry name, or a mapping with a `name` (and any other
+    descriptive keys, such as `location`, which the console does not read).
+    A wired registry is matched by the same name its `registry:` /
+    `registries:` entry carries. Anything else raises `ConfigError`: a
+    manifest entry silently dropped would shrink the very denominator the
+    manifest exists to widen.
+    """
+    raw = config.get("registry_manifest")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("registry_manifest must be a list of registry names "
+                          f"or {{name: ...}} mappings, got {type(raw).__name__}")
+    names: list[str] = []
+    for i, entry in enumerate(raw):
+        name = entry.get("name") if isinstance(entry, dict) else entry
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(f"registry_manifest[{i}] has no registry name: {entry!r}")
+        names.append(name.strip())
+    return names
+
+
 def build_index(config: dict[str, Any]) -> Index:
     """Run every enabled adapter once and fold its projection into the index.
 
@@ -199,6 +227,16 @@ def build_index(config: dict[str, Any]) -> Index:
     index.set_staleness_factor(
         float((config.get("console") or {}).get("staleness_factor", 1.5))
     )
+    # §7's denominator is the FLEET's registry set, not the configured one
+    # (alpha-engine-config-I10035): parsed before any adapter so a malformed
+    # manifest is named, never silently shrinks the count. Per-fragment like
+    # every other ConfigError here (alpha-engine-config-I8778): it fails only
+    # its own source; the strict CLI pre-flight (`validate_config`) fails CI.
+    try:
+        for manifest_name in registry_manifest_names(config):
+            index.declare_manifest_registry(manifest_name)
+    except ConfigError as exc:
+        index.add_result(_config_error_result("registry_manifest", exc))
     descriptors: list = []
     # The registry adapter is configured under its own `registry:` block.
     registry_entries = ([config["registry"]] if config.get("registry") else [])

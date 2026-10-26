@@ -456,6 +456,105 @@ def _claims_section(ent: Entity) -> str:
     )
 
 
+#: The finding columns that carry a row's own state, in the order one is
+#: chosen when a row has several. Rows are ordered worst first only on these.
+_FINDING_STATE_COLUMNS = ("state", "status", "severity")
+
+
+def _finding_columns(rows: list[dict]) -> list[str]:
+    """Every column any row carries: `key` first, then its state column, then
+    the rest in the order the emitter first wrote them."""
+    seen: list[str] = []
+    for r in rows:
+        for k in r:
+            if k not in seen:
+                seen.append(k)
+    lead = [c for c in ("key",) if c in seen]
+    state = [c for c in _FINDING_STATE_COLUMNS if c in seen][:1]
+    return lead + state + [c for c in seen if c not in lead + state]
+
+
+def _finding_rank(row: dict, column: str | None) -> tuple:
+    """Worst first on a declared state column (`state_rank`, I11805); a row
+    without one keeps the emitter's order, after the rows that have one."""
+    value = row.get(column) if column else None
+    if value is None or value == "":
+        return (5, 0, "")
+    text = str(value)
+    if text.upper() in _STATE_VALUES:
+        return state_rank(text.upper())
+    # An envelope-vocabulary word ranks by the state the adapter maps it to
+    # (`error` the worst, `ok` the healthy end), so an emitter's own words
+    # sort honestly; any other word sorts by `state_rank`'s own rule.
+    return state_rank(_ENVELOPE_WORDS.get(text.lower(), text))
+
+
+_STATE_VALUES = frozenset(s.value for s in State)
+_ENVELOPE_WORDS = {"error": State.FAILED.value, "attention": State.DEGRADED.value,
+                   "ok": State.HEALTHY.value}
+
+
+def _cell_text(value: object) -> str:
+    """A finding cell as one line: a list joins, a mapping reads `k=v`."""
+    if isinstance(value, dict):
+        return ", ".join(f"{k}={_cell_text(v)}" for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_cell_text(v) for v in value) or "(none)"
+    return str(value)
+
+
+def findings_section(ent: Entity) -> str:
+    """The rows behind a check's finding count (alpha-engine-config-I12535).
+
+    Rendered from the rows alone, like `fields_section`: nothing below knows
+    which check wrote them, so an account registry's one row per account and
+    any other check's rows read the same way. A cell the emitter did not write
+    renders as not stated, never blank and never guessed. The count line names
+    every row: shown here, plus any the adapter did not carry.
+    """
+    if "findings" not in ent.detail:
+        return ""
+    rows = [r for r in ent.detail.get("findings") or [] if isinstance(r, dict)]
+    total = ent.detail.get("findings_count")
+    total = total if isinstance(total, int) and total >= len(rows) else len(rows)
+    if total == 0:
+        return ('<h2>findings</h2><p class="absent">No findings — the check '
+                "reported none.</p>")
+    columns = _finding_columns(rows)
+    state_col = next((c for c in _FINDING_STATE_COLUMNS if c in columns), None)
+    ordered = sorted(rows, key=lambda r: _finding_rank(r, state_col))
+    parts = [f"showing {len(rows)} of {total} findings"]
+    if total > len(rows):
+        parts.append(f"{total - len(rows)} not carried into the index — "
+                     "the check's own output lists them")
+    counts = ""
+    if state_col:
+        tally: dict[str, int] = {}
+        for r in rows:
+            v = r.get(state_col)
+            key = "not stated" if v in (None, "") else str(v)
+            tally[key] = tally.get(key, 0) + 1
+        order = sorted(tally, key=lambda k: _finding_rank({state_col: k}, state_col))
+        counts = " · " + " · ".join(
+            f'<span class="state-{esc(k)}">{tally[k]} {esc(k)}</span>' for k in order)
+    head = "".join(f"<th>{esc(c)}</th>" for c in columns)
+    body = "".join(
+        "<tr>" + "".join(
+            '<td><em class="absent">not stated</em></td>'
+            if r.get(c) is None or r.get(c) == ""
+            else (f'<td class="state-{esc(r[c])}">{esc(r[c])}</td>'
+                  if c == state_col else f"<td>{esc(_cell_text(r[c]))}</td>")
+            for c in columns
+        ) + "</tr>"
+        for r in ordered
+    )
+    return (
+        "<h2>findings</h2>"
+        f'<p class="list-shown">{esc(" · ".join(parts))}{counts}</p>'
+        f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
 def _source_findings_section(ent: Entity) -> str:
     """Render a driver's named unavailable result rather than hiding it in detail."""
     findings = [
@@ -492,6 +591,7 @@ def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
 {document_section(ent, citations.declared(index))}
 {relations_section(index, ent, all_runs)}
 {fields_section(ent, citations.declared(index))}
+{findings_section(ent)}
 {_source_findings_section(ent)}
 {_claims_section(ent)}
 </body></html>"""

@@ -300,6 +300,17 @@ Envelope shape (schema_version 1):
 }
 ```
 
+**Findings render as rows.** Each finding is carried onto the component as
+written (`detail.findings`, at most `FINDINGS_CARRIED` = 200 rows;
+`detail.findings_count` stays the full count) and the component's page renders
+them as a table. A dict becomes one row with one column per key, `key` first;
+a bare value becomes a row whose `detail` is that value. Where rows declare a
+`state`, `status` or `severity`, they read worst first and are counted by that
+value; otherwise they keep the check's order. A cell the check did not write
+renders as *not stated*, and the count line names any rows past the cap. A
+check whose findings are its answer, such as an account registry with one row
+per account and the date each was last verified, needs no adapter of its own.
+
 ## `state-machine`
 
 | | |

@@ -251,6 +251,14 @@ def _from_envelope(
             "status": status or None,
             "cadence_minutes": cadence_minutes,
             "findings_count": len(body.get("findings") or []),
+            # The rows behind the count (alpha-engine-config-I12535). A check
+            # whose findings are its answer — an account registry's one row per
+            # account — was rendered as a bare number, so the reader saw "3"
+            # and had to go to the bucket for the rows. Carried as the emitter
+            # wrote them (scalar values only), bounded by FINDINGS_CARRIED;
+            # `findings_count` stays the full count so the page can say how
+            # many it did not carry.
+            "findings": _finding_rows(body.get("findings")),
             "schema_version": body.get("schema_version"),
             "key": key,
             # Self-describing extra data (§5.8), carried through verbatim. This
@@ -307,6 +315,31 @@ def _from_envelope(
         run_edge = Edge(source=run_id, rel="belongs-to", target=check_id)
 
     return component, run, art, run_edge, produces_edge
+
+
+#: The most finding rows one component carries into the index. A check that
+#: reports thousands of findings still renders, and its page says how many
+#: rows it is not showing rather than silently cutting the table short.
+FINDINGS_CARRIED = 200
+
+
+def _finding_rows(raw: Any) -> list[dict[str, Any]]:
+    """The envelope's findings as rows, in the order the check wrote them.
+
+    The envelope types `findings` as an array of anything (the published
+    schema's `items: {}`), so this takes what it is given without inventing:
+    a dict is carried as written (the JSON representation keeps its structure)
+    and a bare value becomes a row whose `detail` is that value. Nothing is
+    renamed, defaulted or interpreted — a value the emitter did not write is
+    absent from the row, and the page shows it as not stated.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [
+        {str(k): v for k, v in item.items()} if isinstance(item, dict)
+        else {"detail": item}
+        for item in raw[:FINDINGS_CARRIED]
+    ]
 
 
 def _lineage_edges(body: dict[str, Any], component_id: str) -> list[Edge]:

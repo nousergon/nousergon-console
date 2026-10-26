@@ -561,7 +561,7 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
     healthy sort first, keeping source order otherwise, and `summary` counts
     the rows by state so a reader sees the shape before the table.
     """
-    from .html import is_exception
+    from .html import attention_order, is_exception, ordered_summary
 
     total = index.of_kind(req.kind)
     filtered = filter_entities(total, req.facets)
@@ -572,7 +572,7 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
         summary = {}
         for ent in rows:
             summary[ent.state_value] = summary.get(ent.state_value, 0) + 1
-        return Listing(rows=rows, total=len(total), summary=dict(sorted(summary.items())),
+        return Listing(rows=rows, total=len(total), summary=ordered_summary(summary),
                        filtered_runs=len(filtered), dated=True, window_days=window,
                        declared_window=declared, outside=outside,
                        labels=declared_labels(rows))
@@ -582,11 +582,11 @@ def list_rows(index: Index, req: Resolved, now: datetime | None = None) -> Listi
     if collapsed:
         view = latest_per_job(index, filtered)
         rows, labels = view.rows, view.labels
-    rows = sorted(rows, key=lambda e: not is_exception(e))
+    rows = sorted(rows, key=attention_order)
     summary: dict[str, int] = {}
     for ent in rows:
         summary[ent.state_value] = summary.get(ent.state_value, 0) + 1
-    return Listing(rows=rows, total=len(total), summary=dict(sorted(summary.items())),
+    return Listing(rows=rows, total=len(total), summary=ordered_summary(summary),
                    collapsed=collapsed, filtered_runs=len(filtered), labels=labels)
 
 
@@ -664,7 +664,7 @@ def relation_groups(index: Index, ent: Entity, all_runs: bool = False) -> list[R
     One implementation for both representations (§3.8). Each related id is
     listed once per predicate, however many adapters declared the edge.
     """
-    from .html import is_exception
+    from .html import attention_order, is_exception, ordered_summary
 
     others: dict[str, list[str]] = {}
     for e in index.related(ent.id):
@@ -683,12 +683,12 @@ def relation_groups(index: Index, ent: Entity, all_runs: bool = False) -> list[R
             view = latest_per_job(index, found, per_state=True)
             rows, labels, runs = view.rows, view.labels, view.runs
         rows = sorted(rows, key=lambda o: o.provenance.as_of or "", reverse=True)
-        rows = sorted(rows, key=lambda o: not is_exception(o))
+        rows = sorted(rows, key=attention_order)
         summary: dict[str, int] = {}
         for o in rows:
             summary[o.state_value] = summary.get(o.state_value, 0) + 1
         groups.append(RelationGroup(rel=rel, rows=rows, labels=labels, runs=runs,
-                                    summary=dict(sorted(summary.items())),
+                                    summary=ordered_summary(summary),
                                     related=len(found), unresolved=unresolved))
     return groups
 
@@ -759,7 +759,7 @@ def kind_groups(index: Index, entities: list[Entity],
     counts its rows by state. Shared by search and the registry page, so the
     two cannot fold or count differently (I11805).
     """
-    from .html import is_exception
+    from .html import attention_order, is_exception, ordered_summary
 
     by_kind: dict[Kind, list[Entity]] = {}
     for ent in entities:
@@ -774,12 +774,12 @@ def kind_groups(index: Index, entities: list[Entity],
         else:
             view = latest_per_job(index, found, per_state=True)
             rows, labels, runs = view.rows, view.labels, view.runs
-        rows = sorted(rows, key=lambda e: not is_exception(e))
+        rows = sorted(rows, key=attention_order)
         summary: dict[str, int] = {}
         for e in rows:
             summary[e.state_value] = summary.get(e.state_value, 0) + 1
         groups.append(SearchGroup(kind=kind, rows=rows, labels=labels, runs=runs,
-                                  summary=dict(sorted(summary.items())),
+                                  summary=ordered_summary(summary),
                                   matched=len(found)))
     return groups
 
@@ -839,6 +839,8 @@ class RegistryView:
 
 def registry_view(index: Index, name: str, all_runs: bool = False) -> RegistryView:
     source = next(a for a in index.build_info.adapters if a.name == name)
+    from .html import ordered_summary
+
     claimed = index.claimed_by(name)
     groups = kind_groups(index, claimed, all_runs)
     summary: dict[str, int] = {}
@@ -846,7 +848,7 @@ def registry_view(index: Index, name: str, all_runs: bool = False) -> RegistryVi
         for state, n in g.summary.items():
             summary[state] = summary.get(state, 0) + n
     return RegistryView(name=name, source=source, all_runs=all_runs, groups=groups,
-                        rows=len(claimed), summary=dict(sorted(summary.items())))
+                        rows=len(claimed), summary=ordered_summary(summary))
 
 
 def _registry(index: Index, name: str, all_runs: bool = False) -> dict[str, Any]:

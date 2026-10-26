@@ -656,10 +656,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
     visible = entities[start:start + PAGE_SIZE]
     shown = (f"<p>showing {len(visible)} of {listing.total} · "
              f"{len(entities)} filtered · page {page}</p>")
-    summary = " · ".join(
-        f'<span class="state-{esc(state)}">{n} {esc(state)}</span>'
-        for state, n in listing.summary.items()
-    ) or '<span class="absent">no rows</span>'
+    summary = _state_counts(listing.summary)
     noun = "jobs" if listing.collapsed else f"{kind.value}s"
     summary_line = f'<p class="list-summary">{len(entities)} {noun} · {summary}</p>'
     toggle = ""
@@ -825,6 +822,38 @@ _SEVERITY_ORDER = (
     State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN,
     State.DEGRADED, State.UNREPORTED, State.ABSENT, State.UNREGISTERED,
 )
+def state_rank(value: str) -> tuple:
+    """Where a state sorts when a page lists or counts by state (I11805).
+
+    Worst first: the §5.1 exception states in `_SEVERITY_ORDER`, then any other
+    value that means the same thing (a raw `EXCEPTION_VALUES` word), then every
+    other value alphabetically, and HEALTHY last. One order for the counts and
+    the rows under them, so a summary reads in the order its table does.
+    """
+    known = [s.value for s in _SEVERITY_ORDER]
+    if value in known:
+        return (0, known.index(value), "")
+    if str(value).strip().lower() in EXCEPTION_VALUES:
+        return (1, 0, str(value))
+    if value == State.HEALTHY.value:
+        return (3, 0, "")
+    return (2, 0, str(value))
+
+
+def ordered_summary(summary: dict[str, int]) -> dict[str, int]:
+    """A count-by-state, worst state first (`state_rank`)."""
+    return {k: summary[k] for k in sorted(summary, key=state_rank)}
+
+
+def attention_order(ent: Entity) -> tuple:
+    """Sort key: not-healthy rows first, worst state first among them.
+
+    Healthy rows keep their source order (the sort is stable and they share
+    one key), so only the rows a reader must act on are reordered.
+    """
+    return state_rank(ent.state_value) if is_exception(ent) else (4, 0, "")
+
+
 #: Groups that open by default. The rest render collapsed, still in the page,
 #: so a reader sees what broke before scrolling past what is merely unreported.
 _OPEN_STATES = frozenset({State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN})
@@ -852,8 +881,7 @@ def exceptions_by_state(exceptions: list[Entity], view=None) -> str:
     newest_first = sorted(rows, key=lambda e: e.provenance.as_of or "", reverse=True)
     for e in newest_first:
         groups.setdefault(e.state_value, []).append(e)
-    known = [s.value for s in _SEVERITY_ORDER]
-    order = [v for v in known if v in groups] + sorted(v for v in groups if v not in known)
+    order = sorted(groups, key=state_rank)
     counts = " · ".join(
         f'<a class="state-{esc(v)}" href="#not-healthy-{esc(v)}">{len(groups[v])} {esc(v)}</a>'
         for v in order
@@ -1990,7 +2018,7 @@ def search_page(index: Index, query: str, all_runs: bool = False) -> str:
     named = f" · {view.by_label} by name" if view.by_label else ""
     summary = (f'<p class="list-summary">results for &ldquo;{esc(query)}&rdquo;: '
                f"{_rows(shown)}{folded}{named} · "
-               f"{_state_counts(dict(sorted(totals.items())))}</p>")
+               f"{_state_counts(totals)}</p>")
     toggle = ""
     here = "/search?" + urlencode({"q": query})
     if all_runs:
@@ -2022,5 +2050,5 @@ def _state_counts(summary: dict[str, int]) -> str:
     """`2 FAILED · 9 HEALTHY`, each count in its state's colour."""
     return " · ".join(
         f'<span class="state-{esc(state)}">{n} {esc(state)}</span>'
-        for state, n in summary.items()
+        for state, n in ordered_summary(summary).items()
     ) or '<span class="absent">no rows</span>'

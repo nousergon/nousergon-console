@@ -293,11 +293,13 @@ def _field_columns(entities: list[Entity]) -> list[str]:
 
 def _table(entities: list[Entity], with_fields: bool = False,
            labels: dict[str, str] | None = None,
-           links: Citations | None = None) -> str:
+           links: Citations | None = None, empty: str | None = None) -> str:
     if not entities:
         # Absence renders as itself — an empty state is a rendered fact, not
-        # a blank region (§5.5).
-        return '<p class="absent">No entities — the source reported none.</p>'
+        # a blank region (§5.5). `empty` names WHY it is empty when the caller
+        # knows (a filter, a window, a page past the end): "the source
+        # reported none" is only true when the source did (I11805).
+        return f'<p class="absent">{esc(empty or EMPTY_SOURCE)}</p>'
     columns = _field_columns(entities) if with_fields else []
     labels = labels or {}
     rows = "".join(row(e, columns, labels.get(e.id), links) for e in entities)
@@ -312,7 +314,8 @@ def _table(entities: list[Entity], with_fields: bool = False,
 
 def _grouped_tables(entities: list[Entity],
                     labels: dict[str, str] | None = None,
-                    links: Citations | None = None) -> str:
+                    links: Citations | None = None,
+                    empty: str | None = None) -> str:
     """One table per source when the rows come from more than one (I11805).
 
     A dashboard is a pane filter, so it can gather rows from several sources
@@ -323,7 +326,7 @@ def _grouped_tables(entities: list[Entity],
     already not-healthy first, so the group needing attention leads.
     """
     if not any(e.detail.get("fields") for e in entities):
-        return _table(entities, labels=labels)
+        return _table(entities, labels=labels, empty=empty)
     groups: dict[str, list[Entity]] = {}
     for e in entities:
         groups.setdefault(e.provenance.source or "", []).append(e)
@@ -654,8 +657,7 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
     entities = listing.rows
     start = (page - 1) * PAGE_SIZE
     visible = entities[start:start + PAGE_SIZE]
-    shown = (f"<p>showing {len(visible)} of {listing.total} · "
-             f"{len(entities)} filtered · page {page}</p>")
+    shown = _shown_line(kind, facets, listing, page, len(visible))
     summary = _state_counts(listing.summary)
     noun = "jobs" if listing.collapsed else f"{kind.value}s"
     summary_line = f'<p class="list-summary">{len(entities)} {noun} · {summary}</p>'
@@ -679,7 +681,8 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
                       "show newest run per job</a></p>")
     title = f"{kind.value}s"
     table = _grouped_tables(visible, labels=listing.labels,
-                            links=citations.declared(index))
+                            links=citations.declared(index),
+                            empty=_empty_line(kind, facets, listing, page))
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{esc(title)}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
@@ -692,6 +695,56 @@ def list_page(index: Index, kind: Kind, facets: dict[str, str], page: int = 1,
 
 #: Rows per list page, the same slice the JSON representation takes.
 PAGE_SIZE = 50
+
+#: The empty state when nothing narrowed the list: the sources reported no row.
+EMPTY_SOURCE = "No entities — the source reported none."
+
+
+def _filter_text(facets: dict[str, str]) -> str:
+    """The filter as the URL states it, so the line names what was applied."""
+    return ", ".join(f"{k}={v}" for k, v in facets.items())
+
+
+def _shown_line(kind: Kind, facets: dict[str, str], listing, page: int,
+                visible: int) -> str:
+    """What this page shows, out of what, and where the rest went (I11805).
+
+    The parts add up to the denominator, which is every row of the kind (the
+    JSON `of`, §3.8): the rows on this page, the rows the filter hid, the runs
+    folded into their job's newest, the rows outside a dated window, and the
+    rows on other pages. A reader can check the line against itself.
+    """
+    rows = len(listing.rows)
+    pages = max(1, -(-rows // PAGE_SIZE))
+    parts = [f"showing {visible} of {listing.total} {kind.value}s"]
+    if facets:
+        parts.append(f"{listing.total - listing.filtered_runs} hidden by filter "
+                     f"{_filter_text(facets)}")
+    if listing.collapsed and listing.filtered_runs > rows:
+        parts.append(f"{listing.filtered_runs - rows} older runs folded into their job")
+    if listing.dated and listing.outside:
+        parts.append(f"{listing.outside} outside the window")
+    if rows > visible:
+        parts.append(f"{rows - visible} on other pages")
+    parts.append(f"page {page} of {pages}")
+    return f'<p class="list-shown">{esc(" · ".join(parts))}</p>'
+
+
+def _empty_line(kind: Kind, facets: dict[str, str], listing, page: int) -> str:
+    """Why a list page has no rows — the source, the filter, the window or
+    the page number — so an empty filter never reads as an empty source."""
+    noun = f"{kind.value}s"
+    if listing.total == 0:
+        return EMPTY_SOURCE
+    if facets and listing.filtered_runs == 0:
+        return (f"No {noun} match the filter {_filter_text(facets)} — it matched "
+                f"none of the {listing.total} {noun} the sources reported.")
+    if not listing.rows:
+        return (f"No {noun} in this window — the {listing.filtered_runs} that "
+                "match are older or undated; the archive link above lists them.")
+    pages = max(1, -(-len(listing.rows) // PAGE_SIZE))
+    return (f"No rows on page {page} — this list has {len(listing.rows)} rows "
+            f"on {pages} page{'' if pages == 1 else 's'}.")
 
 
 def _window_line(kind: Kind, facets: dict[str, str], listing) -> str:

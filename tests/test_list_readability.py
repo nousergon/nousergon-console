@@ -401,7 +401,10 @@ def test_history_page_is_a_table_with_a_breadcrumb_and_window_links():
     assert 'href="/component/ae-writer.service"' in html
     assert 'href="/component"' in html
     assert "<th>as_of</th><th>value</th><th>state</th>" in html
-    assert "<td>2026-08-04T11:00:00Z</td><td>4</td>" in html
+    # The as-of reads as UTC to the minute and its age against the page's
+    # clock; the source's stamp stays in the `<time>` attributes (I11805).
+    assert ('<td><time datetime="2026-08-04T11:00:00Z" title="2026-08-04T11:00:00Z">'
+            '2026-08-04 11:00Z · <span class="age">1h ago</span></time></td><td>4</td>') in html
     assert "2 observations" in html and "state now: FAILED" in html
     # The current window is plain text; the others are links that carry the URL.
     assert "<strong>24h</strong>" in html

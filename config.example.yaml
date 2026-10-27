@@ -1425,6 +1425,15 @@ milestones:
         sns_topic_arn: arn:aws:sns:us-east-1:000000000000:example-alerts
         event_bus: example-alert-bus   # the machine-readable leg (§7.3)
         event_source: nousergon.console
+        # The region both legs' clients are built in. Optional only when
+        # `sns_topic_arn` is a full ARN (it names its region); a declared leg
+        # with no resolvable region FAILS THE BUILD, because boto3 on a host
+        # with no default region raises NoRegionError on every delivery.
+        region: us-east-1
+        # Pending notifications older than this are announced as ONE backlog
+        # digest when delivery recovers, not replayed one by one. Each covered
+        # event is kept in the journal under `superseded_undelivered`.
+        backlog_cutoff_hours: 6
 
 # Facets are fields on entities, faceted uniformly by the index. No view
 # implements its own filtering. Listing a facet here makes it a slicing

@@ -165,6 +165,26 @@ class NotifySpec:
     event_bus: str | None = None
     event_source: str = "nousergon.console"
     region: str | None = None
+    #: Pending notifications older than this are not replayed one by one when
+    #: delivery recovers; they are announced as ONE backlog digest. See
+    #: `_plan_delivery`.
+    backlog_cutoff_hours: float = 6.0
+
+    def __post_init__(self) -> None:
+        # A declared leg with no region is not a configuration that degrades:
+        # boto3 builds no client at all on a host with no default region, so
+        # every delivery raises `NoRegionError` and the journal queues forever
+        # while the pane looks healthy. The crucible-phase-2-exit journal sat
+        # in exactly that state from 2026-09-01 to 2026-10-27, 96 notifications
+        # deep (alpha-engine-config-I12723). Refuse it at construction, which
+        # is config-parse time, which is the CI build of the example config.
+        if self.declared and not self.region:
+            raise MilestoneConfigError(
+                "a `notify:` leg is declared with no region — the SNS/"
+                "EventBridge client would be built with none and every "
+                "delivery would fail with NoRegionError; declare "
+                "`notify.region` or give `sns_topic_arn` as a full ARN"
+            )
 
     @property
     def declared(self) -> bool:
@@ -295,12 +315,18 @@ def _journal(milestone_id: str, raw: Any) -> JournalSpec | None:
             f"{where}: `notify` must be a mapping, not "
             f"{type(notify_raw).__name__}"
         )
+    sns_topic_arn = _opt_str(notify_raw.get("sns_topic_arn"))
+    event_bus = _opt_str(notify_raw.get("event_bus"))
     notify = NotifySpec(
-        sns_topic_arn=_opt_str(notify_raw.get("sns_topic_arn")),
-        event_bus=_opt_str(notify_raw.get("event_bus")),
+        sns_topic_arn=sns_topic_arn,
+        event_bus=event_bus,
         event_source=str(notify_raw.get("event_source")
                          or "nousergon.console"),
-        region=_opt_str(notify_raw.get("region")),
+        region=_notify_region(where, sns_topic_arn, event_bus,
+                              _opt_str(notify_raw.get("region"))),
+        backlog_cutoff_hours=_positive(
+            where, "notify.backlog_cutoff_hours",
+            notify_raw.get("backlog_cutoff_hours"), 6.0),
     )
     return JournalSpec(
         bucket=bucket, object_key=obj,
@@ -312,6 +338,62 @@ def _journal(milestone_id: str, raw: Any) -> JournalSpec | None:
                                       raw.get("max_transitions"), 500)),
         notify=notify,
     )
+
+
+def _notify_region(where: str, sns_topic_arn: str | None,
+                   event_bus: str | None, declared: str | None) -> str | None:
+    """The ONE region both notify legs are built in, resolved at parse time.
+
+    The repo convention is that a region-bearing block declares `region:`
+    (`pipeline-reliability` refuses to run without one). A notify block may
+    also carry it implicitly: an SNS `TopicArn` is a full ARN, and an ARN
+    names its region. So the region is the declared one, else the one the
+    leg ARNs agree on — and a declared region that contradicts an ARN, or two
+    ARNs that disagree, is refused rather than guessed. A leg with no region
+    from either source is refused by `NotifySpec` itself.
+    """
+    implied: dict[str, str] = {}
+    for leg, value in (("sns_topic_arn", sns_topic_arn),
+                       ("event_bus", event_bus)):
+        if not value:
+            continue
+        if not value.startswith("arn:"):
+            if leg == "sns_topic_arn":
+                raise MilestoneConfigError(
+                    f"{where}: `notify.sns_topic_arn` must be a topic ARN, "
+                    f"not {value!r} — SNS publishes to an ARN only"
+                )
+            continue  # a bare bus name carries no region of its own
+        parts = value.split(":")
+        if len(parts) < 6 or not parts[3]:
+            raise MilestoneConfigError(
+                f"{where}: `notify.{leg}` {value!r} is not a regional ARN"
+            )
+        implied[leg] = parts[3]
+    if declared:
+        clash = sorted(leg for leg, r in implied.items() if r != declared)
+        if clash:
+            raise MilestoneConfigError(
+                f"{where}: `notify.region` {declared!r} contradicts the "
+                f"region in `notify.{clash[0]}` ({implied[clash[0]]!r})"
+            )
+        return declared
+    regions = sorted(set(implied.values()))
+    if len(regions) > 1:
+        raise MilestoneConfigError(
+            f"{where}: the notify legs name different regions {regions} and "
+            "no `notify.region` says which one the clients are built in"
+        )
+    if regions:
+        return regions[0]
+    if sns_topic_arn or event_bus:
+        raise MilestoneConfigError(
+            f"{where}: `notify` declares a leg but no `region`, and no leg is "
+            "an ARN that carries one — every delivery would fail with "
+            "NoRegionError on a host with no default region "
+            "(alpha-engine-config-I12723); declare `notify.region`"
+        )
+    return None
 
 
 def _opt_str(value: Any) -> str | None:
@@ -960,6 +1042,8 @@ def _journal_one(index: Any, numbers: Mapping[str, Any], milestone: Milestone,
     report["transitions"] = transitions
     pending = list(prior.get("pending_notifications") or []) + events
     doc["pending_notifications"] = pending
+    if prior.get("superseded_undelivered"):
+        doc["superseded_undelivered"] = list(prior["superseded_undelivered"])
     # The projection the pane renders: the transitions the DURABLE journal
     # holds, read back from it, newest last. Assembled here rather than by a
     # per-request S3 read — the console renders history, it does not fetch it
@@ -990,18 +1074,39 @@ def _journal_one(index: Any, numbers: Mapping[str, Any], milestone: Milestone,
         return report
     notify = notifier or _default_notifier(spec)
     still: list[dict[str, Any]] = []
-    for event in pending:
+    superseded: list[dict[str, Any]] = []
+    for event, covers in _plan_delivery(milestone, spec, doc, pending, stamp):
         try:
             notify(event)
         except Exception as exc:  # transport failure: retry next build
-            event["attempts"] = int(event.get("attempts") or 0) + 1
-            event["last_error"] = f"{type(exc).__name__}: {exc}"
-            event["last_attempt_at"] = stamp
-            still.append(event)
+            # A failed digest supersedes nothing: the events it would have
+            # covered stay pending, each charged the attempt, and the next
+            # build plans the digest again from whatever is then stale.
+            for owed in covers if covers is not None else [event]:
+                owed["attempts"] = int(owed.get("attempts") or 0) + 1
+                owed["last_error"] = f"{type(exc).__name__}: {exc}"
+                owed["last_attempt_at"] = stamp
+                still.append(owed)
             continue
         event["notified_at"] = stamp
         report["notified"].append(event)
-        _mark_notified(doc, event, stamp)
+        if covers is None:
+            _mark_notified(doc, event, stamp)
+            continue
+        # Delivered as ONE digest. Each covered event is KEPT — moved off the
+        # retry queue into `superseded_undelivered`, stamped with the digest
+        # that announced it — never dropped; and the transitions they were
+        # raised for were recorded in `transitions` before any of this ran.
+        for owed in covers:
+            owed["superseded_at"] = stamp
+            owed["superseded_by"] = event["dedup_key"]
+            _mark_notified(doc, owed, stamp)
+        superseded.extend(covers)
+    if superseded:
+        doc["superseded_undelivered"] = _bounded_events(
+            list(doc.get("superseded_undelivered") or []) + superseded,
+            spec, stamp)
+        report["superseded"] = len(superseded)
     doc["pending_notifications"] = still
     doc["undelivered_notifications"] = len(still)
     report["undelivered_notifications"] = len(still)
@@ -1195,6 +1300,143 @@ def _mark_notified(doc: Mapping[str, Any], event: Mapping[str, Any],
         episode["notified_at"] = stamp
 
 
+# ------------------------------------------------------ backlog collapse --
+#
+# Delivery can be down for a long time while recording carries on — the
+# crucible-phase-2-exit journal queued 96 events over eight weeks behind a
+# client with no region (alpha-engine-config-I12723). Replaying that queue the
+# moment delivery recovers would be 96 pages for episodes that mostly opened
+# AND closed weeks ago: a burst that describes nothing true now, and the burst
+# is itself the reason a pager stops being read. So a backlog is announced as
+# ONE digest, and only events younger than the cutoff go out one by one.
+
+#: The digest's lifecycle state on the wire. Not an episode state: a digest
+#: opens nothing and clears nothing.
+DIGEST = "backlog-digest"
+
+
+def _plan_delivery(milestone: Milestone, spec: JournalSpec,
+                   doc: Mapping[str, Any], pending: Sequence[dict[str, Any]],
+                   stamp: str
+                   ) -> list[tuple[dict[str, Any], list[dict[str, Any]] | None]]:
+    """What to send this build, in order: `(event, covers)` pairs.
+
+    `covers` is None for an ordinary event and the list of pending events a
+    digest stands for otherwise. Pending events whose `occurred_at` is older
+    than `notify.backlog_cutoff_hours` are STALE; two or more stale events are
+    one digest, sent first; everything younger goes individually, as before.
+    A single stale event is sent as itself — a digest of one is that event
+    with less information.
+    """
+    cutoff = _shift_days(stamp, -spec.notify.backlog_cutoff_hours / 24.0)
+    stale = [e for e in pending if str(e.get("occurred_at") or "") < cutoff]
+    if len(stale) < 2:
+        return [(e, None) for e in pending]
+    fresh = [e for e in pending if str(e.get("occurred_at") or "") >= cutoff]
+    digest = _digest(milestone, spec, doc, stale, stamp, cutoff)
+    return [(digest, stale)] + [(e, None) for e in fresh]
+
+
+def _digest(milestone: Milestone, spec: JournalSpec, doc: Mapping[str, Any],
+            stale: Sequence[Mapping[str, Any]], stamp: str,
+            cutoff: str) -> dict[str, Any]:
+    """One notification standing for a backlog of undelivered ones.
+
+    It says what was missed as COUNTS (clause, state, from -> to), the window
+    it spans, and — the part a reader acts on — which of those episodes are
+    STILL OPEN, because for those this digest is the only page there will be.
+    Its severity is `error` exactly when one is; a backlog of episodes that
+    all closed again is news (`info`), not a page.
+    """
+    episodes = doc.get("episodes") or {}
+    open_keys = {
+        f"milestone:{milestone.id}:clause:{cid}:{ep.get('opened_at')}"
+        for cid, ep in episodes.items()
+    }
+    still_open = sorted({
+        str(e.get("clause_id")) for e in stale
+        if e.get("state") == OPENED and e.get("dedup_key") in open_keys
+    })
+    counts: dict[tuple[str, str, str, str], int] = {}
+    for e in stale:
+        key = (str(e.get("clause_id")), str(e.get("state")),
+               str(e.get("from")), str(e.get("to")))
+        counts[key] = counts.get(key, 0) + 1
+    occurred = sorted(str(e.get("occurred_at") or "") for e in stale)
+    identity = f"milestone:{milestone.id}:notification-backlog"
+    event: dict[str, Any] = {
+        "schema_version": JOURNAL_SCHEMA_VERSION,
+        "kind": EVENT_KIND,
+        "state": DIGEST,
+        "severity": "error" if still_open else "info",
+        "identity_key": identity,
+        "dedup_key": f"{identity}:{stamp}",
+        "milestone_id": milestone.id,
+        "tracker": milestone.tracker,
+        "journal": _uri(spec),
+        "occurred_at": stamp,
+        "superseded_count": len(stale),
+        "oldest_occurred_at": occurred[0],
+        "newest_occurred_at": occurred[-1],
+        "cutoff": cutoff,
+        "by_transition": [
+            {"clause_id": c, "state": s, "from": f, "to": t, "count": n}
+            for (c, s, f, t), n in sorted(counts.items())
+        ],
+        "still_open": still_open,
+        "clauses": {cid: (row or {}).get("status")
+                    for cid, row in (doc.get("clauses") or {}).items()},
+        # An episode's page and its clear share one `dedup_key`, so each
+        # covered event is named by key AND state.
+        "superseded_events": [f"{e.get('dedup_key')}#{e.get('state')}"
+                              for e in stale],
+        "milestone_exit_state": doc.get("exit_state"),
+        "clauses_met": doc.get("clauses_met"),
+        "clauses_of": doc.get("clauses_of"),
+        "clauses_unreported": doc.get("clauses_unreported"),
+        "holding": list(doc.get("holding") or []),
+        "attempts": 0,
+    }
+    subject = (f"[BACKLOG] {milestone.id}: {len(stale)} undelivered "
+               f"notifications, {occurred[0][:10]}..{occurred[-1][:10]}")
+    event["subject"] = subject[:99]
+    lines = [event["subject"], ""]
+    lines.append(
+        f"{len(stale)} clause-transition notifications queued between "
+        f"{occurred[0]} and {occurred[-1]} were not delivered at the time. "
+        "They are announced here ONCE instead of being replayed one by one. "
+        "Every one is kept in the journal under `superseded_undelivered`, "
+        "and every transition is in `transitions`.")
+    lines.append("")
+    for row in event["by_transition"]:
+        lines.append(f"missed    : {row['clause_id']} {row['state']} "
+                     f"{row['from']} -> {row['to']} x{row['count']}")
+    if still_open:
+        lines.append(f"STILL OPEN: {', '.join(still_open)} — this digest is "
+                     "the page for those episodes")
+    for cid, status in event["clauses"].items():
+        lines.append(f"now       : {cid} {status}")
+    lines.append(
+        f"milestone : {event['milestone_exit_state']} — "
+        f"{event['clauses_met']} of {event['clauses_of']} clauses met, "
+        f"{event['clauses_unreported']} unreported")
+    if milestone.tracker:
+        lines.append(f"tracker   : {milestone.tracker}")
+    lines.append(f"journal   : {event['journal']}")
+    lines.append(f"identity  : {identity}")
+    event["message"] = "\n".join(lines)
+    return event
+
+
+def _bounded_events(events: list[dict[str, Any]], spec: JournalSpec,
+                    stamp: str) -> list[dict[str, Any]]:
+    """`superseded_undelivered` keeps the journal's own retention, so a
+    collapse never grows the object past what `transitions` may hold."""
+    cutoff = _shift_days(stamp, -spec.retention_days)
+    kept = [e for e in events if str(e.get("occurred_at") or "") >= cutoff]
+    return kept[-spec.max_transitions:]
+
+
 # ------------------------------------------------------ the transition event --
 
 #: Severity, per transition. A clause going UNMET is a declared exit criterion
@@ -1361,12 +1603,20 @@ def _default_notifier(spec: JournalSpec) -> Any:
 
 def _sns(notify: NotifySpec) -> Any:
     from ..aws import client as _client
-    return _client("sns", notify.region)
+    return _client("sns", _region(notify))
 
 
 def _events(notify: NotifySpec) -> Any:
     from ..aws import client as _client
-    return _client("events", notify.region)
+    return _client("events", _region(notify))
+
+
+def _region(notify: NotifySpec) -> str:
+    """Never `None`: `console.aws.client(service, None)` builds a client from
+    the host's default region, and the console box has none."""
+    if not notify.region:  # unreachable past NotifySpec.__post_init__
+        raise MilestoneConfigError("notify leg with no region")
+    return notify.region
 
 
 def _default_reader(spec: JournalSpec) -> Any:

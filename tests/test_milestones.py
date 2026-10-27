@@ -874,3 +874,220 @@ def test_the_build_never_dies_because_the_journal_could_not_be_written():
     # the build carried on and said what happened.
     assert report["written"] is False
     assert report.get("error") or report.get("transitions") is not None
+
+
+# ------------------------------- the notify region (alpha-engine-config-I12723) --
+#
+# The crucible-phase-2-exit journal delivered nothing from 2026-09-01 to
+# 2026-10-27: its `notify:` block named a topic and a bus but no region, the
+# console box has no default region, and every attempt raised NoRegionError
+# while 96 events queued. These pin the refusal to PARSE time — the CI build
+# of the example config — instead of to a delivery months later.
+
+def _notify_decl(notify: dict) -> list[dict]:
+    decl = _journalled(notify=notify)
+    decl[0]["id"] = "m"
+    return decl
+
+
+@pytest.mark.parametrize("notify, expected", [
+    pytest.param({"event_bus": "example-alert-bus"}, "no `region`",
+                 id="bus-name-only"),
+    pytest.param({"sns_topic_arn": "example-alerts"}, "must be a topic ARN",
+                 id="topic-not-an-arn"),
+    pytest.param({"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                  "region": "eu-west-1"}, "contradicts", id="region-clash"),
+    pytest.param({"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                  "event_bus": "arn:aws:events:eu-west-1:0:event-bus/b"},
+                 "different regions", id="arns-disagree"),
+    pytest.param({"sns_topic_arn": "arn:aws:sns::0:t"}, "not a regional ARN",
+                 id="arn-without-region"),
+])
+def test_a_notify_leg_with_no_resolvable_region_fails_the_build(notify,
+                                                                expected):
+    with pytest.raises(M.MilestoneConfigError) as excinfo:
+        M.parse(_notify_decl(notify))
+    assert expected in str(excinfo.value)
+    assert "'m'" in str(excinfo.value)
+    with pytest.raises(M.MilestoneConfigError):
+        build_index({"milestones": _notify_decl(notify)})
+
+
+def test_a_notify_spec_built_without_a_region_refuses_at_construction():
+    """Not only through `parse`: any path that builds a declared leg."""
+    with pytest.raises(M.MilestoneConfigError, match="NoRegionError"):
+        M.NotifySpec(event_bus="example-alert-bus")
+    assert M.NotifySpec().region is None, "no leg, no region needed"
+
+
+@pytest.mark.parametrize("notify, region", [
+    pytest.param({"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                  "event_bus": "example-alert-bus"}, "us-east-1",
+                 id="implied-by-the-topic-arn"),
+    pytest.param({"event_bus": "example-alert-bus", "region": "eu-west-1"},
+                 "eu-west-1", id="declared"),
+    pytest.param({"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                  "region": "us-east-1"}, "us-east-1", id="declared-and-agrees"),
+])
+def test_the_notify_region_is_resolved_at_parse(notify, region):
+    [m] = M.parse(_notify_decl(notify))
+    assert m.journal.notify.region == region
+
+
+def test_both_legs_build_their_client_with_the_region(monkeypatch):
+    """The actual defect: `console.aws.client(service, None)`. Every notify
+    client must be asked for by name AND region."""
+    import console.aws as aws
+
+    calls: list[tuple[str, object]] = []
+
+    class _Client:
+        def publish(self, **_kw):
+            return {}
+
+        def put_events(self, **_kw):
+            return {"FailedEntryCount": 0}
+
+    def _fake(service, region=None):
+        calls.append((service, region))
+        return _Client()
+
+    monkeypatch.setattr(aws, "client", _fake)
+    [m] = M.parse(_notify_decl({"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                                "event_bus": "example-alert-bus"}))
+    M._default_notifier(m.journal)({"subject": "s", "message": "m"})
+    assert calls == [("sns", "us-east-1"), ("events", "us-east-1")]
+
+
+def test_the_example_config_notify_block_resolves_a_region():
+    import yaml
+
+    with open("config.example.yaml") as fh:
+        example = yaml.safe_load(fh)
+    for m in M.parse(example["milestones"]):
+        if m.journal is not None and m.journal.notify.declared:
+            assert m.journal.notify.region
+
+
+# ----------------------------------------- backlog collapse (I12723 part 2) --
+
+def _flap(store, notifier, days: int, start_day: int = 1,
+          declaration=None) -> None:
+    """One MET -> UNMET -> MET episode per day for `days` days: an OPENED and
+    a CLEARED event each, every one of them undeliverable."""
+    for day in range(start_day, start_day + days):
+        _run(_mixed(streak=1), store, notifier,
+             f"2026-09-{day:02d}T12:00:00Z", declaration)
+        _run(_mixed(streak=6), store, notifier,
+             f"2026-09-{day:02d}T13:00:00Z", declaration)
+
+
+def test_a_backlog_is_announced_as_one_digest_and_never_replayed():
+    store, notifier = _Store(), _Notifier(fail_first=10**6)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _flap(store, notifier, days=5)
+    transitions_before = len(store.doc["transitions"])
+    assert len(store.doc["pending_notifications"]) == 10
+    assert notifier.events == []
+
+    # Delivery recovers weeks later, in a build that also has a fresh
+    # regression of its own.
+    notifier.fail_first = 0
+    [report] = _run(_mixed(streak=1), store, notifier, "2026-10-27T12:00:00Z")
+
+    [digest, fresh] = notifier.events
+    assert digest["state"] == M.DIGEST
+    assert digest["superseded_count"] == 10
+    assert digest["severity"] == "info", "every backlog episode closed again"
+    assert {(r["state"], r["count"]) for r in digest["by_transition"]} == {
+        (M.OPENED, 5), (M.CLEARED, 5)}
+    assert "[BACKLOG]" in digest["subject"] and len(digest["subject"]) < 100
+    assert "x5" in digest["message"]
+    assert fresh["state"] == M.OPENED and fresh["clause_id"] == "c-met"
+
+    doc = store.doc
+    assert doc["pending_notifications"] == []
+    assert doc["undelivered_notifications"] == 0
+    assert report["superseded"] == 10
+    # Nothing was deleted: every queued event is kept, stamped with the digest
+    # that announced it, and the transition history only grew.
+    kept = doc["superseded_undelivered"]
+    assert len(kept) == 10
+    assert {e["superseded_by"] for e in kept} == {digest["dedup_key"]}
+    assert len(set(digest["superseded_events"])) == 10
+    assert len(doc["transitions"]) == transitions_before + 1
+
+    # The next build sends nothing and keeps the record.
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T12:03:00Z")
+    assert len(notifier.events) == 2
+    assert len(store.doc["superseded_undelivered"]) == 10
+
+
+def test_a_digest_names_an_episode_that_is_still_open_and_pages_for_it():
+    """For an episode that opened during the outage and never closed, the
+    digest is the only page there will be — so it says so, at `error`."""
+    store, notifier = _Store(), _Notifier(fail_first=10**6)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _flap(store, notifier, days=2)
+    _run(_mixed(streak=1), store, notifier, "2026-09-05T12:00:00Z")
+
+    notifier.fail_first = 0
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T12:00:00Z")
+    [digest] = notifier.events
+    assert digest["still_open"] == ["c-met"]
+    assert digest["severity"] == "error"
+    assert "STILL OPEN: c-met" in digest["message"]
+    assert store.doc["episodes"]["c-met"]["notified_at"] == "2026-10-27T12:00:00Z"
+
+
+def test_a_failed_digest_supersedes_nothing():
+    store, notifier = _Store(), _Notifier(fail_first=10**6)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _flap(store, notifier, days=2)
+    def key(e):
+        return (e["dedup_key"], e["state"])
+
+    before = {key(e): e["attempts"]
+              for e in store.doc["pending_notifications"]}
+    assert len(before) == 4
+
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T12:00:00Z")
+    pending = store.doc["pending_notifications"]
+    assert {key(e) for e in pending} == set(before)
+    assert all(e["attempts"] == before[key(e)] + 1 for e in pending)
+    assert "superseded_undelivered" not in store.doc
+
+    notifier.fail_first = 0
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T12:03:00Z")
+    assert [e["state"] for e in notifier.events] == [M.DIGEST]
+    assert store.doc["pending_notifications"] == []
+
+
+def test_a_short_outage_still_delivers_each_event_individually():
+    """The collapse is for a BACKLOG. Events younger than the cutoff — and a
+    lone stale one — go out exactly as before."""
+    store, notifier = _Store(), _Notifier(fail_first=3)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T13:00:00Z")
+    assert notifier.events == []
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T15:00:00Z")
+    assert [e["state"] for e in notifier.events] == [M.OPENED, M.CLEARED]
+
+    lone, lone_notifier = _Store(), _Notifier(fail_first=1)
+    _run(_mixed(streak=6), lone, lone_notifier, "2026-08-31T12:00:00Z")
+    _run(_mixed(streak=1), lone, lone_notifier, "2026-08-31T12:03:00Z")
+    _run(_mixed(streak=1), lone, lone_notifier, "2026-09-02T12:00:00Z")
+    assert [e["state"] for e in lone_notifier.events] == [M.OPENED]
+
+
+def test_the_backlog_cutoff_is_declared_config():
+    decl = _journalled(notify={"sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+                               "backlog_cutoff_hours": 48})
+    [m] = M.parse(decl)
+    assert m.journal.notify.backlog_cutoff_hours == 48.0
+    assert M.parse(_journalled())[0].journal.notify.backlog_cutoff_hours == 6.0
+    with pytest.raises(M.MilestoneConfigError, match="backlog_cutoff_hours"):
+        M.parse(_journalled(notify={
+            "sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
+            "backlog_cutoff_hours": 0}))

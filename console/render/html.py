@@ -122,7 +122,7 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None,
     `citations:` block, so a cited issue in a text column is a link.
     """
     p = ent.provenance
-    as_of = esc(p.as_of) if p.as_of else '<em class="absent">no freshness stamp</em>'
+    as_of = as_of_html(p.as_of)
     evidence = (
         f'<a href="{esc(p.evidence)}">evidence</a>' if p.evidence
         else '<em class="absent">no link</em>'
@@ -137,6 +137,61 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None,
         f"<td>{evidence}</td>"
         "</tr>"
     )
+
+
+def render_now() -> datetime:
+    """The instant a page is rendered; an as-of's age is measured from it.
+
+    One function rather than `datetime.now` at each call site, so a test pins
+    the clock in one place and every age on a page is read against one now.
+    """
+    return datetime.now(timezone.utc)
+
+
+def _age_text(seconds: float) -> str:
+    """How long ago, in the largest unit that still reads exactly enough."""
+    if seconds < 60:
+        return "under a minute ago"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 48 * 3600:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def as_of_html(as_of: str | None, now: datetime | None = None) -> str:
+    """An as-of a reader can take in at a glance (alpha-engine-config-I11805).
+
+    A row's as-of used to print the source's raw stamp, for example
+    `2026-10-27T03:55:12.481203+00:00`, so telling a fresh row from a
+    week-old one meant doing date arithmetic per row. An instant that carries
+    its offset now reads as UTC to the minute plus its age at render time:
+    `2026-10-27 03:55Z · 7h ago`. The stamp exactly as the source wrote it
+    stays in the `<time>` element's `datetime` and hover title, and the JSON
+    representation carries it unchanged (§3.8), so nothing is lost.
+
+    A stamp with no offset, a bare date, or anything unparseable renders
+    verbatim: converting it would mean guessing a timezone (§2.3). A stamp
+    after the render clock says so rather than reading as negative age. No
+    stamp at all stays the declared absence it always was.
+    """
+    if not as_of:
+        return '<em class="absent">no freshness stamp</em>'
+    raw = str(as_of)
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        return esc(raw)
+    if when.tzinfo is None:
+        return esc(raw)
+    utc = when.astimezone(timezone.utc)
+    seconds = ((now or render_now()) - utc).total_seconds()
+    if seconds < -60:
+        age = f"{_age_text(-seconds).removesuffix(' ago')} ahead of now"
+    else:
+        age = _age_text(max(seconds, 0.0))
+    return (f'<time datetime="{esc(raw)}" title="{esc(raw)}">'
+            f'{utc:%Y-%m-%d %H:%M}Z · <span class="age">{esc(age)}</span></time>')
 
 
 def _field_cells(ent: Entity, columns: list[str],
@@ -679,12 +734,18 @@ def _entity_heading(ent: Entity) -> str:
     return label if isinstance(label, str) and label else ent.id
 
 
-def _history_cell(value: object) -> str:
-    cell = esc(value) if value not in (None, "") else '<em class="absent">none</em>'
-    return f"<td>{cell}</td>"
+def _history_cell(value: object, column: str = "",
+                  now: datetime | None = None) -> str:
+    if value in (None, ""):
+        return '<td><em class="absent">none</em></td>'
+    if column == "as_of":
+        # The same reading as every row's as-of cell: UTC to the minute and
+        # its age, with the source's stamp kept in the hover title (I11805).
+        return f"<td>{as_of_html(str(value), now)}</td>"
+    return f"<td>{esc(value)}</td>"
 
 
-def _history_table(points: list[dict]) -> str:
+def _history_table(points: list[dict], now: datetime | None = None) -> str:
     """Retained observations as a table, oldest first, not a dict per line.
 
     `as_of` leads; every other key a source retained is a column, in the order
@@ -698,7 +759,7 @@ def _history_table(points: list[dict]) -> str:
                 columns.append(key)
     head = "".join(f"<th>{esc(c)}</th>" for c in columns)
     body = "".join(
-        "<tr>" + "".join(_history_cell(p.get(c)) for c in columns) + "</tr>"
+        "<tr>" + "".join(_history_cell(p.get(c), c, now) for c in columns) + "</tr>"
         for p in points
     )
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
@@ -728,7 +789,7 @@ def history_page(index: Index, ent: Entity, window_hours: int,
         bound = (f' requested {result["requested_hours"]}h, bounded to {result["effective_hours"]}h by source retention'
                  if result["bounded"] else f' {result["effective_hours"]}h retained window')
         count = len(result["points"])
-        table = (_history_table(result["points"]) if count
+        table = (_history_table(result["points"], now) if count
                  else '<p class="absent">no observations in this retained window</p>')
         body = (f'<p>history window:{esc(bound)} · {count} observation{"" if count == 1 else "s"}'
                 f'</p><p>window: {windows}</p>{table}')

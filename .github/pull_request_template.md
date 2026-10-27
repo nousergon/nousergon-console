@@ -1,22 +1,31 @@
-## What & why
+<!--
+ONE paragraph, at most 120 words, four sentences in this order:
+  1. What changes, in plain words.
+  2. Why: the tracked issue, the observed defect (with its date), or the ruling.
+  3. Proof: what you ran BEFORE opening and its result ("will verify in CI" is not acceptable).
+  4. What the merge does: the workflow it triggers and what goes live, or that nothing does.
+No headings, tables, bullet lists, file lists or retold diff. A fifth sentence only for an
+out-of-scope finding (name the alpha-engine-config-I<N> it was filed as) or a cross-repo merge order.
+Rules: nous-ergon-ops policies/change-control-policy.md § PR body requirements.
 
-<!-- What does this change and why? Link any related issue. -->
+Before opening, confirm (do not paste into the body):
+  - tests added/updated; `pytest` passes; coverage floor is a ratchet; `ruff check --select F821 .` clean
+  - `python -m console index` and `check-namespace` on config.example.yaml pass if the index or a descriptor shape changed
+  - no topology literal outside config.example.yaml (CONTRIBUTING.md); no real config.yaml or credential; fail-loud preserved
+-->
 
-## Checklist
 
-- [ ] Tests added/updated for the behavior change
-- [ ] `pytest` passes locally — the coverage floor in `pyproject.toml` is a ratchet, raised as coverage improves and never lowered to make a change pass
-- [ ] `ruff check --select F821 .` is clean
-- [ ] `python -m console index --config config.example.yaml` and `python -m console check-namespace --config config.example.yaml` still pass, if this touches the index or a descriptor/registry shape
-- [ ] `CHANGELOG.md` updated, if this repo tracks one for the change
-- [ ] No topology literal (bucket, ARN, host, port, path, component id) added outside `config.example.yaml` — see `CONTRIBUTING.md`
-- [ ] No real `config.yaml`, credential, or fleet-specific detail committed
-- [ ] Fail-loud preserved — no new silent `except: pass` swallows
+Tracker: alpha-engine-config-I
+Deploy-mechanism: N/A
+Merge: auto · Operator: none
 
-## Test plan
-
-<!-- How you verified this works. -->
-
----
-
-**Prepared by:** <!-- model name from the session prompt, e.g. claude-sonnet-5, deepseek-v4-flash, claude-haiku-4-5 — replaces the generic "Generated with Claude Code" footer -->
+<!--
+Tracker: always. Add ` · Closes #<N>` only for an issue in THIS repo (the keyword is inert across repos).
+Deploy-mechanism: the workflow the merge triggers, or N/A. Machine-read keys (Tracker, Deploy-mechanism,
+  Depends-on, Verified-when) each start their own line; human-read fields share the Merge line.
+Merge: `auto` (standing lane, auto-merge armed) or `Brian, red line N (which)`:
+  1 access widening · 2 trading risk limits/sizing · 3 safety-guard weakening · 4 irreversible data delete · 5 budget increase.
+Operator: `none`, or `pre-merge`/`post-merge` plus the exact one-line guarded wrapper (registered in director/post-merge/).
+Last line, for agent-authored PRs (never a model name):
+🤖 Generated with [Claude Code](https://claude.com/claude-code) · https://claude.ai/code/session_…
+-->

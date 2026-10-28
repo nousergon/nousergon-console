@@ -70,6 +70,9 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
     # Declared pages (`/page/<id>`, alpha-engine-config-I12783): a LAYOUT
     # question. Each page names its own question in config; this is the one
     # they share. Cross-cutting because a page's sections select across kinds.
+    # The full exception list, one interaction from the landing view (CN-4.3
+    # `.2`): every not-HEALTHY row in priority order.
+    Pane("exceptions", "what is wrong, most urgent first", None),
     Pane("page",
          "what does this part of the system look like right now",
          None),

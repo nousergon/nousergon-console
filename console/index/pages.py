@@ -363,6 +363,24 @@ def priority_rank(ent: Any) -> int:
     return 0 if level == 0 else level + 1
 
 
+#: The priority tiers, in display order; `priority_rank` indexes this.
+PRIORITY_TIERS = ("P0", "untriaged", "P1", "P2", "P3")
+
+#: The question the exceptions page answers (§4.4).
+EXCEPTIONS_QUESTION = "what is wrong, most urgent first"
+
+
+def by_priority(rows: list) -> list:
+    """Rows in exception-list order: P0, untriaged, P1-P3; within a tier the
+    worst state first, then the OLDEST first (the longest-open problem of a
+    tier is the most overdue)."""
+    from ..render.html import state_rank
+
+    ceiling = datetime.max.replace(tzinfo=timezone.utc)
+    return sorted(rows, key=lambda e: (priority_rank(e), state_rank(e.state_value),
+                                       _instant(e.provenance.as_of) or ceiling, e.id))
+
+
 def _chart(ent: Any, field: str, since: datetime | None) -> dict[str, Any]:
     f = _fields(ent).get(field)
     if f is None:
@@ -424,12 +442,7 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         return doc
     in_range = [e for e in rows if _in_range(e, since)]
     if s.type == "exceptions":
-        bad = [e for e in in_range if is_exception(e)]
-        floor = datetime.max.replace(tzinfo=timezone.utc)
-        # Priority, then state severity, then OLDEST first: the longest-open
-        # problem of a tier is the one most overdue for attention.
-        bad.sort(key=lambda e: (priority_rank(e), state_rank(e.state_value),
-                                _instant(e.provenance.as_of) or floor, e.id))
+        bad = by_priority([e for e in in_range if is_exception(e)])
         doc.update(matched=len(in_range), columns=[],
                    rows=[_row(e, ()) for e in bad[:s.limit]], total=len(bad))
         return doc

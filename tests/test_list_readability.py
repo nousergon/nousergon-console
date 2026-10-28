@@ -475,7 +475,23 @@ def test_a_registry_page_lists_its_rows_by_kind_with_states_and_names():
     # Not healthy first within a group.
     assert page.index("comp-bad") < page.index("comp-ok")
     assert "2 rows · " in page and "1 FAILED" in page
-    assert "source ok · fetched 2026-10-01T04:00:00Z · re-read every 900s" in page
+    assert ('source ok · fetched <time datetime="2026-10-01T04:00:00Z" '
+            'title="2026-10-01T04:00:00Z">2026-10-01 04:00Z · ') in page
+    assert "</time> · re-read every 900s" in page
+
+
+def test_a_registry_fetch_time_reads_as_utc_minute_and_age():
+    """The read line's fetch time used to print the raw stamp while every row
+    below it read `2026-10-01 04:00Z · 7h ago` (alpha-engine-config-I11805)."""
+    from datetime import datetime, timezone
+
+    from console.render.html import registry_page
+
+    now = datetime(2026, 10, 1, 11, 30, tzinfo=timezone.utc)
+    page = registry_page(_registry_index(), "reg", now=now)
+    assert ('fetched <time datetime="2026-10-01T04:00:00Z" '
+            'title="2026-10-01T04:00:00Z">2026-10-01 04:00Z · '
+            '<span class="age">7h ago</span></time>') in page
 
 
 def test_a_registry_page_folds_runs_per_state_and_links_every_run():

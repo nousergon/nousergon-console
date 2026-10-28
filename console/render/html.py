@@ -1029,19 +1029,22 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
         cadence = f"{cadence}; last build {info.build_seconds:.1f}s"
         if info.cadence_overrun:
             cadence = f"{cadence} (exceeds cadence)"
+    # The build time reads like every other as-of on the page: UTC minute and
+    # age, with the stamp as written kept in the <time> element (I11805).
+    built = as_of_html(info.built_at, now)
     if info.is_stale(now):
         # The whole surface, not row by row. Every row below is at most as
         # current as this, and rows that look internally consistent with each
         # other are exactly how a frozen surface passes for a live one.
         return (
             f'<p class="state-MISSED">SURFACE STALE — index built '
-            f"{esc(info.built_at)}, {esc(info.staleness_basis())}"
+            f"{built}, {esc(info.staleness_basis())}"
             + (f", {esc(info.last_error)}" if info.last_error else "")
             + (" (bootstrap window)" if info.bootstrap else "")
             + f". {esc(cadence)}. sources: {esc(sources)}</p>"
         )
     return (
-        f'<p class="index-fresh">index built {esc(info.built_at)} · '
+        f'<p class="index-fresh">index built {built} · '
         f"{esc(cadence)} · {esc(info.staleness_basis())} · "
         f"sources: {esc(sources)}</p>"
     )
@@ -2089,7 +2092,8 @@ def _format_number(value: object) -> str:
     return str(value)
 
 
-def registry_page(index: Index, name: str, all_runs: bool = False) -> str:
+def registry_page(index: Index, name: str, all_runs: bool = False,
+                  now: datetime | None = None) -> str:
     """A registry's own page reads like a list (alpha-engine-config-I11805).
 
     It used to show only its read's status and time, so a registry linked from
@@ -2108,8 +2112,8 @@ def registry_page(index: Index, name: str, all_runs: bool = False) -> str:
 
     view = registry_view(index, name, all_runs=all_runs)
     src = view.source
-    read = (f'source {esc(src.status)} · fetched '
-            f'{esc(src.fetched_at or "no freshness stamp")}')
+    # The fetch time reads like the rows' as-of cells below it (I11805).
+    read = f'source {esc(src.status)} · fetched {as_of_html(src.fetched_at, now)}'
     if src.cadence_seconds:
         read += f" · re-read every {src.cadence_seconds:g}s"
     if src.elapsed_seconds is not None:

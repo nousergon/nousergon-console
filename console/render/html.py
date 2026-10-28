@@ -1088,51 +1088,6 @@ def attention_order(ent: Entity) -> tuple:
     return state_rank(ent.state_value) if is_exception(ent) else (4, 0, "")
 
 
-#: Groups that open by default. The rest render collapsed, still in the page,
-#: so a reader sees what broke before scrolling past what is merely unreported.
-_OPEN_STATES = frozenset({State.FAILED, State.STALLED, State.MISSED, State.NEVER_RAN})
-
-
-def exceptions_by_state(exceptions: list[Entity], view=None) -> str:
-    """The §4.3 exception list, grouped by state, worst first (I11805).
-
-    Newest first within a group. A flat list of a few hundred rows in id order
-    put a stale probe from August above today's failure, so the reader could
-    not tell what to look at. A count line links to each group.
-
-    ``view`` (`render.json.JobView`, from the landing model) folds each job's
-    runs to its newest run per state and names every row for a reader: a run
-    reads as its job, not as `job@timestamp` (the timestamp is the as-of
-    column). A folded row says how many runs it stands for, and the summary
-    says how many rows the fold came from, so nothing is hidden silently;
-    every run is still one click away on the run's page and in `?runs=all`.
-    """
-    if not exceptions:
-        return '<h2>not healthy</h2><p class="absent">No exceptions — every row is HEALTHY.</p>'
-    rows = view.rows if view is not None else exceptions
-    labels = _with_run_counts(view.labels, view.runs) if view is not None else {}
-    groups: dict[str, list[Entity]] = {}
-    newest_first = sorted(rows, key=lambda e: e.provenance.as_of or "", reverse=True)
-    for e in newest_first:
-        groups.setdefault(e.state_value, []).append(e)
-    order = sorted(groups, key=state_rank)
-    counts = " · ".join(
-        f'<a class="state-{esc(v)}" href="#not-healthy-{esc(v)}">{len(groups[v])} {esc(v)}</a>'
-        for v in order
-    )
-    open_values = {s.value for s in _OPEN_STATES}
-    sections = "".join(
-        f'<details id="not-healthy-{esc(v)}"{" open" if v in open_values else ""}>'
-        f'<summary class="state-{esc(v)}">{esc(v)} · {len(groups[v])}</summary>'
-        f"{_table(groups[v], labels=labels)}</details>"
-        for v in order
-    )
-    folded = (f" (newest run per job, from {len(exceptions)} rows)"
-              if len(rows) != len(exceptions) else "")
-    return (f"<h2>not healthy</h2>"
-            f'<p class="list-summary">{len(rows)} rows{folded} · {counts}</p>{sections}')
-
-
 def dashboard_links(dashboards: list[dict]) -> str:
     """One line of links to every dashboard, at the top of the landing view.
 
@@ -1191,6 +1146,8 @@ def landing_page(index: Index) -> str:
     identical model, so the two representations cannot disagree about what
     they were computed from, only about how they render it.
     """
+    from ..index import home
+
     model = index.landing_model()
     exceptions = model.exceptions
     conflicts = model.conflicts
@@ -1230,16 +1187,16 @@ def landing_page(index: Index) -> str:
     n = model.numbers
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>fleet</title></head><body>
-<h1>fleet — exceptions</h1>
+<h1>fleet</h1>
+{health_strip(home.health(index, exceptions))}
+{exception_summary(model)}
+{headline_tiles(home.headline(index))}
 {dashboard_links(model.dashboards)}
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>
-{milestones_section(model.milestones, model.milestone_journal)}
-{exceptions_by_state(exceptions, model.exception_view)}
-<h2>waiting on Brian</h2>
-{_table(queue, labels=model.queue_labels)}
+{_collapsed_milestones(model)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
 {observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}
@@ -1720,6 +1677,74 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 </body></html>"""
 
 
+def health_strip(areas: list[dict]) -> str:
+    """Home's first element: one tile per declared area, then `unassigned`.
+    Each says its own worst state, not-healthy count of total and stalest
+    as-of, and links to the area's page. No tile speaks for another area."""
+    tiles = []
+    for a in areas:
+        if a["id"] == "unassigned" and not a["rows"]:
+            continue
+        worst = a["worst"] or "no rows"
+        stale = a["stalest"]
+        age = (f'{"stalest" if stale["basis"] == "row" else "latest run"} '
+               f'{as_of_html(stale["as_of"])}' if stale
+               else '<em class="absent">no freshness stamp</em>')
+        unstamped = (f' · {a["unstamped"]} unstamped' if a["unstamped"] else "")
+        tiles.append(
+            f'<a class="tile health-tile" href="{esc(a["url"])}" '
+            f'data-state="{esc(worst)}">'
+            f'<div class="tile-label">{esc(a["title"])} '
+            f'<span class="chip state-{esc(worst)}">{esc(worst)}</span></div>'
+            f'<div class="tile-value">{a["not_healthy"]} '
+            f'<span class="tile-unit">not healthy of {a["rows"]}</span></div>'
+            f'<div class="tile-meta">{age}{esc(unstamped)}</div></a>')
+    return ('<section class="page-section"><h2>system health</h2>'
+            f'<div class="tiles">{"".join(tiles)}</div></section>')
+
+
+def exception_summary(model) -> str:
+    """Home's second element: counts of everything not HEALTHY by state, each
+    linked to the full list, plus the decision queue, the transparency gap
+    and population completeness. Counts only — the rows are on `/exceptions`."""
+    groups: dict[str, int] = {}
+    view_rows = model.exception_view.rows if model.exception_view is not None else model.exceptions
+    for e in view_rows:
+        groups[e.state_value] = groups.get(e.state_value, 0) + 1
+    counts = " ".join(
+        f'<a class="state-{esc(v)}" href="/exceptions">{groups[v]} {esc(v)}</a>'
+        for v in sorted(groups, key=state_rank)) or "0 not healthy"
+    gap = model.gap
+    gap_txt = (f'{gap["count"]} / {gap["of"]} unreported' if gap.get("computable", True)
+               is not False else "transparency gap not computable")
+    comp = model.completeness
+    comp_txt = (f'{comp["rendered"]} / {comp["of"]}' if comp["ratio"] is not None
+                else "unknown")
+    return (f'<section class="page-section"><h2>exceptions</h2>'
+            f'<p class="list-summary">{counts}</p>'
+            f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
+            f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a> · '
+            f'{esc(gap_txt)} · population completeness {esc(comp_txt)}</p></section>')
+
+
+def headline_tiles(tiles: list[dict]) -> str:
+    """Home's third element: the declared headline tiles, each with its
+    staleness and its baseline (or the words "no baseline")."""
+    if not tiles:
+        return ""
+    return ('<section class="page-section"><h2>headlines</h2><div class="tiles">'
+            + "".join(_page_tile(t) for t in tiles) + "</div></section>")
+
+
+def _collapsed_milestones(model) -> str:
+    body = milestones_section(model.milestones, model.milestone_journal)
+    if not body.strip():
+        return ""
+    met = sum(1 for m in model.milestones if m.get("met") == m.get("of"))
+    return (f'<details class="milestones-summary"><summary>milestones · {met} of '
+            f'{len(model.milestones)} met</summary>{body}</details>')
+
+
 def exceptions_page(index: Index) -> str:
     """Every not-HEALTHY row, one tier per priority: P0, untriaged, P1-P3
     (CN-4.3 `.2`, Brian 2026-10-28 18:13Z). Within a tier, worst state first,
@@ -1763,6 +1788,8 @@ def exceptions_page(index: Index) -> str:
 {index_freshness(index)}
 <p class="list-summary">{len(rows)} not healthy{esc(folded)} · {counts}</p>
 {body}
+<h2 id="decision-queue">waiting on Brian · {len(model.queue)}</h2>
+{_table(model.queue, labels=model.queue_labels)}
 </body></html>"""
 
 

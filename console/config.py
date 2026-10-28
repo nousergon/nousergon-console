@@ -36,6 +36,7 @@ from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
 from .index import planner as delivery_planner
 from .index import citations as citation_links
+from .index import home as declared_home
 from .index import pages as declared_pages
 from .index import reports as report_feeds
 from .index.build import Supervisor, now_iso
@@ -224,6 +225,9 @@ def build_index(config: dict[str, Any]) -> Index:
     # declared feed, fails the build by name.
     declared_layouts = declared_pages.parse(
         config.get("pages"), feeds={f.id for f in declared_feeds})
+    # And for the home page's areas and headline tiles (CN-4.3, amended
+    # 2026-10-28): an area or tile this build cannot evaluate fails by name.
+    declared_front = declared_home.parse(config.get("home"))
     # And for citation links: a `citations:` block the renderer could not use
     # fails the build by name, never links nothing (or the wrong thing).
     declared_citations = citation_links.parse(config.get("citations"))
@@ -339,6 +343,7 @@ def build_index(config: dict[str, Any]) -> Index:
     delivery_planner.attach(index, declared_plan)
     report_feeds.attach(index, declared_feeds)
     declared_pages.attach(index, declared_layouts)
+    declared_home.attach(index, declared_front)
     citation_links.attach(index, declared_citations)
     # ONE OBSERVATION PER BUILD (§4.4, alpha-engine-config-I9083). `evaluate`
     # is per QUERY and a page refresh is not an observation, so the clause

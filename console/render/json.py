@@ -237,6 +237,7 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
 # ---------------------------------------------------------------- views ----
 
 def _landing(index: Index) -> dict[str, Any]:
+
     """The exception-first default (§4.3), and the numbers that grade it (§9).
 
     An agent asking "is anything wrong" gets the same answer, in the same
@@ -245,6 +246,8 @@ def _landing(index: Index) -> dict[str, Any]:
     `index.landing_model()`, computed once per `Index` rather than once per
     request (`index/landing.py`).
     """
+    from ..index import home as _home
+
     model = index.landing_model()
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -264,6 +267,11 @@ def _landing(index: Index) -> dict[str, Any]:
         # reject a missing denominator outright), and §9.2 always has a real
         # denominator (the component population), so it never needs to.
         "numbers": model.numbers,
+        # CN-4.3 (amended 2026-10-28): home opens with one health entry per
+        # declared area (plus `unassigned`), then the declared headline tiles.
+        # The same computation the HTML renders (§3.8).
+        "health": _home.health(index, model.exceptions),
+        "headline": _home.headline(index),
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
     # renders (`render.html.milestones_section` reads the SAME `model.

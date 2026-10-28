@@ -14,7 +14,7 @@ from console.index.graph import Index
 from console.model.entity import Entity
 from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
-from console.render.html import landing_page
+from console.render.html import exceptions_page, landing_page
 from console.render.json import payload as json_payload
 from console.server.router import resolve
 from tests.fixtures import prov
@@ -76,7 +76,10 @@ def test_landing_page_renders_the_queued_decision_and_not_the_backlog_one():
         entities=(_decision("repo-I1", ["gate:decision"]),
                   _decision("repo-I3", ["P1"])),
     ))
-    page = landing_page(idx)
+    # Home counts the queue (summary-only, CN-4.3 amended 2026-10-28); the
+    # rows are on `/exceptions`, one click away.
+    assert "1 waiting on Brian" in landing_page(idx)
+    page = exceptions_page(idx)
     assert "repo-I1" in page
     assert "repo-I3" not in page
 
@@ -85,7 +88,8 @@ def test_landing_page_renders_empty_queue_as_itself_not_blank():
     """§5.5 — absence renders as itself, never as nothing: an empty decision
     queue is a rendered fact (nothing is waiting on Brian), not a missing
     section."""
-    page = landing_page(Index())
+    assert "0 waiting on brian" in landing_page(Index()).lower()
+    page = exceptions_page(Index())
     assert "waiting on brian" in page.lower()
     assert "no entities" in page.lower()
 

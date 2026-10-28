@@ -1565,6 +1565,25 @@ reports:
         sources:
           - {kind: run, facets: {pane: reports}}
 
+# ── Home (`/`) ─────────────────────────────────────────────────────────────
+# The home page is SUMMARY ONLY (console CN-4.3, amended 2026-10-28), in this
+# order: one health tile per area, the exception counts, then headline tiles.
+# Every element links to a detail page; the rows are on `/exceptions`.
+#
+# `areas`: each claims the rows matching any of its selectors (kind and
+# facets) and links to its own page. A tile shows the area's worst state, how
+# many rows are not healthy out of how many, and its stalest as-of. A row no
+# area claims is counted in an `unassigned` tile, never dropped. Nothing rolls
+# several areas into one verdict.
+# `tiles`: headline numbers, the same shape as a page's tiles.
+home:
+  areas:
+    - id: reports
+      title: Reports
+      link: /reports
+      select: {facets: {pane: reports}}
+  tiles: []
+
 # ── Declared pages (`/page/<id>`) ──────────────────────────────────────────
 # "What does this part of the system look like right now?" A page lays out
 # sections over rows other adapters already mint, for reading rather than

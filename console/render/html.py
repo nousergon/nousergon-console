@@ -1235,7 +1235,7 @@ def landing_page(index: Index) -> str:
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
-<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)}</p>
+<p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>
 {milestones_section(model.milestones, model.milestone_journal)}
 {exceptions_by_state(exceptions, model.exception_view)}
 <h2>waiting on Brian</h2>
@@ -1716,6 +1716,52 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 {switcher}
 {window}
 {_report_lead(f.get("lead"), links)}
+{body}
+</body></html>"""
+
+
+def exceptions_page(index: Index) -> str:
+    """Every not-HEALTHY row, one tier per priority: P0, untriaged, P1-P3
+    (CN-4.3 `.2`, Brian 2026-10-28 18:13Z). Within a tier, worst state first,
+    then the oldest. Runs fold to the newest per job and state, as on the
+    landing view, and a folded row says how many runs it stands for."""
+    from ..index import pages
+
+    model = index.landing_model()
+    view = model.exception_view
+    rows = pages.by_priority(list(view.rows))
+    labels = _with_run_counts(view.labels, view.runs)
+    tiers: dict[str, list[Entity]] = {}
+    for e in rows:
+        tiers.setdefault(pages.PRIORITY_TIERS[pages.priority_rank(e)], []).append(e)
+    counts = " · ".join(
+        f'<a href="#tier-{esc(t)}">{len(tiers[t])} {esc(t)}</a>'
+        for t in pages.PRIORITY_TIERS if t in tiers)
+    body = "".join(
+        f'<h2 id="tier-{esc(t)}">{esc(t)} · {len(tiers[t])}</h2>'
+        "<table><thead><tr><th>what</th><th>state</th><th>owner</th>"
+        "<th>as-of</th><th>evidence</th></tr></thead><tbody>"
+        + "".join(
+            f'<tr class="state-{esc(e.state_value)}">'
+            f'<td><a href="{esc(path_for_entity(e.kind, e.id))}">{esc(labels.get(e.id) or e.id)}</a></td>'
+            f'<td><span class="chip">{esc(state_text(e))}</span></td>'
+            f'<td>{esc((e.facets or {}).get("owner") or "—")}</td>'
+            f'<td>{as_of_html(e.provenance.as_of)}</td>'
+            + (f'<td><a href="{esc(e.provenance.evidence)}">evidence</a></td>'
+               if e.provenance.evidence else '<td><em class="absent">no link</em></td>')
+            + "</tr>" for e in tiers[t])
+        + "</tbody></table>"
+        for t in pages.PRIORITY_TIERS if t in tiers
+    ) or '<p class="absent">No exceptions — every row is HEALTHY.</p>'
+    folded = (f" (from {len(model.exceptions)} rows; each job's runs fold to the newest)"
+              if len(rows) != len(model.exceptions) else "")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>exceptions</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; exceptions</nav>
+<h1>what is wrong</h1>
+<p class="pane-question">{esc(pages.EXCEPTIONS_QUESTION)}</p>
+{index_freshness(index)}
+<p class="list-summary">{len(rows)} not healthy{esc(folded)} · {counts}</p>
 {body}
 </body></html>"""
 

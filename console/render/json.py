@@ -167,6 +167,19 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = {"schema_version": SCHEMA_VERSION, "view": "planner-project",
                "question": planner.PLANNER_QUESTION,
                "states": list(planner.SCHEDULE_STATES), "project": found}
+    elif req.view == "exceptions":
+        from ..index import pages
+
+        model = index.landing_model()
+        view = model.exception_view
+        rows = pages.by_priority(list(view.rows))
+        doc = {"schema_version": SCHEMA_VERSION, "view": "exceptions",
+               "question": pages.EXCEPTIONS_QUESTION,
+               "tiers": list(pages.PRIORITY_TIERS), "total": len(model.exceptions),
+               "rows": [{**entity(e, with_document=False),
+                         "label": view.labels.get(e.id),
+                         "priority": pages.PRIORITY_TIERS[pages.priority_rank(e)],
+                         "runs": view.runs.get(e.id)} for e in rows]}
     elif req.view == "page":
         from ..index import pages
 

@@ -172,6 +172,8 @@ def _page(index: Index, req) -> str:
         return render_html.planner_project_page(index, req.project_id or "")
     if req.view == "reports":
         return render_html.reports_page(index, req.feed_id)
+    if req.view == "exceptions":
+        return render_html.exceptions_page(index)
     if req.view == "page":
         return render_html.page_page(index, req.page_id or "", dict(req.params))
     if req.view == "registry":

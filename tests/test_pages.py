@@ -233,3 +233,21 @@ def test_declared_pages_are_listed_on_the_dashboards_index():
     req = resolve("/dashboards")
     assert render_json.payload(idx, req)["pages"][0]["url"] == "/page/cost"
     assert '<a href="/page/cost">Cost</a>' in _html(idx, req)
+
+
+# ------------------------------------------------------------ /exceptions --
+
+def test_the_exceptions_page_lists_p0_then_untriaged_then_by_priority():
+    idx = _index()
+    req = resolve("/exceptions")
+    doc = render_json.payload(idx, req)
+    assert doc["view"] == "exceptions"
+    assert [(r["id"], r["priority"]) for r in doc["rows"]] == [
+        ("spend:openrouter", "P0"), ("spend:vercel", "untriaged"), ("spend:aws", "P1")]
+    html = _html(idx, req)
+    assert html.index('id="tier-P0"') < html.index('id="tier-untriaged"') < html.index('id="tier-P1"')
+    assert "spend:neon" not in html
+
+
+def test_the_landing_view_links_to_the_exceptions_page():
+    assert 'href="/exceptions"' in _html(_index(), resolve("/"))

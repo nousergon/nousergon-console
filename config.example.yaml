@@ -1565,6 +1565,43 @@ reports:
         sources:
           - {kind: run, facets: {pane: reports}}
 
+# ── Declared pages (`/page/<id>`) ──────────────────────────────────────────
+# "What does this part of the system look like right now?" A page lays out
+# sections over rows other adapters already mint, for reading rather than
+# filtering. It reads no source of its own: each section is a SELECTOR (kind
+# and facets, as a report feed selects) plus the declared field names to show.
+# Adding, changing or removing a page is config, with no console release.
+#
+# Sections (closed vocabulary): `tiles` (headline numbers; each tile shows the
+# newest matching row's field, its state, its baseline or "no baseline", and
+# its staleness), `table` (rows with `fields` as columns, optional `sort:
+# [-]<field>` and `limit`), `chart` (one `timeseries` field of the newest
+# matching row), `report` (a declared `reports:` feed's latest report), and
+# `exceptions` (the not-healthy matching rows: P0 first, then untriaged, then
+# P1-P3, each tier worst state then oldest first; priority is read from a
+# `priority` facet or field).
+#
+# The URL is the state: `?range=24h|7d|30d|90d|1y|all` (default `range`)
+# narrows tables, charts and exceptions; each name in `variables` is a facet,
+# and `?<facet>=<value>` narrows every section whose rows carry that facet.
+#
+# A bad declaration (an id that is not a URL segment, no sections, an unknown
+# section type or kind, a selector with no facet, a chart without exactly one
+# field, a report naming no declared feed, a range outside the vocabulary)
+# FAILS THE BUILD naming the page and section.
+pages:
+  reliability:
+    title: Reliability
+    question: Is anything in the fleet failing, and what did the latest report say?
+    range: 7d
+    variables: [owner]
+    sections:
+      - type: exceptions
+        title: What is wrong
+        select: {kind: component, facets: {pane: reports}}
+      - type: report
+        feed: daily
+
 # ── Citation links (rendered markdown documents) ───────────────────────────
 # Reports cite work as plain text — `ex#12`, `example-repo-I12`,
 # `example-repo-PR34`, `ex#12 comment 5678`. This block lets the markdown

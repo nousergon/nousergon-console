@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..index import planner, reports
+from ..index import pages, planner, reports
 from ..index.graph import Index
 from ..render import html as render_html
 from ..render import json as render_json
@@ -61,6 +61,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if (req.view == "reports" and req.feed_id is not None
                 and reports.feed(index, req.feed_id) is None):
             self._fail(404, as_json, f"No report feed {req.feed_id}.")
+            return
+        if req.view == "page" and pages.page(index, req.page_id) is None:
+            self._fail(404, as_json, f"No page {req.page_id}.")
             return
         if req.view == "registry" and req.registry_name not in index.registry_names():
             self._fail(404, as_json, f"No registry {req.registry_name}.")
@@ -169,6 +172,8 @@ def _page(index: Index, req) -> str:
         return render_html.planner_project_page(index, req.project_id or "")
     if req.view == "reports":
         return render_html.reports_page(index, req.feed_id)
+    if req.view == "page":
+        return render_html.page_page(index, req.page_id or "", dict(req.params))
     if req.view == "registry":
         return render_html.registry_page(index, req.registry_name or "",
                                          all_runs=req.all_runs)
@@ -202,6 +207,8 @@ def _resolves(index: Index, path: str, query: str) -> bool:
         return planner.project(index, req.project_id or "") is not None
     if req.view == "reports" and req.feed_id is not None:
         return reports.feed(index, req.feed_id) is not None
+    if req.view == "page":
+        return pages.page(index, req.page_id) is not None
     return True
 
 

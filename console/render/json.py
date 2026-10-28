@@ -101,7 +101,12 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = _list(index, req)
     elif req.view == "dashboards":
         model = index.landing_model()
+        from ..index import pages as declared_pages
+
         doc = {"schema_version": SCHEMA_VERSION, "view": "dashboards",
+               "pages": [{"id": p.id, "title": p.title, "url": p.url,
+                          "question": p.question}
+                         for p in declared_pages.declared(index)],
                "dashboards": model.dashboards,
                "milestones": [{"id": m["id"], "met": m["met"], "of": m["of"],
                                "unreported": m.get("unreported", 0)}
@@ -162,6 +167,16 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = {"schema_version": SCHEMA_VERSION, "view": "planner-project",
                "question": planner.PLANNER_QUESTION,
                "states": list(planner.SCHEDULE_STATES), "project": found}
+    elif req.view == "page":
+        from ..index import pages
+
+        found = pages.page(index, req.page_id)
+        if found is None:  # pragma: no cover - app.py 404s before reaching here
+            raise KeyError(req.page_id)
+        doc = {"schema_version": SCHEMA_VERSION, "view": "page",
+               "pages": [{"id": p.id, "title": p.title, "url": p.url}
+                         for p in pages.declared(index)],
+               "page": pages.evaluate(index, found, dict(req.params))}
     elif req.view == "registry":
         doc = _registry(index, req.registry_name or "", all_runs=req.all_runs)
     else:

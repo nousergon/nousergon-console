@@ -67,6 +67,12 @@ _CROSS_CUTTING: tuple[Pane, ...] = (
          "what did the latest report say, what did the ones before it say, and "
          "where are the older ones kept",
          None),
+    # Declared pages (`/page/<id>`, alpha-engine-config-I12783): a LAYOUT
+    # question. Each page names its own question in config; this is the one
+    # they share. Cross-cutting because a page's sections select across kinds.
+    Pane("page",
+         "what does this part of the system look like right now",
+         None),
     Pane("milestones",
          "has the declared milestone been met, and which clause is holding it",
          None),

@@ -123,7 +123,10 @@ def test_a_list_from_one_source_stays_one_table_without_a_heading():
     assert page.count("<table>") == 1 and "list-group" not in page
 
 
-def test_the_landing_view_groups_exceptions_by_state_worst_first():
+def test_the_landing_view_counts_exceptions_by_state_worst_first_without_rows():
+    """CN-4.3 (amended 2026-10-28): home is summary-only. It counts what is
+    wrong by state, worst first, each count linked to the full list; the rows
+    themselves are on `/exceptions`, worst state then oldest within a tier."""
     rows = [
         _run("old-probe", State.UNREPORTED, "2026-08-01T00:00:00Z"),
         _run("fresh-fail", State.FAILED, "2026-10-01T05:00:00Z"),
@@ -131,10 +134,11 @@ def test_the_landing_view_groups_exceptions_by_state_worst_first():
         _run("ok", State.HEALTHY, "2026-10-01T05:00:00Z"),
     ]
     page = _page(_index(rows), "/")
-    assert "3 rows" in page and 'href="#not-healthy-FAILED">2 FAILED</a>' in page
-    assert '<details id="not-healthy-FAILED" open>' in page
-    assert '<details id="not-healthy-UNREPORTED">' in page  # collapsed, still present
-    assert page.index("fresh-fail") < page.index("older-fail") < page.index("old-probe")
+    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in page
+    assert page.index("2 FAILED") < page.index("1 UNREPORTED")
+    assert "fresh-fail" not in page and "old-probe" not in page
+    full = _page(_index(rows), "/exceptions")
+    assert full.index("older-fail") < full.index("fresh-fail") < full.index("old-probe")
 
 
 # The next slice of I11805: the landing view's exception list reads the same
@@ -148,19 +152,17 @@ FAILING = [
 ]
 
 
-def test_the_landing_names_a_run_by_its_job_and_folds_its_runs_per_state():
-    page = _page(_index(FAILING), "/")
-    failed = page.split('<details id="not-healthy-FAILED" open>')[1].split("</details>")[0]
+def test_the_exception_list_names_a_run_by_its_job_and_folds_its_runs_per_state():
+    page = _page(_index(FAILING), "/exceptions")
     # job-a's two FAILED runs read as one row, named for the job, newest run linked.
-    assert ">job-a (2 runs)</a>" in failed
-    assert "/run/job-a@2026-10-01T02:00:00Z" in failed
-    assert "job-a@2026-10-01T01:00:00Z" not in failed
-    assert ">job-b</a>" in failed
+    assert ">job-a (2 runs)</a>" in page
+    assert "/run/job-a@2026-10-01T02:00:00Z" in page
+    assert "/run/job-a@2026-10-01T01:00:00Z" not in page
+    assert ">job-b</a>" in page
     # A different state is a different fact: job-a DEGRADED still has its own row.
-    degraded = page.split('<details id="not-healthy-DEGRADED">')[1].split("</details>")[0]
-    assert ">job-a</a>" in degraded
-    assert "3 rows (newest run per job, from 4 rows)" in page
-    assert 'href="#not-healthy-FAILED">2 FAILED</a>' in page
+    assert "/run/job-a@2026-10-01T03:00:00Z" in page
+    assert "3 not healthy (from 4 rows" in page
+    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in _page(_index(FAILING), "/")
 
 
 def test_the_landing_fold_never_changes_the_not_healthy_count():
@@ -186,7 +188,7 @@ def test_a_landing_row_that_is_not_a_run_keeps_its_declared_label():
     comp = Entity(kind=Kind.COMPONENT, id="ae-x.service", state=State.FAILED,
                   provenance=Provenance(source="fixture", as_of="2026-10-01T01:00:00Z"),
                   detail={"label": "Nightly export"})
-    page = _page(_index([comp]), "/")
+    page = _page(_index([comp]), "/exceptions")
     assert ">Nightly export</a>" in page and "/component/ae-x.service" in page
     assert "newest run per job" not in page
     view = render_json.payload(_index([comp]), resolve("/"))["exception_view"]

@@ -254,7 +254,7 @@ def test_the_json_and_the_html_grade_the_predicate_identically(index):
     assert "UNREPORTED" in page
 
 
-def test_the_milestone_pane_renders_above_the_exception_table():
+def test_the_milestone_pane_is_a_collapsed_summary_and_no_row_list_is_on_home():
     idx = _index_with(
         _signal("sig-alpha", 6), _verdict("comp-verdict", "UNKNOWN"),
         Entity(kind=Kind.COMPONENT, id="comp-broken", state=State.FAILED,
@@ -262,8 +262,9 @@ def test_the_milestone_pane_renders_above_the_exception_table():
     )
     M.attach(idx, M.parse(DECLARATION))
     page = render_html.landing_page(idx)
-    assert page.index("milestone: example-exit") < page.index("comp-broken")
-    assert page.index("milestone: example-exit") < page.index("waiting on Brian")
+    assert "milestone: example-exit" in page
+    assert '<details class="milestones-summary"><summary>milestones' in page
+    assert "comp-broken" not in page  # rows live on /exceptions (CN-4.3 .2)
 
 
 def test_no_milestones_declared_renders_nothing_at_all(index):

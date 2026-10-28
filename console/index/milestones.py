@@ -216,6 +216,14 @@ class JournalSpec:
     heartbeat_minutes: float = 60.0
     max_transitions: int = 500
     notify: NotifySpec = NotifySpec()
+    #: How long a clause must hold MET before an episode that PAGED is closed
+    #: and its clear is sent (alpha-engine-config-I12729). Recording is
+    #: unaffected: every transition is still journaled on the build it
+    #: happens. Only the episode's close waits, so a clause that dips to MET
+    #: for one or two builds and regresses again stays ONE open episode with
+    #: one page, instead of a RESOLVED + REGRESSED pair per dip. It can only
+    #: make a clause read open LONGER, never shorter; opening is never delayed.
+    recovery_settle_minutes: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -337,6 +345,9 @@ def _journal(milestone_id: str, raw: Any) -> JournalSpec | None:
         max_transitions=int(_positive(where, "max_transitions",
                                       raw.get("max_transitions"), 500)),
         notify=notify,
+        recovery_settle_minutes=_positive(
+            where, "recovery_settle_minutes",
+            raw.get("recovery_settle_minutes"), 60.0),
     )
 
 
@@ -1060,7 +1071,8 @@ def _journal_one(index: Any, numbers: Mapping[str, Any], milestone: Milestone,
     heartbeat_due = _heartbeat_due(prior.get("updated_at"), stamp,
                                    spec.heartbeat_minutes)
     changed = bool(transitions) or bool(events) or baseline \
-        or _snapshot(doc) != _snapshot(prior)
+        or _snapshot(doc) != _snapshot(prior) \
+        or (doc.get("episodes") or {}) != (prior.get("episodes") or {})
     if not (changed or heartbeat_due or pending):
         return report
 
@@ -1143,7 +1155,18 @@ def _next_journal(milestone: Milestone, spec: JournalSpec,
         if clause.get("reason"):
             row["reason"] = clause["reason"]
         clauses[cid] = row
+        open_episode = prior_episodes.get(cid)
         if was == now_status:
+            if now_status == MET and open_episode \
+                    and open_episode.get(_RECOVERING) \
+                    and _settled(open_episode[_RECOVERING], stamp,
+                                 spec.recovery_settle_minutes):
+                closed = _close_recovered(open_episode, stamp)
+                prior_episodes.pop(cid, None)
+                if open_episode.get("notified"):
+                    events.append(_event(
+                        milestone, spec, evaluated, closed, CLEARED, stamp,
+                        open_episode.get("recovery") or {}))
             continue
         transition = {
             "at": stamp,
@@ -1172,11 +1195,59 @@ def _next_journal(milestone: Milestone, spec: JournalSpec,
                 prior_episodes.pop(cid, None)
             continue
         transitions.append(transition)
-        open_episode = prior_episodes.get(cid)
+        if open_episode and now_status == MET \
+                and open_episode.get("status") != MET:
+            # RECOVERY IS HELD, NOT ANNOUNCED (alpha-engine-config-I12729).
+            # The transition above is already recorded; the episode stays
+            # open, stamped with when the clause went MET, and closes once MET
+            # has held `recovery_settle_minutes` (the `was == now_status`
+            # branch above). A dip shorter than that is a relapse of the SAME
+            # episode, which already paged.
+            prior_episodes[cid] = dict(
+                open_episode,
+                **{_RECOVERING: open_episode.get(_RECOVERING) or stamp,
+                   "recovery": _recovery_snapshot(transition)})
+            continue
+        if open_episode and open_episode.get(_RECOVERING) \
+                and _settled(open_episode[_RECOVERING], stamp,
+                             spec.recovery_settle_minutes):
+            # MET held the whole settle window — no transition was recorded
+            # between the recovery and this build, and every build in between
+            # read MET — so the recovery was real even though no build landed
+            # exactly on the window's end. Close it as settled, then treat
+            # this build's status as the fresh regression it is.
+            prior_episodes.pop(cid, None)
+            if open_episode.get("notified"):
+                events.append(_event(
+                    milestone, spec, evaluated,
+                    _close_recovered(open_episode, stamp), CLEARED, stamp,
+                    open_episode.get("recovery") or {}))
+            open_episode = None
+        if open_episode and open_episode.get(_RECOVERING) \
+                and open_episode.get("status") == now_status:
+            # Back to the status that opened the episode before the recovery
+            # settled: one condition, one page. Counted, so a clause that
+            # keeps dipping is visible on the journal rather than smoothed.
+            relapsed = {k: v for k, v in open_episode.items()
+                        if k not in (_RECOVERING, "recovery")}
+            relapsed["relapses"] = int(open_episode.get("relapses") or 0) + 1
+            relapsed["last_relapse_at"] = stamp
+            prior_episodes[cid] = relapsed
+            continue
         if open_episode and open_episode.get("status") != now_status:
-            close_reason = RECOVERED if now_status == MET else SUPERSEDED
-            closed = dict(open_episode, closed_at=stamp,
+            if open_episode.get(_RECOVERING):
+                # It DID reach MET, and then moved to a different non-MET
+                # status before settling: close the old episode as the
+                # recovery it was, at the moment it recovered, and open the
+                # new one below.
+                close_reason, closed_at = RECOVERED, open_episode[_RECOVERING]
+            else:
+                close_reason = RECOVERED if now_status == MET else SUPERSEDED
+                closed_at = stamp
+            closed = dict(open_episode, closed_at=closed_at,
                           close_reason=close_reason, to=now_status)
+            closed.pop(_RECOVERING, None)
+            closed.pop("recovery", None)
             prior_episodes.pop(cid, None)
             # A clear is owed only for an episode that actually paged. Clearing
             # a page nobody received is noise, and it is how a recovery feed
@@ -1219,6 +1290,33 @@ def _next_journal(milestone: Milestone, spec: JournalSpec,
         "first_observed_at": prior.get("first_observed_at") or stamp,
     }
     return doc, transitions, events
+
+
+#: Episode field: when the clause last went MET while this episode was open.
+_RECOVERING = "recovering_since"
+
+
+def _settled(since: str, stamp: str, minutes: float) -> bool:
+    """Whether MET has held for the declared settle window."""
+    return str(stamp) >= _shift_days(str(since), minutes / (24 * 60))
+
+
+def _close_recovered(episode: Mapping[str, Any], stamp: str) -> dict[str, Any]:
+    """A settled recovery. `closed_at` is when the clause went MET — the
+    honest recovery time — and `settled_at` is when the clear was owed."""
+    recovery = episode.get("recovery") or {}
+    closed = {k: v for k, v in episode.items()
+              if k not in (_RECOVERING, "recovery")}
+    closed.update(closed_at=episode.get(_RECOVERING), settled_at=stamp,
+                  close_reason=RECOVERED, to=recovery.get("to") or MET)
+    return closed
+
+
+def _recovery_snapshot(transition: Mapping[str, Any]) -> dict[str, Any]:
+    """The transition that recovered the clause, kept on the episode so the
+    clear sent after the settle window names what moved and when."""
+    keep = ("at", "from", "to", "moved", "to_terms", "reason")
+    return {k: transition[k] for k in keep if k in transition}
 
 
 def _terms_snapshot(clause: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1352,6 +1450,9 @@ def _digest(milestone: Milestone, spec: JournalSpec, doc: Mapping[str, Any],
     open_keys = {
         f"milestone:{milestone.id}:clause:{cid}:{ep.get('opened_at')}"
         for cid, ep in episodes.items()
+        # A recovery still inside its settle window is MET now: it is not a
+        # page this digest still owes (alpha-engine-config-I12729).
+        if not ep.get(_RECOVERING)
     }
     still_open = sorted({
         str(e.get("clause_id")) for e in stale

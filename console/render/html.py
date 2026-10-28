@@ -37,6 +37,7 @@ from ..model.fields import (
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
     EXCEPTION_VALUES,
+    REPORTED_STATE_DETAIL,
     STATE_FILTER,
     UNOBSERVED_VALUE,
     Kind,
@@ -130,13 +131,29 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None,
     return (
         f'<tr class="state-{esc(ent.state_value)}">'
         f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(label or ent.id)}</a></td>'
-        f"<td>{esc(ent.state_value)}</td>"
+        f"<td>{esc(state_text(ent))}</td>"
         + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or [], links))
         + f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"
         f"<td>{evidence}</td>"
         "</tr>"
     )
+
+
+def state_text(ent: Entity) -> str:
+    """The state cell's text: the state, plus what the row's own source
+    reported when a cross-claim comparison replaced it.
+
+    `UNREGISTERED` replaces the reporting adapter's state, and that state can
+    be the row's only staleness marker (a checks envelope past its cadence
+    reads `MISSED`). Rendering it here is what lets §9.6 count the row as
+    disclosed (alpha-engine-config-I12729): the marker is on the row, not only
+    in the data.
+    """
+    reported = ent.detail.get(REPORTED_STATE_DETAIL)
+    if isinstance(reported, str) and reported and reported != ent.state_value:
+        return f"{ent.state_value} · reported {reported}"
+    return ent.state_value
 
 
 def render_now() -> datetime:
@@ -640,7 +657,7 @@ def entity_page(index: Index, ent: Entity, all_runs: bool = False) -> str:
 <nav><a href="/">fleet</a> &rsaquo; <a href="/{esc(ent.kind.route)}">{esc(ent.kind.value)}</a> &rsaquo; {esc(ent.id)}</nav>
 <h1>{esc(heading)}</h1>
 {index_freshness(index)}
-<p class="state-{esc(ent.state_value)}">state: {esc(ent.state_value)}</p>
+<p class="state-{esc(ent.state_value)}">state: {esc(state_text(ent))}</p>
 {_entity_links(ent)}
 {_table([ent])}
 {document_section(ent, citations.declared(index))}

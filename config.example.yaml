@@ -1410,6 +1410,11 @@ milestones:
     #     recording is not delivery;
     #   * an UNREADABLE journal REFUSES to be overwritten (that would destroy
     #     the history and re-baseline every clause) and says so on the pane.
+    #   * a clause that returns to MET is recorded at once, but its episode
+    #     closes (and the clear is sent) only after MET has held
+    #     `recovery_settle_minutes`; a shorter dip is a relapse of the same
+    #     episode, counted on it, so a flapping clause pages once, not twice
+    #     per dip. Opening a new episode is never delayed.
     #
     # Both notify legs are optional and both are deployment topology. With
     # neither, transitions are recorded and rendered but never announced, and
@@ -1421,6 +1426,7 @@ milestones:
       retention_days: 400       # how long a transition stays in the journal
       heartbeat_minutes: 60     # rewrite this often even with nothing to say
       max_transitions: 500      # hard ceiling, so one object cannot grow forever
+      recovery_settle_minutes: 60  # MET must hold this long before a clear
       notify:
         sns_topic_arn: arn:aws:sns:us-east-1:000000000000:example-alerts
         event_bus: example-alert-bus   # the machine-readable leg (§7.3)

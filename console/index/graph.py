@@ -21,7 +21,7 @@ import dataclasses
 
 from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
-from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from ..model.kinds import COMPONENT_STATE_KINDS, REPORTED_STATE_DETAIL, Kind, State
 from .build import AdapterFetch, BuildInfo
 from .cadence_state import resolve_cadence_state
 from .event_trigger import resolve_event_trigger_state
@@ -436,7 +436,7 @@ class Index:
             declared = ClaimClass.DECLARATION in classes
             discovered = ClaimClass.DISCOVERY in classes
             if not declared and self._saw_ok_declaration:
-                return dataclasses.replace(ent, state=State.UNREGISTERED)
+                return _unregistered(ent)
             if declared and not discovered and self._saw_ok_discovery:
                 if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
                     return dataclasses.replace(ent, state=State.ABSENT)
@@ -832,3 +832,26 @@ def _as_unreported(ent: Entity) -> Entity:
     if ent.kind in COMPONENT_STATE_KINDS:
         return dataclasses.replace(ent, state=State.UNREPORTED)
     return dataclasses.replace(ent, state="unreported-by-source")
+
+
+def _unregistered(ent: Entity) -> Entity:
+    """Mark a component UNREGISTERED without discarding what its source said.
+
+    `UNREGISTERED` is a comparison between claims and it REPLACES the state
+    the reporting adapter assigned. When that state was itself a disclosure —
+    a checks envelope past its cadence reads `MISSED` — replacing it erased the
+    row's only staleness marker, and §9.6 then counted a row whose source had
+    disclosed its age as one that had not (alpha-engine-config-I12729: two
+    unregistered laptop-hosted checks held a milestone clause UNMET every
+    night the laptop slept). The adapter's state is kept in
+    `detail`, where it renders and where §9.6 reads it. `state` stays
+    UNREGISTERED, so §9.1's count (`unregistered`) is unchanged.
+    """
+    reported = ent.state
+    if not isinstance(reported, State) or reported is State.UNREGISTERED:
+        return dataclasses.replace(ent, state=State.UNREGISTERED)
+    return dataclasses.replace(
+        ent, state=State.UNREGISTERED,
+        detail={**ent.detail, REPORTED_STATE_DETAIL: reported.value},
+    )
+

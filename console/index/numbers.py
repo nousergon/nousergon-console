@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from ..model.entity import Entity
 from ..model.envelope import ClaimClass
-from ..model.kinds import UNOBSERVED_VALUE, Kind, State
+from ..model.kinds import REPORTED_STATE_DETAIL, UNOBSERVED_VALUE, Kind, State
 from ..render.panes import orphan_counts as _pane_orphan_counts
 
 #: Rendered values that ALREADY say "this is stale" — a row carrying one of
@@ -193,7 +193,7 @@ def staleness_honesty(
             isinstance(ent.state, State) and ent.state in _DISCLOSED_COMPONENT_STATES
         ) or (
             isinstance(ent.state, str) and ent.state.strip().lower() in _DISCLOSED_VALUES
-        )
+        ) or _reported_disclosure(ent)
         if not disclosed:
             violations.append(ent.id)
     if not checked:
@@ -209,6 +209,26 @@ def staleness_honesty(
         "violations": sorted(violations),
         "computable": True,
         "unauditable": dict(sorted(unauditable.items())),
+    }
+
+
+def _reported_disclosure(ent: Entity) -> bool:
+    """An UNREGISTERED row whose OWN source disclosed its staleness.
+
+    `UNREGISTERED` replaces the state the reporting adapter assigned, so a
+    checks envelope its adapter had already marked `MISSED` used to reach §9.6
+    with no marker at all (alpha-engine-config-I12729). The reconciler now
+    keeps that state as `detail.reported_state` and the row renders it beside
+    `UNREGISTERED`; this reads it. Only a DISCLOSED reported state counts — an
+    adapter whose staleness branch stopped firing still reports `HEALTHY`
+    here, and that row is still a violation, which is the case §9.6 exists
+    for.
+    """
+    if ent.state is not State.UNREGISTERED:
+        return False
+    reported = ent.detail.get(REPORTED_STATE_DETAIL)
+    return isinstance(reported, str) and reported in {
+        s.value for s in _DISCLOSED_COMPONENT_STATES
     }
 
 

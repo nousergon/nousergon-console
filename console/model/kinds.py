@@ -174,6 +174,12 @@ EXCEPTION_VALUES: frozenset[str] = frozenset({
 #: position already renders.
 UNOBSERVED_VALUE = "unobserved"
 
+#: The `detail` key where an UNREGISTERED component keeps the state its own
+#: reporting source assigned before the registry comparison replaced it
+#: (`index/graph.py::_unregistered`, alpha-engine-config-I12729). Rendered
+#: beside the state, and read by §9.6 (`numbers.staleness_honesty`).
+REPORTED_STATE_DETAIL = "reported_state"
+
 #: Config guard for `declared-registry` (`config.py::validate_config`): a
 #: declaration may never DEFAULT a row into an exception state, because the
 #: default is by construction what a row gets when nothing observed it.

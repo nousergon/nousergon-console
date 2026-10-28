@@ -59,7 +59,24 @@ def test_the_landing_page_carries_an_index_build_time():
     idx = _index(cadence=3600)
     idx.build_info = BuildInfo(built_at=T0.isoformat(), adapters=idx.build_info.adapters,
                                refresh_seconds=60)
-    assert "index built 2026-08-03T12:00:00+00:00" in html_freshness(idx, T0)
+    html = html_freshness(idx, T0 + timedelta(hours=3))
+    # Read at a glance like every other as-of (alpha-engine-config-I11805): UTC
+    # minute and age, the stamp as written kept in the <time> element.
+    assert ('index built <time datetime="2026-08-03T12:00:00+00:00" '
+            'title="2026-08-03T12:00:00+00:00">2026-08-03 12:00Z · '
+            '<span class="age">3h ago</span></time>') in html
+
+
+def test_a_stale_surface_names_its_build_time_and_age_too():
+    """The stale banner is where the age matters most: it is the reader's one
+    signal that every row below is at most this current (I11805)."""
+    idx = _index(cadence=60)
+    idx.build_info = BuildInfo(built_at=T0.isoformat(),
+                               adapters=idx.build_info.adapters, refresh_seconds=60)
+    html = html_freshness(idx, T0 + timedelta(days=2, hours=1))
+    assert "SURFACE STALE — index built <time" in html
+    assert '2026-08-03 12:00Z · <span class="age">2d ago</span></time>' in html
+
 
 
 def test_every_page_carries_it_not_only_the_landing_view():

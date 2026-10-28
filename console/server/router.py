@@ -23,6 +23,10 @@ Routes:
                                 report in full, the recent window below it,
                                 every older report by date.
 - ``/reports/<feed>``         — one declared feed, the same view.
+- ``/page/<id>``              — one declared page: tiles, tables, charts,
+                                the latest report and what is wrong, laid out
+                                over rows other adapters mint. ``?range=`` and
+                                each declared variable are query parameters.
 - ``/doctor/<id>``            — why an identifier is or is not on the
                                 surface (§3.9). Addressable, because a
                                 diagnosis nobody can link to has to be re-run
@@ -73,6 +77,11 @@ class Resolved:
     project_id: str | None = None
     #: Reports view only: the declared feed id, or None for the first feed.
     feed_id: str | None = None
+    #: Page view only: the declared page id, and the URL's parameters (range
+    #: and variables), which the page itself interprets against its own
+    #: declaration — the router cannot know which names a page declares.
+    page_id: str | None = None
+    params: tuple[tuple[str, str], ...] = ()
 
 
 class UnknownRoute(Exception):
@@ -117,6 +126,12 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         if len(segments) == 2:
             return Resolved(view="reports", feed_id=segments[1])
         raise UnknownRoute(f"no reports view at {path!r}")
+
+    if segments[0] == "page":
+        if len(segments) == 2:
+            return Resolved(view="page", page_id=segments[1],
+                            params=tuple(sorted(params.items())))
+        raise UnknownRoute(f"no page view at {path!r}")
 
     if segments[0] == "search":
         # `?runs=all` lists every matching run instead of the newest run per

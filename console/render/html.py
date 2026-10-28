@@ -1263,7 +1263,15 @@ def dashboards_page(index: Index) -> str:
     with no edit to the console. The landing view stays the exception list
     (§4.3); this page is one click from every page via `with_site_nav`.
     """
+    from ..index import pages as declared_pages
+
     model = index.landing_model()
+    # Declared pages first: they are laid out for reading, where a pane is a
+    # filtered list (alpha-engine-config-I12783).
+    page_items = "".join(
+        f'<li><a href="{esc(p.url)}">{esc(p.title)}</a> · {esc(p.question)}</li>'
+        for p in declared_pages.declared(index)
+    ) or '<li class="absent">none declared — the `pages:` config block is empty</li>'
     dashboards = "".join(
         f'<li><a href="{esc(d["url"])}">{esc(d["pane"])}</a> · '
         f'{d["rows"]} {esc(d["kind"])} rows · '
@@ -1292,6 +1300,7 @@ def dashboards_page(index: Index) -> str:
 <h1>dashboards</h1>
 <p class="pane-question">{esc(_DASHBOARDS_PANE_QUESTION)}</p>
 {index_freshness(index)}
+<h2>pages</h2><ul>{page_items}</ul>
 <h2>dashboards</h2><ul>{dashboards}</ul>
 <h2>milestones</h2><ul>{milestones}</ul>
 <h2>registries</h2><ul>{registries}</ul>
@@ -1708,6 +1717,147 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 {window}
 {_report_lead(f.get("lead"), links)}
 {body}
+</body></html>"""
+
+
+def _page_controls(pg: dict) -> str:
+    """The range and variable pickers: a plain GET form, so the chosen state
+    is the URL (§3.2) and the page works with no script at all."""
+    rng = pg["range"]
+    opts = "".join(
+        f'<option value="{esc(o)}"{" selected" if o == rng["value"] else ""}>{esc(o)}</option>'
+        for o in rng["options"])
+    parts = [f'<label>range <select name="range">{opts}</select></label>']
+    for v in pg["variables"]:
+        choices = '<option value="">all</option>' + "".join(
+            f'<option value="{esc(o)}"{" selected" if o == v["value"] else ""}>{esc(o)}</option>'
+            for o in v["options"])
+        parts.append(f'<label>{esc(v["name"])} <select name="{esc(v["name"])}">'
+                     f'{choices}</select></label>')
+    since = (f' <small>since {esc(rng["since"])}</small>' if rng["since"] else "")
+    return (f'<form class="page-controls" method="get" action="{esc(pg["url"])}">'
+            + " ".join(parts) + ' <button type="submit">apply</button>'
+            + since + "</form>")
+
+
+def _page_tile(t: dict) -> str:
+    """One headline tile: label, value with unit, state, baseline, staleness.
+    Staleness and baseline are always present — the absence of either is
+    rendered as a word, never as a blank (products/console.md § Navigation)."""
+    if t.get("id") is None:
+        return (f'<div class="tile"><div class="tile-label">{esc(t["label"])}</div>'
+                f'<p class="absent">{esc(t["absent"])} — <code>{esc(t["selector"])}</code></p></div>')
+    head = (f'<div class="tile-label"><a href="{esc(t["url"])}">{esc(t["label"])}</a> '
+            f'<span class="chip">{esc(t["state"])}</span></div>')
+    if "absent" in t:
+        body = f'<p class="absent">{esc(t["absent"])}</p>'
+    else:
+        unit = f' <span class="tile-unit">{esc(t["unit"])}</span>' if t.get("unit") else ""
+        base = t["baseline"]
+        if not base["declared"] or base["value"] is None:
+            baseline = "no baseline"
+        else:
+            baseline = (f'{esc(t.get("versus_baseline") or "vs")} baseline '
+                        f'{esc(base["value"])}')
+        defect = (f'<div class="absent">{esc(t["defect"])}</div>' if t.get("defect") else "")
+        body = (f'<div class="tile-value">{esc(t["text"])}{unit}</div>'
+                f'<div class="tile-meta">{baseline}</div>{defect}')
+    return (f'<div class="tile state-{esc(t["state"])}">{head}{body}'
+            f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')
+
+
+def _page_rows(index: Index, sec: dict, links: Citations | None) -> str:
+    ents = [index.entity(r["id"]) for r in sec["rows"]]
+    ents = [e for e in ents if e is not None]
+    if not ents:
+        what = ("nothing is wrong here" if sec["type"] == "exceptions" and sec["matched"]
+                else f'no row matches <code>{esc(sec["selector"])}</code>'
+                if not sec["matched"] else "no row inside the selected range")
+        return f'<p class="absent">{what}</p>'
+    cols = sec["columns"]
+    labels = {r["id"]: r["label"] for r in sec["rows"]}
+    rows = "".join(row(e, cols, labels.get(e.id), links) for e in ents)
+    more = (f'<p class="list-window">showing {len(ents)} of {sec["total"]}</p>'
+            if sec["total"] > len(ents) else "")
+    return ("<table><thead><tr><th>id</th><th>state</th>"
+            + "".join(f"<th>{esc(c)}</th>" for c in cols)
+            + "<th>source</th><th>as-of</th><th>evidence</th></tr></thead>"
+            + f"<tbody>{rows}</tbody></table>{more}")
+
+
+def _page_chart(index: Index, sec: dict) -> str:
+    import dataclasses
+
+    if "absent" in sec:
+        return f'<p class="absent">{esc(sec["absent"])} — <code>{esc(sec.get("selector", ""))}</code></p>'
+    ent = index.entity(sec["id"])
+    by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))} if ent else {}
+    f = by_name.get(sec["field"])
+    if f is None or not sec["points"]:
+        return '<p class="absent">no point inside the selected range</p>'
+    shown = dataclasses.replace(f, value=[list(p) for p in sec["points"]])
+    chart = _timeseries_html(shown, by_name.get(f.of or ""))
+    note = (f'<small> · {sec["outside_range"]} earlier points outside the range</small>'
+            if sec.get("outside_range") else "")
+    return (f'<figure class="page-chart">{chart}{note}<figcaption>'
+            f'<a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · {as_of_html(sec.get("as_of"))}'
+            f'</figcaption></figure>')
+
+
+def _page_section(index: Index, sec: dict, links: Citations | None) -> str:
+    title = f'<h2>{esc(sec["title"])}</h2>' if sec.get("title") else ""
+    if sec["type"] == "tiles":
+        body = '<div class="tiles">' + "".join(_page_tile(t) for t in sec["tiles"]) + "</div>"
+    elif sec["type"] == "report":
+        latest = sec.get("latest")
+        if "absent" in sec:
+            body = f'<p class="absent">{esc(sec["absent"])}</p>'
+        elif latest is None:
+            body = '<p class="absent">no report yet</p>'
+        else:
+            feed_link = f'<a href="{esc(sec["url"])}">all reports</a>'
+            body = (f'<article class="report report-latest"><h3>{esc(latest["label"])}</h3>'
+                    f'{_report_meta(latest, feed_link)}'
+                    f'{_report_text(latest, links)}</article>')
+    elif sec["type"] == "chart":
+        body = _page_chart(index, sec)
+    else:
+        body = _page_rows(index, sec, links)
+    return f'<section class="page-section page-{esc(sec["type"])}">{title}{body}</section>'
+
+
+def page_page(index: Index, page_id: str, params: dict | None = None) -> str:
+    """A declared page (`/page/<id>`): the sections its config lays out, over
+    rows other adapters mint, for the URL's range and variables. Declared in
+    config, evaluated per request, nothing stored (§5.6)."""
+    from ..index import pages
+
+    found = pages.page(index, page_id)
+    head = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">"""
+    if found is None:
+        return f"""{head}
+<title>page</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; pages</nav>
+<h1>no page {esc(page_id)}</h1>
+{index_freshness(index)}
+<p class="absent">no page {esc(page_id)} is declared in the `pages:` config block</p>
+</body></html>"""
+    pg = pages.evaluate(index, found, params or {})
+    links = citations.declared(index)
+    others = " · ".join(f'<a href="{esc(o.url)}">{esc(o.title)}</a>'
+                        for o in pages.declared(index) if o.id != found.id)
+    switcher = f'<p class="report-feeds">other pages: {others}</p>' if others else ""
+    sections = "\n".join(_page_section(index, s, links) for s in pg["sections"])
+    return f"""{head}
+<title>{esc(pg["title"])}</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; <a href="/dashboards">pages</a> &rsaquo; {esc(pg["title"])}</nav>
+<h1>{esc(pg["title"])}</h1>
+<p class="pane-question">{esc(pg["question"])}</p>
+{index_freshness(index)}
+{_page_controls(pg)}
+{switcher}
+{sections}
 </body></html>"""
 
 

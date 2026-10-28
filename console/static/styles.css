@@ -1,13 +1,58 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
-a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offset: 2px; }
-.state-HEALTHY, .state-ARMED { border-left: .35rem solid #087f23; }
-.state-RUNNING { border-left: .35rem solid #0b5fa5; }
-.state-FAILED, .state-STALLED, .state-MISSED { border-left: .35rem solid #b00020; }
-.state-DEGRADED, .state-UNREPORTED, .state-ABSENT, .state-UNREGISTERED, .state-NEVER_RAN { border-left: .35rem solid #8a4b00; }
-.state-DISABLED, .state-DEPRECATED, .state-RETIRED { border-left: .35rem solid #4c5563; }
-.state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid #8a4b00; }
-.absent { border-left: .35rem dashed #4c5563; padding-left: .5rem; }
+/* Design tokens (alpha-engine-config-I12783, plan §4). One palette, light and
+   dark, every colour a variable so a component never hard-codes one. State
+   colour always travels with the state word (§5.7): the chip carries both. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --surface: #f6f7f9; --border: #d5d9e0; --text: #1b1f24; --muted: #59636e;
+  --link: #0b5fa5; --focus: #005fcc;
+  --bad: #b00020; --bad-bg: #fde7ea; --warn: #8a4b00; --warn-bg: #fdf0dc;
+  --good: #087f23; --good-bg: #e3f4e6; --info: #0b5fa5; --info-bg: #e2eefa;
+  --off: #4c5563; --off-bg: #eceef1;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --surface: #1a1f25; --border: #323a44; --text: #e6e9ed; --muted: #9aa5b1;
+    --link: #6cb6ff; --focus: #6cb6ff;
+    --bad: #ff7b8a; --bad-bg: #3d1a20; --warn: #f0b35a; --warn-bg: #3a2a12;
+    --good: #5fd37a; --good-bg: #16301d; --info: #6cb6ff; --info-bg: #142a40;
+    --off: #9aa5b1; --off-bg: #232a32;
+  }
+}
+body { background: var(--bg); color: var(--text); font-size: 15px; }
+a { color: var(--link); text-underline-offset: .15em; }
+h1 { font-size: 1.6rem; margin: .4rem 0 .8rem; }
+h2 { font-size: 1.2rem; margin: 1.6rem 0 .5rem; }
+h3 { font-size: 1.05rem; }
+input, button, select { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border); border-radius: .35rem; padding: .3rem .55rem; }
+button { cursor: pointer; }
+
+/* Tables: ruled, padded, tabular figures. The row's state is a bar on its
+   first cell (a `<tr>` border does not render), and its word is a chip. */
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; margin: .3rem 0 1rem; }
+th, td { padding: .38rem .7rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+thead th { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 2px solid var(--border); }
+tbody tr:nth-child(even) { background: var(--surface); }
+tbody tr:hover { background: var(--info-bg); }
+tr[class*="state-"] { border-left: 0; }
+tr[class*="state-"] > td:first-child { box-shadow: inset .3rem 0 0 var(--row-state, transparent); padding-left: .9rem; }
+.chip { display: inline-block; padding: .05rem .5rem; border-radius: 1rem; font-size: .8rem; font-weight: 600; white-space: nowrap; background: var(--chip-bg, var(--off-bg)); color: var(--chip, var(--off)); }
+.state-FAILED, .state-STALLED, .state-MISSED { --row-state: var(--bad); --chip: var(--bad); --chip-bg: var(--bad-bg); }
+.state-DEGRADED, .state-UNREPORTED, .state-ABSENT, .state-UNREGISTERED, .state-NEVER_RAN { --row-state: var(--warn); --chip: var(--warn); --chip-bg: var(--warn-bg); }
+.state-HEALTHY, .state-ARMED { --row-state: var(--good); --chip: var(--good); --chip-bg: var(--good-bg); }
+.state-RUNNING { --row-state: var(--info); --chip: var(--info); --chip-bg: var(--info-bg); }
+.state-DISABLED, .state-DEPRECATED, .state-RETIRED { --row-state: var(--off); --chip: var(--off); --chip-bg: var(--off-bg); }
+/* A state count or summary outside a table (`a.state-X`, `summary.state-X`,
+   `span.state-X`) reads as a chip too. */
+a[class*="state-"], .list-summary span[class*="state-"] { display: inline-block; padding: .05rem .55rem; border-radius: 1rem; font-weight: 600; text-decoration: none; background: var(--chip-bg, var(--off-bg)); color: var(--chip, var(--off)); border-left: 0; }
+/* Any other element carrying a state (a freshness line, a registry link
+   item) keeps the coloured bar it always had. */
+[class*="state-"]:not(tr):not(a):not(summary):not(span) { border-left: .3rem solid var(--row-state, var(--off)); padding-left: .5rem; }
+summary[class*="state-"] { border-left: .3rem solid var(--row-state, var(--off)); padding-left: .5rem; }
+.absent { border-left: .2rem dashed var(--off); padding-left: .5rem; color: var(--muted); }
+body { max-width: 76rem; margin: 1.5rem auto; padding: 0 1rem; line-height: 1.45; }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid var(--warn); }
 /* §4.4's milestone pane. A separate selector namespace from `.state-*` on
    purpose: MET and UNMET are not members of observability-policy.md §8.3's
    closed state vocabulary, and a clause's UNREPORTED borrows the same warm
@@ -17,9 +62,10 @@ a:focus-visible, input:focus-visible { outline: 3px solid #005fcc; outline-offse
 .milestone-MET { border-left: .35rem solid #087f23; }
 .milestone-UNMET { border-left: .35rem solid #b00020; }
 .milestone-UNREPORTED { border-left: .35rem solid #8a4b00; }
-.pane-question { color: #4c5563; font-style: italic; }
+.pane-question { color: var(--muted); font-style: italic; }
 /* The one site menu (`render/html.py::with_site_nav`), on every page. */
-.site-nav { padding-bottom: .5rem; margin-bottom: 1rem; border-bottom: 1px solid #4c5563; font-weight: 600; }
+.site-nav { padding: .55rem 0; margin-bottom: 1.2rem; border-bottom: 1px solid var(--border); font-weight: 600; }
+.site-nav a { text-decoration: none; }
 .list-summary span { padding-left: .4rem; margin-right: .4rem; }
 /* Part-of-whole bars (`of:` fields). Uncoloured on purpose: a relation, not a
    verdict (§5.4); the numbers and percentage sit beside it in text (§5.7). */

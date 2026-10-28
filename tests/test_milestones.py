@@ -729,6 +729,16 @@ def test_recovery_notifies_once_under_the_same_identity_key():
     [opened] = notifier.events
 
     _run(_mixed(streak=9), store, notifier, "2026-08-31T12:06:00Z")
+    # The recovery is RECORDED on the build it happens, and the clear waits
+    # for MET to hold the settle window (alpha-engine-config-I12729).
+    recorded = [t for t in store.doc["transitions"] if not t.get("baseline")]
+    assert [(t["from"], t["to"]) for t in recorded] == [
+        (M.MET, M.UNMET), (M.UNMET, M.MET)]
+    assert len(notifier.events) == 1
+    assert store.doc["episodes"]["c-met"]["recovering_since"] == \
+        "2026-08-31T12:06:00Z"
+
+    _run(_mixed(streak=9), store, notifier, "2026-08-31T13:06:00Z")
     assert len(notifier.events) == 2
     cleared = notifier.events[1]
     assert cleared["state"] == M.CLEARED
@@ -736,8 +746,9 @@ def test_recovery_notifies_once_under_the_same_identity_key():
     assert cleared["identity_key"] == opened["identity_key"]
     assert cleared["severity"] == "info"
     assert "RESOLVED" in cleared["subject"]
+    assert (cleared["from"], cleared["to"]) == (M.UNMET, M.MET)
     # The episode is closed, so a later rebuild cannot clear it twice.
-    _run(_mixed(streak=9), store, notifier, "2026-08-31T12:09:00Z")
+    _run(_mixed(streak=9), store, notifier, "2026-08-31T13:09:00Z")
     assert len(notifier.events) == 2
     assert "c-met" not in store.doc["episodes"]
 
@@ -974,12 +985,17 @@ def test_the_example_config_notify_block_resolves_a_region():
 def _flap(store, notifier, days: int, start_day: int = 1,
           declaration=None) -> None:
     """One MET -> UNMET -> MET episode per day for `days` days: an OPENED and
-    a CLEARED event each, every one of them undeliverable."""
+    a CLEARED event each, every one of them undeliverable. The 14:30 build is
+    the one that lands after the recovery's settle window
+    (`recovery_settle_minutes`, default 60) — the live surface rebuilds every
+    ~180s, so one always does."""
     for day in range(start_day, start_day + days):
         _run(_mixed(streak=1), store, notifier,
              f"2026-09-{day:02d}T12:00:00Z", declaration)
         _run(_mixed(streak=6), store, notifier,
              f"2026-09-{day:02d}T13:00:00Z", declaration)
+        _run(_mixed(streak=6), store, notifier,
+             f"2026-09-{day:02d}T14:30:00Z", declaration)
 
 
 def test_a_backlog_is_announced_as_one_digest_and_never_replayed():
@@ -1065,8 +1081,10 @@ def test_a_failed_digest_supersedes_nothing():
 
 def test_a_short_outage_still_delivers_each_event_individually():
     """The collapse is for a BACKLOG. Events younger than the cutoff — and a
-    lone stale one — go out exactly as before."""
-    store, notifier = _Store(), _Notifier(fail_first=3)
+    lone stale one — go out exactly as before. Two failed attempts, not
+    three: the recovery's clear is owed only once MET has held the settle
+    window (alpha-engine-config-I12729), so 13:00 holds no clear to fail."""
+    store, notifier = _Store(), _Notifier(fail_first=2)
     _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
     _run(_mixed(streak=1), store, notifier, "2026-08-31T12:03:00Z")
     _run(_mixed(streak=6), store, notifier, "2026-08-31T13:00:00Z")
@@ -1091,3 +1109,157 @@ def test_the_backlog_cutoff_is_declared_config():
         M.parse(_journalled(notify={
             "sns_topic_arn": "arn:aws:sns:us-east-1:0:t",
             "backlog_cutoff_hours": 0}))
+
+
+# --------------------------------------- recovery settle (I12729 hysteresis) --
+#
+# The live c4 `staleness_honesty` clause went MET for 30 minutes at
+# 2026-10-27T19:20:32Z and UNMET again at 19:50:27Z: a second producer
+# refreshed one envelope, the row read fresh for one cadence, then aged out.
+# Before the settle window that was a RESOLVED page and a REGRESSED page for a
+# condition that never went away. These assert the dip is RECORDED, is one
+# episode, and that nothing about the fix delays a regression.
+
+def test_a_dip_to_met_shorter_than_the_settle_window_is_one_episode():
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T09:40:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T09:49:11Z")
+    assert [e["state"] for e in notifier.events] == [M.OPENED]
+
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T19:20:32Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T19:47:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T19:50:27Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T21:00:00Z")
+
+    assert [e["state"] for e in notifier.events] == [M.OPENED], \
+        "one condition, one page — no RESOLVED/REGRESSED pair for the dip"
+    # Recording is untouched: both moves are in the durable history.
+    recorded = [(t["from"], t["to"], t["at"])
+                for t in store.doc["transitions"] if not t.get("baseline")]
+    assert recorded == [
+        (M.MET, M.UNMET, "2026-10-27T09:49:11Z"),
+        (M.UNMET, M.MET, "2026-10-27T19:20:32Z"),
+        (M.MET, M.UNMET, "2026-10-27T19:50:27Z"),
+    ]
+    episode = store.doc["episodes"]["c-met"]
+    assert episode["opened_at"] == "2026-10-27T09:49:11Z"
+    assert episode["relapses"] == 1
+    assert episode["last_relapse_at"] == "2026-10-27T19:50:27Z"
+    assert "recovering_since" not in episode
+
+
+def test_a_settled_recovery_clears_once_and_says_when_it_recovered():
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T09:40:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T09:49:11Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T19:20:32Z")
+    for stamp in ("2026-10-27T19:50:00Z", "2026-10-27T20:20:00Z"):
+        _run(_mixed(streak=9), store, notifier, stamp)
+    assert [e["state"] for e in notifier.events] == [M.OPENED], \
+        "59.5 minutes is inside the window"
+
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T20:21:00Z")
+    [opened, cleared] = notifier.events
+    assert cleared["state"] == M.CLEARED
+    assert cleared["close_reason"] == M.RECOVERED
+    assert cleared["identity_key"] == opened["identity_key"]
+    assert cleared["dedup_key"] == opened["dedup_key"]
+    assert cleared["moved"] == [{
+        "binding": "entity:sig-alpha.consecutive_cycles",
+        "from": 1, "to": 9, "target": 4, "op": ">="}]
+    assert "c-met" not in store.doc["episodes"]
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T20:24:00Z")
+    assert len(notifier.events) == 2
+
+
+def test_the_settle_window_never_delays_a_regression():
+    """Hysteresis on the CLEAR side only. A clause that was settled MET pages
+    on the first build that reads it UNMET, exactly as before."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T09:40:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T09:43:00Z")
+    assert [e["state"] for e in notifier.events] == [M.OPENED]
+    # Recovered, settled (a build lands after the window), regressed.
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T10:00:00Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T11:03:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T11:06:00Z")
+    assert [e["state"] for e in notifier.events] == [
+        M.OPENED, M.CLEARED, M.OPENED]
+    assert notifier.events[2]["occurred_at"] == "2026-10-27T11:06:00Z"
+
+
+def test_a_relapse_after_the_window_with_no_build_between_is_a_new_episode():
+    """MET held the whole window if no transition was recorded inside it, even
+    when no build landed on the window's end: the old episode clears and the
+    regression opens a new one, in that order."""
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=6), store, notifier, "2026-10-27T09:40:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T09:43:00Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T10:00:00Z")
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T12:00:00Z")
+    states = [(e["state"], e["opened_at"]) for e in notifier.events]
+    assert states == [
+        (M.OPENED, "2026-10-27T09:43:00Z"),
+        (M.CLEARED, "2026-10-27T09:43:00Z"),
+        (M.OPENED, "2026-10-27T12:00:00Z"),
+    ]
+
+
+def test_a_recovery_that_moves_to_another_failing_status_closes_as_recovered():
+    """UNMET -> MET -> UNREPORTED inside the window. The clause DID recover;
+    the clear says so (not SUPERSEDED), and the loss of measurement opens its
+    own episode."""
+    store, notifier = _Store(), _Notifier()
+    decl = copy.deepcopy(_journalled())
+    decl[0]["clauses"] = [{"id": "c", "label": "the verdict passes",
+                           "entity": "comp-verdict",
+                           "field": "correctness_verdict",
+                           "op": "==", "target": "PASS"}]
+    def build(verdict, stamp):
+        idx = _index_with(_verdict("comp-verdict", verdict)) if verdict \
+            else _index_with()
+        _run(idx, store, notifier, stamp, declaration=decl)
+    build("PASS", "2026-10-27T12:00:00Z")
+    build("FAIL", "2026-10-27T12:03:00Z")
+    build("PASS", "2026-10-27T12:06:00Z")
+    build(None, "2026-10-27T12:09:00Z")
+    got = [(e["state"], e.get("close_reason"), e["to"]) for e in notifier.events]
+    assert got == [
+        (M.OPENED, None, M.UNMET),
+        (M.CLEARED, M.RECOVERED, M.UNREPORTED),
+        (M.OPENED, None, M.UNREPORTED),
+    ]
+
+
+def test_an_unpaged_baseline_episode_settles_silently_and_is_written():
+    store, notifier = _Store(), _Notifier()
+    _run(_mixed(streak=1), store, notifier, "2026-10-27T12:00:00Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T12:03:00Z")
+    assert "recovering_since" in store.doc["episodes"]["c-met"]
+    [report] = _run(_mixed(streak=9), store, notifier, "2026-10-27T13:04:00Z")
+    assert report["written"] is True, "an episode closing is a change"
+    assert "c-met" not in store.doc["episodes"]
+    assert notifier.events == []
+
+
+def test_a_recovery_inside_the_window_is_not_a_digest_still_open_page():
+    store, notifier = _Store(), _Notifier(fail_first=10**6)
+    _run(_mixed(streak=6), store, notifier, "2026-08-31T12:00:00Z")
+    _flap(store, notifier, days=2)
+    _run(_mixed(streak=1), store, notifier, "2026-09-05T12:00:00Z")
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T11:30:00Z")
+    notifier.fail_first = 0
+    _run(_mixed(streak=9), store, notifier, "2026-10-27T12:00:00Z")
+    [digest] = notifier.events
+    assert digest["still_open"] == []
+    assert digest["severity"] == "info"
+
+
+def test_the_settle_window_is_declared_config_and_must_be_positive():
+    assert M.parse(_journalled())[0].journal.recovery_settle_minutes == 60.0
+    [m] = M.parse(_journalled(recovery_settle_minutes=15))
+    assert m.journal.recovery_settle_minutes == 15.0
+    for bad in (0, -5, "60", True):
+        with pytest.raises(M.MilestoneConfigError, match="recovery_settle_minutes"):
+            M.parse(_journalled(recovery_settle_minutes=bad))
+

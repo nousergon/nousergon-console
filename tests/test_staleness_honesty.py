@@ -311,3 +311,77 @@ def test_an_inherited_alias_is_excluded_from_the_audited_population():
     result = staleness_honesty(_index_with(inherited_alias), now=NOW)
     assert result["computable"] is False  # no other row -> empty population
     assert "comp-old-name" not in result.get("violations", [])
+
+
+# ------------------------------------------- UNREGISTERED keeps its disclosure --
+#
+# alpha-engine-config-I12729. Two laptop-hosted checks publish no registry
+# row, so the reconciler renders
+# them UNREGISTERED — which REPLACED the `MISSED` their adapter had assigned
+# when the laptop slept. §9.6 then counted a row whose own source had disclosed
+# its age as one that had not, and the phase-2 exit clause c4 went UNMET every
+# night (its recoveries cluster 13:26–15:05Z, when the laptop wakes).
+
+from console.model.envelope import ClaimClass  # noqa: E402
+from console.render import html as render_html  # noqa: E402
+
+
+def _registry_and_check(reported: State, age: timedelta) -> Index:
+    """A successful declaration pass that does NOT name `laptop-check`, plus
+    the check's own report in the state its adapter assigned."""
+    declared = Entity(kind=Kind.COMPONENT, id="declared-elsewhere",
+                      state=State.HEALTHY,
+                      provenance=Provenance("registry", as_of=NOW.isoformat()))
+    check = Entity(
+        kind=Kind.COMPONENT, id="laptop-check", state=reported,
+        provenance=Provenance("checks", as_of=(NOW - age).isoformat()),
+        detail={"cadence_minutes": 15, "status": "ok"},
+    )
+    idx = Index()
+    idx.add_result(AdapterResult(name="registry", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.DECLARATION,
+                                 entities=(declared,)))
+    idx.add_result(AdapterResult(name="checks", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION,
+                                 declared_cadence_seconds=600.0,
+                                 entities=(check,)))
+    return idx
+
+
+def test_an_unregistered_row_whose_source_said_missed_is_disclosed():
+    idx = _registry_and_check(State.MISSED, timedelta(hours=3))
+    ent = idx.entity("laptop-check")
+    assert ent.state is State.UNREGISTERED, "§9.1 still counts it"
+    assert ent.detail["reported_state"] == "MISSED"
+    assert idx.population_completeness()["unregistered"] == 1
+    result = staleness_honesty(idx, now=NOW)
+    assert result["count"] == 0
+    assert "laptop-check" not in result["violations"]
+    # The marker is ON THE ROW, not only in the data §9.6 reads.
+    assert "UNREGISTERED · reported MISSED" in render_html.row(ent)
+
+
+def test_an_unregistered_row_whose_source_still_says_healthy_is_a_violation():
+    """The case §9.6 exists for is untouched: an adapter whose staleness branch
+    stopped firing reports HEALTHY, and keeping that report does not excuse
+    the row."""
+    idx = _registry_and_check(State.HEALTHY, timedelta(hours=3))
+    ent = idx.entity("laptop-check")
+    assert ent.state is State.UNREGISTERED
+    assert ent.detail["reported_state"] == "HEALTHY"
+    result = staleness_honesty(idx, now=NOW)
+    assert result["violations"] == ["laptop-check"]
+
+
+def test_a_reported_state_on_a_registered_row_discloses_nothing():
+    """Only the reconciler writes `reported_state`, and only beside
+    UNREGISTERED. A row that merely CARRIES the key in its detail — any
+    emitter could write one — is graded on its rendered state as before."""
+    forged = Entity(
+        kind=Kind.COMPONENT, id="comp-forged", state=State.HEALTHY,
+        provenance=Provenance("checks",
+                              as_of=(NOW - timedelta(hours=3)).isoformat()),
+        detail={"cadence_minutes": 15, "reported_state": "MISSED"},
+    )
+    result = staleness_honesty(_index_with(forged), now=NOW)
+    assert result["violations"] == ["comp-forged"]

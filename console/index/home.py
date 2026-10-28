@@ -77,7 +77,7 @@ def parse(raw: Any) -> Home:
         if not link.startswith("/"):
             raise HomeConfigError(f"{where}: `link` must be a console path")
         areas.append(Area(id=aid, title=pages._text(a, "title", where), link=link,
-                          selects=tuple(pages._selector(s, f"{where} select #{i}")
+                          selects=tuple(pages._selector(s, f"{where} select #{i}", kind_only=True)
                                         for i, s in enumerate(selects, start=1))))
     section = pages._section({"type": "tiles", "tiles": raw["tiles"]}, "home tiles", None) \
         if raw.get("tiles") else None

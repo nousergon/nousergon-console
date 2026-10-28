@@ -127,16 +127,24 @@ def _text(entry: Mapping[str, Any], key: str, where: str) -> str:
     return value
 
 
-def _selector(raw: Any, where: str) -> Selector:
+#: A facet value that matches any row CARRYING the facet, whatever its value.
+ANY = "*"
+
+
+def _selector(raw: Any, where: str, kind_only: bool = False) -> Selector:
+    """A kind-and-facets selector. ``kind_only`` admits a selector naming only
+    a kind (a home area may own a whole kind); otherwise at least one facet is
+    required, because a selector with no facet would claim every row of every
+    kind."""
     from ..model.kinds import Kind
 
     if not isinstance(raw, Mapping):
         raise PagesConfigError(f"{where}: `select` must be a mapping with `facets`")
-    facets = raw.get("facets")
-    if not isinstance(facets, Mapping) or not facets:
-        # A selector with no facet would claim every row in the index.
+    facets = raw.get("facets") or {}
+    if not isinstance(facets, Mapping) or (not facets and not (kind_only and raw.get("kind"))):
         raise PagesConfigError(
-            f"{where}: `select.facets` must name at least one facet the rows carry")
+            f"{where}: `select.facets` must name at least one facet the rows carry"
+            + (" (or the selector must name a `kind`)" if kind_only else ""))
     kind = str(raw["kind"]).strip() if raw.get("kind") else None
     if kind is not None:
         try:
@@ -268,7 +276,7 @@ def _matches(ent: Any, sel: Selector, variables: Mapping[str, str]) -> bool:
     if sel.kind and ent.kind.value != sel.kind:
         return False
     facets = ent.facets or {}
-    if not all(facets.get(k) == v for k, v in sel.facets):
+    if not all((k in facets) if v == ANY else facets.get(k) == v for k, v in sel.facets):
         return False
     # A variable narrows only rows that carry its facet: a page-wide
     # `provider=aws` must not empty a section about something else.
@@ -313,9 +321,13 @@ def _row(ent: Any, columns: tuple[str, ...] | list[str]) -> dict[str, Any]:
 def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {"label": tile.label, "selector": tile.select.text,
                            "field": tile.field}
-    rows = _select(index, tile.select, variables)
-    if not rows:
+    matched = _select(index, tile.select, variables)
+    if not matched:
         return {**out, "id": None, "absent": "no row matches the selector"}
+    # The newest row that CARRIES the field: a selector may match several
+    # sources (a summary row and a ladder row on one pane), and only one of
+    # them declares the number this tile shows.
+    rows = [e for e in matched if tile.field in _fields(e)] or matched
     ent = rows[0]
     out.update(id=ent.id, url=ent.route, state=ent.state_value,
                as_of=ent.provenance.as_of, evidence=ent.provenance.evidence)
@@ -325,6 +337,9 @@ def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any
     out.update(value=f.value, text=format_value(f), unit=f.unit,
                baseline={"declared": f.baseline_declared, "value": f.baseline},
                defect=f.defect)
+    whole = _fields(ent).get(f.of or "")
+    if whole is not None:
+        out["of"] = {"name": whole.name, "value": whole.value, "text": format_value(whole)}
     if f.comparable and isinstance(f.value, (int, float)) and not isinstance(f.value, bool):
         out["versus_baseline"] = ("above" if f.value > f.baseline else
                                   "below" if f.value < f.baseline else "at")

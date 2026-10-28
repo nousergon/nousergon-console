@@ -81,3 +81,40 @@ def test_home_opens_with_health_then_counts_then_tiles_and_lists_no_rows():
     assert 'href="/page/trading"' in page and 'href="/run?pane=cost"' in page
     assert "<table" not in page.split("<h2>headlines</h2>")[0]
     assert ">exec<" not in page and ">stray<" not in page
+
+
+def test_an_area_may_own_a_whole_kind_and_a_star_matches_any_value():
+    idx = _index({"areas": [
+        {"id": "svc", "title": "Services", "link": "/component",
+         "select": [{"kind": "component"}]},
+        {"id": "all-panes", "title": "Any pane", "link": "/run",
+         "select": [{"facets": {"pane": "*"}}]}]})
+    by_id = {a["id"]: a for a in render_json.payload(idx, resolve("/"))["health"]}
+    assert by_id["svc"]["rows"] == 3 and by_id["all-panes"]["rows"] == 4
+    assert by_id["unassigned"]["rows"] == 0
+
+
+def test_a_page_selector_still_needs_a_facet():
+    with pytest.raises(pages.PagesConfigError, match="at least one facet"):
+        pages.parse({"p": {"title": "t", "question": "q", "sections": [
+            {"type": "table", "title": "x", "select": {"kind": "run"}}]}})
+
+
+def test_a_tile_reads_the_newest_row_that_carries_its_field_and_shows_its_whole():
+    idx = Index()
+    old = Entity(kind=Kind.DECISION, id="summary", state=State.HEALTHY,
+                 provenance=Provenance("s", "2026-10-27T00:00:00+00:00"),
+                 facets={"pane": "dc"},
+                 detail={"fields": {"met": {"value": 7, "unit": "clauses", "render": "count",
+                                            "of": "total"},
+                                    "total": {"value": 9, "unit": "clauses", "render": "count"}}})
+    new = Entity(kind=Kind.DECISION, id="ladder", state=State.HEALTHY,
+                 provenance=Provenance("s", "2026-10-28T00:00:00+00:00"), facets={"pane": "dc"})
+    idx.add_result(AdapterResult(name="f", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=(old, new)))
+    home.attach(idx, home.parse({"tiles": [{"label": "met", "field": "met",
+                                            "select": {"facets": {"pane": "dc"}}}]}))
+    idx.finalize()
+    tile = render_json.payload(idx, resolve("/"))["headline"][0]
+    assert tile["id"] == "summary" and tile["of"]["text"] == "9"
+    assert "of 9" in _html(idx, resolve("/"))

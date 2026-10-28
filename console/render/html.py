@@ -1833,7 +1833,9 @@ def _page_tile(t: dict) -> str:
             baseline = (f'{esc(t.get("versus_baseline") or "vs")} baseline '
                         f'{esc(base["value"])}')
         defect = (f'<div class="absent">{esc(t["defect"])}</div>' if t.get("defect") else "")
-        body = (f'<div class="tile-value">{esc(t["text"])}{unit}</div>'
+        whole = (f' <span class="tile-unit">of {esc(t["of"]["text"])}</span>'
+                 if t.get("of") else "")
+        body = (f'<div class="tile-value">{esc(t["text"])}{unit}{whole}</div>'
                 f'<div class="tile-meta">{baseline}</div>{defect}')
     return (f'<div class="tile state-{esc(t["state"])}">{head}{body}'
             f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')

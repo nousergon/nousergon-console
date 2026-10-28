@@ -131,7 +131,7 @@ def row(ent: Entity, columns: list[str] | None = None, label: str | None = None,
     return (
         f'<tr class="state-{esc(ent.state_value)}">'
         f'<td><a href="{esc(path_for_entity(ent.kind, ent.id))}">{esc(label or ent.id)}</a></td>'
-        f"<td>{esc(state_text(ent))}</td>"
+        f'<td><span class="chip">{esc(state_text(ent))}</span></td>'
         + "".join(f"<td>{cell}</td>" for cell in _field_cells(ent, columns or [], links))
         + f"<td>{esc(p.source)}</td>"
         f"<td>{as_of}</td>"

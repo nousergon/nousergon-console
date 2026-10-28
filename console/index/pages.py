@@ -340,10 +340,27 @@ def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any
     whole = _fields(ent).get(f.of or "")
     if whole is not None:
         out["of"] = {"name": whole.name, "value": whole.value, "text": format_value(whole)}
-    if f.comparable and isinstance(f.value, (int, float)) and not isinstance(f.value, bool):
+    if f.comparable and _number(f.value) and _number(f.baseline):
         out["versus_baseline"] = ("above" if f.value > f.baseline else
                                   "below" if f.value < f.baseline else "at")
     return out
+
+
+def _number(v: Any) -> bool:
+    """A real number — never a bool, never a string that looks like one. A
+    declared baseline may be text ("budget", "1.0"); comparing it to a number
+    raised TypeError and took the whole home page down (2026-10-28)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _safe_tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any]:
+    """One tile, isolated: a defect in one emitter's row shows on that tile and
+    never removes the page the other tiles are on."""
+    try:
+        return _tile(index, tile, variables)
+    except Exception as exc:  # noqa: BLE001 — rendered, not swallowed
+        return {"label": tile.label, "selector": tile.select.text, "field": tile.field,
+                "id": None, "absent": f"tile failed: {type(exc).__name__}: {exc}"}
 
 
 def _sort_key(sort: str):
@@ -430,7 +447,7 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
 
     doc: dict[str, Any] = {"type": s.type, "title": s.title}
     if s.type == "tiles":
-        doc["tiles"] = [_tile(index, t, variables) for t in s.tiles]
+        doc["tiles"] = [_safe_tile(index, t, variables) for t in s.tiles]
         return doc
     if s.type == "report":
         from . import reports

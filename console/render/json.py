@@ -640,7 +640,9 @@ def _matches(entity: Entity, key: str, value: str) -> bool:
         # state" rather than "you typed it wrong" (§5.4: no data is never green).
         return entity.state_value.strip().lower() == value.strip().lower()
     for field in parse_fields(entity.detail.get("fields")):
-        if field.name != key or not field.comparable or not isinstance(field.value, (int, float)):
+        if (field.name != key or not field.comparable
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                           for v in (field.value, field.baseline))):
             continue
         return {"below-baseline": field.value < field.baseline,
                 "above-baseline": field.value > field.baseline,

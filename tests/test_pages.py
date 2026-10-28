@@ -251,3 +251,39 @@ def test_the_exceptions_page_lists_p0_then_untriaged_then_by_priority():
 
 def test_the_landing_view_links_to_the_exceptions_page():
     assert 'href="/exceptions"' in _html(_index(), resolve("/"))
+
+
+# ------------------------------------------------- one bad row, one bad tile --
+
+def test_a_text_baseline_never_breaks_the_page():
+    # Live 2026-10-28: a row declared `baseline: "..."` against a numeric value
+    # and `>` raised TypeError, so `/` answered 500 for every reader.
+    row = Entity(kind=Kind.RUN, id="x", state=State.HEALTHY,
+                 provenance=Provenance("s3://b/x.json", "2026-10-28T11:00:00+00:00"),
+                 facets={"pane": "cost", "meter": "odd"},
+                 detail={"fields": {"n": {"value": 3.0, "unit": "count",
+                                          "baseline": "budget", "render": "value"}}})
+    idx = Index()
+    idx.add_result(AdapterResult(name="f", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=(row,)))
+    pages.attach(idx, pages.parse({"cost": {"title": "C", "question": "q", "sections": [
+        {"type": "tiles", "tiles": [{"label": "N", "field": "n",
+                                     "select": {"facets": {"meter": "odd"}}}]}]}}))
+    idx.finalize()
+    tile = _page(idx)["sections"][0]["tiles"][0]
+    assert tile["text"] == "3" or tile["value"] == 3.0
+    assert "versus_baseline" not in tile
+    assert _html(idx, resolve("/page/cost")).startswith("<!doctype html>")
+    assert render_json.payload(idx, resolve("/", "n=above-baseline")) is not None
+
+
+def test_a_tile_that_raises_is_shown_on_the_tile_not_as_a_500(monkeypatch):
+    idx = _index()
+
+    def boom(*_a, **_k):
+        raise TypeError("bad row")
+
+    monkeypatch.setattr(pages, "_tile", boom)
+    tiles = _page(idx)["sections"][0]["tiles"]
+    assert all(t["absent"].startswith("tile failed: TypeError") for t in tiles)
+    assert _html(idx, resolve("/page/cost")).startswith("<!doctype html>")

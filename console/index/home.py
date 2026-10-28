@@ -143,6 +143,6 @@ def health(index: Any, exceptions: list) -> list[dict[str, Any]]:
 
 
 def headline(index: Any) -> list[dict[str, Any]]:
-    return [pages._tile(index, t, {}) for t in declared(index).tiles]
+    return [pages._safe_tile(index, t, {}) for t in declared(index).tiles]
 
 

@@ -90,7 +90,8 @@ def test_an_area_may_own_a_whole_kind_and_a_star_matches_any_value():
         {"id": "all-panes", "title": "Any pane", "link": "/run",
          "select": [{"facets": {"pane": "*"}}]}]})
     by_id = {a["id"]: a for a in render_json.payload(idx, resolve("/"))["health"]}
-    assert by_id["svc"]["rows"] == 3 and by_id["all-panes"]["rows"] == 4
+    # first area wins: the 3 components stay in svc, the cost run falls to all-panes
+    assert by_id["svc"]["rows"] == 3 and by_id["all-panes"]["rows"] == 1
     assert by_id["unassigned"]["rows"] == 0
 
 
@@ -130,3 +131,14 @@ def test_a_tile_never_reads_failed_over_zero_exceptions():
     assert areas["trading"]["worst"] == "HEALTHY"
     empty = home.health(Index(), [])
     assert empty[-1]["worst"] is None
+
+
+def test_the_first_declared_area_owns_a_row_so_tiles_partition_the_fleet():
+    decl = {"areas": [
+        {"id": "trading", "title": "T", "link": "/t", "select": {"facets": {"pane": "trading"}}},
+        {"id": "all", "title": "All", "link": "/a", "select": {"kind": "component"}},
+    ]}
+    by_id = {a["id"]: a for a in home.health(_index(decl), [])}
+    assert by_id["trading"]["rows"] == 2
+    assert by_id["all"]["rows"] == 1          # only "stray"; trading's rows stay there
+    assert by_id["unassigned"]["rows"] == 1   # the cost run

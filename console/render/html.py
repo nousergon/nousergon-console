@@ -1813,13 +1813,23 @@ def _page_controls(pg: dict) -> str:
             + since + "</form>")
 
 
-def _page_tile(t: dict) -> str:
+#: The tile `absent` text for a selector that matched no row (`pages._tile`).
+_NO_ROW = "no row matches the selector"
+
+
+def _empty_note(sec: dict) -> str:
+    """A section's declared empty-state text, or nothing. Shown BESIDE the
+    selector that matched no row, never instead of it."""
+    return f'{esc(sec["empty"])} · ' if sec.get("empty") else ""
+
+
+def _page_tile(t: dict, empty: str = "") -> str:
     """One headline tile: label, value with unit, state, baseline, staleness.
     Staleness and baseline are always present — the absence of either is
     rendered as a word, never as a blank (products/console.md § Navigation)."""
     if t.get("id") is None:
         return (f'<div class="tile"><div class="tile-label">{esc(t["label"])}</div>'
-                f'<p class="absent">{esc(t["absent"])} — <code>{esc(t["selector"])}</code></p></div>')
+                f'<p class="absent">{empty if t["absent"] == _NO_ROW else ""}{esc(t["absent"])} — <code>{esc(t["selector"])}</code></p></div>')
     head = (f'<div class="tile-label"><a href="{esc(t["url"])}">{esc(t["label"])}</a> '
             f'<span class="chip">{esc(t["state"])}</span></div>')
     if "absent" in t:
@@ -1846,7 +1856,7 @@ def _page_rows(index: Index, sec: dict, links: Citations | None) -> str:
     ents = [e for e in ents if e is not None]
     if not ents:
         what = ("nothing is wrong here" if sec["type"] == "exceptions" and sec["matched"]
-                else f'no row matches <code>{esc(sec["selector"])}</code>'
+                else f'{_empty_note(sec)}no row matches <code>{esc(sec["selector"])}</code>'
                 if not sec["matched"] else "no row inside the selected range")
         return f'<p class="absent">{what}</p>'
     cols = sec["columns"]
@@ -1864,7 +1874,8 @@ def _page_chart(index: Index, sec: dict) -> str:
     import dataclasses
 
     if "absent" in sec:
-        return f'<p class="absent">{esc(sec["absent"])} — <code>{esc(sec.get("selector", ""))}</code></p>'
+        note = _empty_note(sec) if sec.get("id") is None else ""
+        return f'<p class="absent">{note}{esc(sec["absent"])} — <code>{esc(sec.get("selector", ""))}</code></p>'
     ent = index.entity(sec["id"])
     by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))} if ent else {}
     f = by_name.get(sec["field"])
@@ -1882,7 +1893,8 @@ def _page_chart(index: Index, sec: dict) -> str:
 def _page_section(index: Index, sec: dict, links: Citations | None) -> str:
     title = f'<h2>{esc(sec["title"])}</h2>' if sec.get("title") else ""
     if sec["type"] == "tiles":
-        body = '<div class="tiles">' + "".join(_page_tile(t) for t in sec["tiles"]) + "</div>"
+        body = ('<div class="tiles">' + "".join(_page_tile(t, _empty_note(sec)) for t in sec["tiles"])
+                + "</div>")
     elif sec["type"] == "report":
         latest = sec.get("latest")
         if "absent" in sec:
@@ -1924,11 +1936,16 @@ def page_page(index: Index, page_id: str, params: dict | None = None) -> str:
                         for o in pages.declared(index) if o.id != found.id)
     switcher = f'<p class="report-feeds">other pages: {others}</p>' if others else ""
     sections = "\n".join(_page_section(index, s, links) for s in pg["sections"])
+    declared_links = (
+        '<p class="page-links">' + " · ".join(
+            f'<a href="{esc(link["url"])}">{esc(link["title"])}</a>' for link in pg["links"])
+        + "</p>") if pg["links"] else ""
     return f"""{head}
 <title>{esc(pg["title"])}</title></head><body>
 <nav><a href="/">fleet</a> &rsaquo; <a href="/dashboards">pages</a> &rsaquo; {esc(pg["title"])}</nav>
 <h1>{esc(pg["title"])}</h1>
 <p class="pane-question">{esc(pg["question"])}</p>
+{declared_links}
 {index_freshness(index)}
 {_page_controls(pg)}
 {switcher}

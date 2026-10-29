@@ -10,6 +10,7 @@ row's as-of — each linked to the area's own page.
 
 **Areas are declared, not hard-coded.** A `home:` config block names each
 area and the selectors (kind and facets, any-of) whose rows it owns. A row
+belongs to the FIRST area that selects it, so the tiles partition the fleet. A row
 that no area claims is counted in an **unassigned** tile — never dropped, so a
 new source shows up on home the day it is onboarded, before anyone files it.
 
@@ -137,7 +138,11 @@ def health(index: Any, exceptions: list) -> list[dict[str, Any]]:
     out = []
     every = list(index.all())
     for a in h.areas:
-        rows = [e for e in every if any(pages._matches(e, s, {}) for s in a.selects)]
+        # FIRST declared area wins a row: tiles partition the fleet, so their
+        # not-healthy counts sum to the exception total and no row is red on
+        # two tiles at once. Order areas specific-first, catch-alls last.
+        rows = [e for e in every if e.id not in owned
+                and any(pages._matches(e, s, {}) for s in a.selects)]
         owned.update(e.id for e in rows)
         out.append(_health(a.id, a.title, a.link, rows,
                            [e for e in rows if e.id in bad_ids]))

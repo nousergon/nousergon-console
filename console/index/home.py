@@ -100,8 +100,13 @@ def _health(aid: str, title: str, link: str, rows: list, bad: list) -> dict[str,
     from ..model.kinds import Kind
     from ..render.html import state_rank
 
-    states = [e.state_value for e in (bad or rows)]
-    worst = min(states, key=state_rank) if states else None
+    # The worst state over the rows the exception list counts — never over
+    # every row. A superseded FAILED run that a newer run already replaced is
+    # not an exception, and a tile reading "FAILED · 0 not healthy" (live
+    # 2026-10-29) contradicts itself. No exception and some rows is HEALTHY;
+    # no rows at all stays None ("no rows"), never green.
+    worst = (min((e.state_value for e in bad), key=state_rank) if bad
+             else ("HEALTHY" if rows else None))
     # Stalest over rows that state a CURRENT fact. A run is one dated event in
     # a history, so its age says nothing about whether the area is current —
     # only when an area has nothing but runs does its newest run stand in.

@@ -99,6 +99,20 @@ class Section:
     limit: int = DEFAULT_LIMIT
     #: report only: the `reports:` feed id.
     feed: str | None = None
+    #: table only: the `sort` field's values in display order (a closed set
+    #: such as window ids). A value the list does not name sorts after every
+    #: listed one, and a row without the field sorts last.
+    sort_order: tuple[str, ...] = ()
+    #: What the section says when its selector matches no row at all — the
+    #: source has published nothing yet ("no data yet: ..."). Rendered beside
+    #: the selector, never instead of it.
+    empty: str | None = None
+
+
+@dataclass(frozen=True)
+class Link:
+    title: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -109,6 +123,9 @@ class Page:
     sections: tuple[Section, ...]
     range: str = "all"
     variables: tuple[str, ...] = ()
+    #: Declared links shown under the question (the source of truth a page's
+    #: numbers come from, the definitions behind them).
+    links: tuple[Link, ...] = ()
 
     @property
     def url(self) -> str:
@@ -164,6 +181,36 @@ def _names(raw: Any, where: str, key: str) -> tuple[str, ...]:
     return tuple(n.strip() for n in raw)
 
 
+#: A declared link opens in a browser: http(s), or a path on this console.
+_LINK_URL = re.compile(r"^(https?://\S+|/\S*)$")
+
+
+def _links(raw: Any, where: str) -> tuple[Link, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise PagesConfigError(f"{where}: `links` must be a list of {{title, url}}")
+    out = []
+    for n, entry in enumerate(raw, start=1):
+        at = f"{where} link #{n}"
+        if not isinstance(entry, Mapping):
+            raise PagesConfigError(f"{at}: must be a mapping with `title` and `url`")
+        url = _text(entry, "url", at)
+        if not _LINK_URL.match(url):
+            raise PagesConfigError(f"{at}: `url` must be http(s):// or a /path, not {url!r}")
+        out.append(Link(title=_text(entry, "title", at), url=url))
+    return tuple(out)
+
+
+def _empty(raw: Mapping[str, Any], where: str) -> str | None:
+    if "empty" not in raw:
+        return None
+    text = str(raw.get("empty") or "").strip()
+    if not text:
+        raise PagesConfigError(f"{where}: `empty` must be non-blank text when declared")
+    return text
+
+
 def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     if not isinstance(raw, Mapping):
         raise PagesConfigError(f"{where}: must be a mapping")
@@ -173,6 +220,10 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
             f"{where}: `type` must be one of {', '.join(SECTION_TYPES)}, not {kind!r}")
     where = f"{where} ({kind})"
     title = str(raw.get("title") or "").strip()
+    empty = _empty(raw, where)
+    if empty is not None and kind == "report":
+        raise PagesConfigError(f"{where}: a report section already says \"no report yet\"; "
+                               "`empty` is for selector sections")
     if kind == "tiles":
         tiles = raw.get("tiles")
         if not isinstance(tiles, list) or not tiles:
@@ -185,7 +236,7 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
             parsed.append(Tile(label=_text(t, "label", at),
                                select=_selector(t.get("select"), at),
                                field=_text(t, "field", at)))
-        return Section(type=kind, title=title, tiles=tuple(parsed))
+        return Section(type=kind, title=title, tiles=tuple(parsed), empty=empty)
     if kind == "report":
         feed = _text(raw, "feed", where)
         if feeds is not None and feed not in feeds:
@@ -203,8 +254,15 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     sort = str(raw["sort"]).strip() if raw.get("sort") else None
     if sort is not None and kind != "table":
         raise PagesConfigError(f"{where}: only a table takes `sort`")
+    sort_order = _names(raw.get("sort_order"), where, "sort_order")
+    if sort_order and (sort is None or sort.startswith("-")):
+        raise PagesConfigError(
+            f"{where}: `sort_order` lists the values of an ascending `sort` field; "
+            "declare `sort: <field>` without `-`")
+    if len(set(sort_order)) != len(sort_order):
+        raise PagesConfigError(f"{where}: `sort_order` names a value twice")
     return Section(type=kind, title=title, select=select, fields=fields,
-                   sort=sort, limit=limit)
+                   sort=sort, limit=limit, sort_order=sort_order, empty=empty)
 
 
 def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
@@ -240,7 +298,7 @@ def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
             id=pid, title=_text(p, "title", where), question=_text(p, "question", where),
             sections=tuple(_section(s, f"{where} section #{n}", feeds)
                            for n, s in enumerate(sections, start=1)),
-            range=rng, variables=variables))
+            range=rng, variables=variables, links=_links(p.get("links"), where)))
     return tuple(pages)
 
 
@@ -363,9 +421,20 @@ def _safe_tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str
                 "id": None, "absent": f"tile failed: {type(exc).__name__}: {exc}"}
 
 
-def _sort_key(sort: str):
+def _sort_key(sort: str, order: tuple[str, ...] = ()):
     desc = sort.startswith("-")
     name = sort.lstrip("-")
+    if order:
+        rank = {v: i for i, v in enumerate(order)}
+
+        def ranked(row: dict) -> tuple:
+            v = row["fields"].get(name)
+            # Listed values in declared order, then any unlisted value by its
+            # text, then a row without the value.
+            return ((0, rank[str(v)], "") if v is not None and str(v) in rank
+                    else (1, 0, str(v)) if v is not None else (2, 0, ""))
+
+        return ranked
 
     def key(row: dict) -> tuple:
         v = row["fields"].get(name)
@@ -446,6 +515,8 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
     from ..render.html import is_exception, state_rank
 
     doc: dict[str, Any] = {"type": s.type, "title": s.title}
+    if s.empty is not None:
+        doc["empty"] = s.empty
     if s.type == "tiles":
         doc["tiles"] = [_safe_tile(index, t, variables) for t in s.tiles]
         return doc
@@ -487,7 +558,7 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         columns = list(seen)
     table = [_row(e, columns) for e in in_range]
     if s.sort:
-        table.sort(key=_sort_key(s.sort))
+        table.sort(key=_sort_key(s.sort, s.sort_order))
     else:
         table.sort(key=lambda r: state_rank(r["state"]))  # stable: newest within a state
     doc.update(columns=columns, matched=len(rows), total=len(table),
@@ -526,6 +597,7 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
     options = _variable_options(index, p)
     return {
         "id": p.id, "title": p.title, "url": p.url, "question": p.question,
+        "links": [{"title": link.title, "url": link.url} for link in p.links],
         "range": {"value": rng, "default": p.range, "options": list(RANGES),
                   "since": since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None},
         "variables": [{"name": v, "value": variables.get(v), "options": options[v]}

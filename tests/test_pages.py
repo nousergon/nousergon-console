@@ -287,3 +287,112 @@ def test_a_tile_that_raises_is_shown_on_the_tile_not_as_a_500(monkeypatch):
     tiles = _page(idx)["sections"][0]["tiles"]
     assert all(t["absent"].startswith("tile failed: TypeError") for t in tiles)
     assert _html(idx, resolve("/page/cost")).startswith("<!doctype html>")
+
+
+# ------------------------------------- declared order, empty state, links --
+# alpha-engine-config-I12798 (C12): the performance page lays out one row per
+# return window, in the window's own order (Day, WTD, ... since inception),
+# says "no data yet" until the producer's first object lands, and links the
+# ledger its numbers come from.
+
+def _window(wid, at="2026-10-28T02:00:00+00:00"):
+    return Entity(
+        kind=Kind.SIGNAL, id=f"perf:{wid}", state=State.HEALTHY,
+        provenance=Provenance("s3://b/ops/perf/", at, "s3://b/ops/perf/latest.json"),
+        facets={"pane": "performance", "perf": "window"},
+        detail={"fields": {"window": {"value": wid, "render": "text"}}})
+
+
+WINDOW_ORDER = ["day", "wtd", "mtd", "ytd", "yoy", "ltm", "inception"]
+PERF = {
+    "performance": {
+        "title": "Performance", "question": "How has the portfolio done?",
+        "links": [{"title": "NAV ledger", "url": "https://example.com/ledger"},
+                  {"title": "Sunday report", "url": "/reports/sunday"}],
+        "sections": [
+            {"type": "tiles", "title": "As of", "empty": "No data yet: nothing published",
+             "tiles": [{"label": "As of", "field": "as_of",
+                        "select": {"facets": {"perf": "summary"}}}]},
+            {"type": "table", "title": "Returns by window", "fields": ["window"],
+             "sort": "window", "sort_order": WINDOW_ORDER,
+             "empty": "No data yet: nothing published",
+             "select": {"facets": {"perf": "window"}}},
+        ],
+    },
+}
+
+
+def _perf_index(rows):
+    idx = Index()
+    idx.add_result(AdapterResult(name="fixture", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=tuple(rows)))
+    pages.attach(idx, pages.parse(PERF))
+    idx.finalize()
+    return idx
+
+
+def test_sort_order_lays_rows_out_in_the_declared_value_order():
+    shuffled = ["ltm", "inception", "day", "ytd", "wtd", "yoy", "mtd", "zzz"]
+    idx = _perf_index(_window(w) for w in shuffled)
+    page = render_json.payload(idx, resolve("/page/performance"))["page"]
+    got = [r["fields"]["window"] for r in page["sections"][1]["rows"]]
+    # Declared values in order, an unlisted value after them.
+    assert got == WINDOW_ORDER + ["zzz"]
+
+
+@pytest.mark.parametrize("section, message", [
+    ({"type": "table", "title": "x", "sort_order": ["a"],
+      "select": {"facets": {"a": "b"}}}, "ascending `sort`"),
+    ({"type": "table", "title": "x", "sort": "-w", "sort_order": ["a"],
+      "select": {"facets": {"a": "b"}}}, "ascending `sort`"),
+    ({"type": "table", "title": "x", "sort": "w", "sort_order": ["a", "a"],
+      "select": {"facets": {"a": "b"}}}, "twice"),
+    ({"type": "table", "title": "x", "empty": " ", "select": {"facets": {"a": "b"}}},
+     "non-blank"),
+    ({"type": "report", "feed": "daily", "empty": "none"}, "no report yet"),
+])
+def test_a_bad_order_or_empty_declaration_fails_by_name(section, message):
+    with pytest.raises(pages.PagesConfigError, match=message):
+        pages.parse({"p": {"title": "t", "question": "q", "sections": [section]}},
+                    feeds={"daily"})
+
+
+@pytest.mark.parametrize("links, message", [
+    ("https://x", "must be a list"),
+    ([{"title": "x"}], "`url` is required"),
+    ([{"title": "x", "url": "javascript:alert(1)"}], "http"),
+    ([{"url": "https://x"}], "`title` is required"),
+])
+def test_a_bad_link_fails_by_name(links, message):
+    with pytest.raises(pages.PagesConfigError, match=message):
+        pages.parse({"p": {"title": "t", "question": "q", "links": links,
+                           "sections": [{"type": "report", "feed": "daily"}]}},
+                    feeds={"daily"})
+
+
+def test_no_data_yet_is_said_beside_the_selector_and_links_render():
+    idx = _perf_index([])
+    page = render_json.payload(idx, resolve("/page/performance"))["page"]
+    assert page["links"] == [{"title": "NAV ledger", "url": "https://example.com/ledger"},
+                             {"title": "Sunday report", "url": "/reports/sunday"}]
+    assert [s.get("empty") for s in page["sections"]] == ["No data yet: nothing published"] * 2
+    html = _html(idx, resolve("/page/performance"))
+    assert html.count("No data yet: nothing published") == 2
+    # The selector is still named: the note explains the absence, never hides it.
+    assert "perf=window" in html and "perf=summary" in html
+    assert '<a href="https://example.com/ledger">NAV ledger</a>' in html
+    assert '<a href="/reports/sunday">Sunday report</a>' in html
+
+
+def test_the_empty_note_is_not_shown_once_rows_exist():
+    idx = _perf_index([_window("day")])
+    html = _html(idx, resolve("/page/performance"))
+    # The table has its row; only the tile (whose selector still matches
+    # nothing) says no data yet.
+    assert html.count("No data yet: nothing published") == 1
+
+
+def test_a_page_without_links_renders_no_link_line():
+    html = _html(_index(), resolve("/page/cost"))
+    assert 'class="page-links"' not in html
+    assert render_json.payload(_index(), resolve("/page/cost"))["page"]["links"] == []

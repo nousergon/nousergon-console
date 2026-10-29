@@ -1600,23 +1600,35 @@ home:
 # P1-P3, each tier worst state then oldest first; priority is read from a
 # `priority` facet or field).
 #
+# Optional on a selector section: `empty: <text>`, what it says when the
+# selector matches no row at all (a source that has published nothing yet),
+# shown beside the selector, never instead of it. Optional on a table:
+# `sort_order: [v1, v2, ...]`, the ascending `sort` field's values in display
+# order (unlisted values after them, rows without the field last). Optional on
+# a page: `links: [{title, url}]` (http(s) or a /path), shown under the
+# question, for the source of truth behind the page's numbers.
+#
 # The URL is the state: `?range=24h|7d|30d|90d|1y|all` (default `range`)
 # narrows tables, charts and exceptions; each name in `variables` is a facet,
 # and `?<facet>=<value>` narrows every section whose rows carry that facet.
 #
 # A bad declaration (an id that is not a URL segment, no sections, an unknown
 # section type or kind, a selector with no facet, a chart without exactly one
-# field, a report naming no declared feed, a range outside the vocabulary)
-# FAILS THE BUILD naming the page and section.
+# field, a report naming no declared feed, a range outside the vocabulary,
+# a `sort_order` without an ascending `sort`, a blank `empty`, a link that is
+# not http(s) or a /path) FAILS THE BUILD naming the page and section.
 pages:
   reliability:
     title: Reliability
     question: Is anything in the fleet failing, and what did the latest report say?
     range: 7d
     variables: [owner]
+    links:
+      - {title: All reports, url: /reports}
     sections:
       - type: exceptions
         title: What is wrong
+        empty: "No data yet: no report component has published"
         select: {kind: component, facets: {pane: reports}}
       - type: report
         feed: daily

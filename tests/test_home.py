@@ -118,3 +118,15 @@ def test_a_tile_reads_the_newest_row_that_carries_its_field_and_shows_its_whole(
     tile = render_json.payload(idx, resolve("/"))["headline"][0]
     assert tile["id"] == "summary" and tile["of"]["text"] == "9"
     assert "of 9" in _html(idx, resolve("/"))
+
+
+def test_a_tile_never_reads_failed_over_zero_exceptions():
+    # Live 2026-10-29: "Trading and models FAILED · 0 not healthy of 210". The
+    # word came from a row the exception list does not count (a superseded
+    # run); the tile's word must agree with its own count.
+    idx = _index()
+    areas = {a["id"]: a for a in home.health(idx, [])}
+    assert areas["trading"]["not_healthy"] == 0
+    assert areas["trading"]["worst"] == "HEALTHY"
+    empty = home.health(Index(), [])
+    assert empty[-1]["worst"] is None

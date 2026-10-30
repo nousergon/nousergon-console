@@ -43,6 +43,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from .. import calendar_cadence
 from ..model.descriptor import Binding
 from ..model.entity import Entity, Provenance
 from ..model.kinds import Kind, State
@@ -133,8 +134,9 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
             if stamp:
                 stamps.append(stamp)
 
-    cadence = _cadence_seconds(binding.spec)
     now = context.get("now") or datetime.now(timezone.utc)
+    cadence = _cadence_seconds(binding.spec, now=now,
+                               trading_day_checker=context.get("trading_day_checker"))
     as_of = max(stamps) if stamps else None
     state = _state(
         as_of, cadence,
@@ -183,7 +185,15 @@ def _parse(raw: Any) -> dict | None:
         return None
 
 
-def _cadence_seconds(spec: dict[str, Any]) -> float | None:
+def _cadence_seconds(spec: dict[str, Any], *, now: datetime | None = None,
+                     trading_day_checker: Any = None) -> float | None:
+    """A literal cadence wins; otherwise a calendar SYMBOL (`cadence:
+    weekday_sf|eod_sf|saturday_sf|continuous`) is translated by the one shared
+    translator, the grammar registry rows already use (alpha-engine-config-
+    I12854). A trading-day producer bound with a literal 1440 would read
+    MISSED every weekend, so before this its only honest binding was none,
+    and the component stayed UNREPORTED. An untranslatable symbol (or
+    `event_driven`) yields no cadence, exactly as before."""
     for key, mult in (("cadence_seconds", 1.0), ("cadence_minutes", 60.0),
                       ("cadence_hours", 3600.0)):
         raw = spec.get(key)
@@ -192,7 +202,16 @@ def _cadence_seconds(spec: dict[str, Any]) -> float | None:
                 return float(raw) * mult
             except (TypeError, ValueError):
                 return None
-    return None
+    minutes = calendar_cadence.effective_cadence_minutes(
+        spec.get("cadence"),
+        now=now,
+        trading_day_checker=trading_day_checker,
+        sla_minutes_after_cron=spec.get("sla_minutes_after_cron"),
+        interval_minutes=spec.get("interval_minutes"),
+        run_calendar=spec.get("run_calendar"),
+        active_hours_utc=spec.get("active_hours_utc"),
+    )
+    return minutes * 60.0 if minutes is not None else None
 
 
 def _state(as_of: str | None, cadence: float | None, factor: float,

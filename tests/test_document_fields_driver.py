@@ -154,3 +154,48 @@ def test_end_to_end_through_build_index(tmp_path):
     assert ent.detail["fields"]["promoted"]["value"] is True
     # Two documents, one entity, no spurious DEGRADED from a false conflict.
     assert ent.conflicts == ()
+
+
+# --- calendar symbols (alpha-engine-config-I12854) ---------------------------
+
+def _weekdays(date_str: str) -> bool:
+    return datetime.fromisoformat(date_str).date().weekday() < 5
+
+
+MONDAY_MORNING = datetime(2026, 8, 17, 9, 25, tzinfo=timezone.utc)
+
+
+def _read_symbolic(stamp, now, cadence="weekday_sf"):
+    docs = {"s3://b/x.json": {"a": 1}}
+    binding = _binding(documents=[{"key": "s3://b/x.json"}], cadence=cadence)
+    return document_fields.read(binding, {
+        "document_reader": docs.get, "object_stat": lambda k: stamp,
+        "now": now, "trading_day_checker": _weekdays})
+
+
+def test_a_weekday_producer_is_healthy_on_monday_from_fridays_write():
+    """A literal 1440 would read Friday's write MISSED all weekend."""
+    result = _read_symbolic("2026-08-14T12:31:00+00:00", MONDAY_MORNING)
+    assert result.entities[0].state is State.HEALTHY
+    assert result.cadence_seconds is not None
+
+
+def test_a_weekday_producer_silent_for_a_week_is_missed():
+    result = _read_symbolic("2026-08-07T12:31:00+00:00", MONDAY_MORNING)
+    assert result.entities[0].state is State.MISSED
+
+
+def test_a_literal_cadence_still_wins_over_a_symbol():
+    docs = {"s3://b/x.json": {"a": 1}}
+    binding = _binding(documents=[{"key": "s3://b/x.json"}], cadence="weekday_sf",
+                       cadence_minutes=60)
+    result = document_fields.read(binding, {
+        "document_reader": docs.get, "object_stat": lambda k: "2026-08-14T12:31:00+00:00",
+        "now": MONDAY_MORNING, "trading_day_checker": _weekdays})
+    assert result.cadence_seconds == 3600.0
+    assert result.entities[0].state is State.MISSED
+
+
+def test_event_driven_yields_no_cadence():
+    result = _read_symbolic("2026-08-01T00:00:00+00:00", MONDAY_MORNING, cadence="event_driven")
+    assert result.cadence_seconds is None

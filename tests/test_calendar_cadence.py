@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from console import calendar_cadence
 from console.index.graph import Index
 from console.model.entity import Entity, Provenance
@@ -234,3 +236,22 @@ def test_partition_lag_days_still_refuses_a_non_partition_placeholder():
         now=TUESDAY_MORNING, lag_days=1,
     )
     assert key is None
+
+
+# alpha-engine-config-I12857: a `*` glob segment names a family of keys, and
+# HEADing the literal `*` is a guaranteed 404 that rendered as `absent`.
+@pytest.mark.parametrize("template, cadence", [
+    ("market_data/index_contributions/*/latest.json", "eod_sf"),
+    ("market_data/index_contributions/*/{date}.json", "eod_sf"),
+    ("predictor/diagnostics/oos_rows/*/latest.parquet", "saturday_sf"),
+])
+def test_a_glob_segment_is_never_resolved_to_a_key(template, cadence):
+    assert calendar_cadence.resolve_key_template(
+        template, cadence=cadence, now=TUESDAY_MORNING, lag_days=0,
+    ) is None
+
+
+def test_a_literal_key_without_a_glob_is_still_returned_unchanged():
+    assert calendar_cadence.resolve_key_template(
+        "ops/console/exceptions-latest.json", cadence="continuous", now=TUESDAY_MORNING,
+    ) == "ops/console/exceptions-latest.json"

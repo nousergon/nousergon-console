@@ -316,8 +316,9 @@ def resolve_key_template(
 
     Returns the template unchanged when it carries no placeholder, and `None`
     when it carries one that cannot be honestly filled — an unresolvable
-    cadence, an unknown resolver, or a placeholder that does not name a
-    partition. `None` means "do not look", which leaves the row declared and
+    cadence, an unknown resolver, a placeholder that does not name a
+    partition, or a `*` glob segment, which names a family of keys rather
+    than one. `None` means "do not look", which leaves the row declared and
     unobserved: a visible coverage gap, and strictly better than HEADing a key
     the fleet never writes and rendering the 404 as a finding.
 
@@ -344,6 +345,13 @@ def resolve_key_template(
     a day a genuinely missing partition would go unobserved, so callers
     declare the smallest honest value.
     """
+    if "*" in template:
+        # A glob segment (`market_data/index_contributions/*/latest.json`)
+        # names a FAMILY of keys, not one. HEADing the literal `*` is a
+        # guaranteed 404, which rendered four objects the fleet writes daily
+        # as `absent` findings (alpha-engine-config-I12857). Nothing here can
+        # pick the member honestly, so the row stays declared and unobserved.
+        return None
     names = set(_PLACEHOLDER.findall(template))
     if not names:
         return template

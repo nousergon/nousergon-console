@@ -1838,6 +1838,16 @@ def _collapsed_milestones(model) -> str:
             f'{len(model.milestones)} met</summary>{body}</details>')
 
 
+def _tracked_by(e: Entity) -> str:
+    """The issue that tracks this row's fix, linked, or a declared absence."""
+    f = e.facets or {}
+    ref = f.get("tracked_by")
+    if not ref:
+        return '<em class="absent">no issue</em>'
+    url = f.get("tracked_by_url")
+    return f'<a href="{esc(url)}">{esc(ref)}</a>' if url else esc(ref)
+
+
 def exceptions_page(index: Index) -> str:
     """Every not-HEALTHY row, one tier per priority: P0, untriaged, P1-P3
     (CN-4.3 `.2`, Brian 2026-10-28 18:13Z). Within a tier, worst state first,
@@ -1857,12 +1867,13 @@ def exceptions_page(index: Index) -> str:
         for t in pages.PRIORITY_TIERS if t in tiers)
     body = "".join(
         f'<h2 id="tier-{esc(t)}">{esc(t)} · {len(tiers[t])}</h2>'
-        "<table><thead><tr><th>what</th><th>state</th><th>owner</th>"
-        "<th>as-of</th><th>evidence</th></tr></thead><tbody>"
+        "<table><thead><tr><th>what</th><th>state</th><th>tracked by</th>"
+        "<th>owner</th><th>as-of</th><th>evidence</th></tr></thead><tbody>"
         + "".join(
             f'<tr class="state-{esc(e.state_value)}">'
             f'<td><a href="{esc(path_for_entity(e.kind, e.id))}">{esc(labels.get(e.id) or e.id)}</a></td>'
             f'<td><span class="chip">{esc(state_text(e))}</span></td>'
+            f'<td>{_tracked_by(e)}</td>'
             f'<td>{esc((e.facets or {}).get("owner") or "—")}</td>'
             f'<td>{as_of_html(e.provenance.as_of)}</td>'
             + (f'<td><a href="{esc(e.provenance.evidence)}">evidence</a></td>'

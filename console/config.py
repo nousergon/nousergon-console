@@ -39,6 +39,7 @@ from .index import citations as citation_links
 from .index import home as declared_home
 from .index import pages as declared_pages
 from .index import reports as report_feeds
+from .index import triage as triage_overlay
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
@@ -119,6 +120,11 @@ def validate_config(config: dict[str, Any]) -> None:
     # Second rule (alpha-engine-config-I10035): a malformed
     # `registry_manifest:` would shrink §7's denominator unseen.
     registry_manifest_names(config)
+    # Third rule: a `triage:` block the build could not read from.
+    try:
+        triage_overlay.parse(config.get("triage"))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def _check_declared_registry_default_state(label: str, cfg: dict[str, Any]) -> None:
@@ -316,6 +322,18 @@ def build_index(config: dict[str, Any]) -> Index:
     # because somebody added a prefix to this file.
     for result in resolve_bindings(descriptors, _driver_context(config)):
         index.add_result(result)
+
+    # Which issue tracks each red row, and at what priority (`index/triage.py`).
+    # Without it every component and run row reads "untriaged" on /exceptions.
+    try:
+        triage_source = triage_overlay.parse(config.get("triage"))
+    except ValueError as exc:
+        index.add_result(_config_error_result(triage_overlay.SOURCE_NAME, ConfigError(str(exc))))
+        triage_source = None
+    if triage_source is not None:
+        marks, result = triage_overlay.read(triage_source, now_iso())
+        index.add_result(result)
+        index.set_triage(marks)
 
     # §9.8: computed once per build (a git subprocess per registry row is not
     # something a request handler should pay for). Defaults to the process's

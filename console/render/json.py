@@ -179,6 +179,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "rows": [{**entity(e, with_document=False),
                          "label": view.labels.get(e.id),
                          "priority": pages.PRIORITY_TIERS[pages.priority_rank(e)],
+                         "tracked_by": (e.facets or {}).get("tracked_by"),
                          "runs": view.runs.get(e.id)} for e in rows]}
     elif req.view == "page":
         from ..index import pages

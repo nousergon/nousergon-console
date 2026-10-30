@@ -89,6 +89,8 @@ class Index:
         # two that can disagree. See `index/cadence_state.py`.
         self._staleness_factor = 1.5
         self._finalized = False
+        # Row id -> tracking issue (`index/triage.py`), set by build_index.
+        self._triage: dict = {}
         self._entities: dict[str, Entity] = {}
         self._liveness_watcher: str | None = None
         self._by_kind: dict[Kind, list[Entity]] = {k: [] for k in Kind}
@@ -395,10 +397,40 @@ class Index:
         # inheritance just above — it can only run once every id's own
         # `_reconcile` has produced a merged entity to look up.
         self._entities = resolve_event_trigger_state(self._entities)
+        self._apply_triage()
         for ent in self._entities.values():
             self._by_kind[ent.kind].append(ent)
         self._finalized = True
         return self
+
+    def set_triage(self, marks: dict) -> None:
+        """Which issue tracks each row (`index/triage.py`). Applied at finalize,
+        after every state is resolved, so it can only add facets — it never
+        changes what state a row is in."""
+        self._triage = dict(marks)
+        self._finalized = False
+
+    def triage_counts(self) -> dict[str, int]:
+        """How many map entries this build carried, and how many named a row."""
+        self.finalize()
+        marks = self._triage
+        return {"entries": len(marks),
+                "matched": sum(1 for k in marks if k in self._entities)}
+
+    def _apply_triage(self) -> None:
+        marks = self._triage
+        if not marks:
+            return
+        from . import triage
+        from .pages import _fields
+
+        for row_id, mark in marks.items():
+            ent = self._entities.get(row_id)
+            if ent is None:
+                continue
+            own = bool((ent.facets or {}).get("priority")) or "priority" in _fields(ent)
+            self._entities[row_id] = dataclasses.replace(
+                ent, facets=triage.stamp(ent.facets or {}, mark, own_priority=own))
 
     def _reconcile(self, ent: Entity, claims: list[Claim]) -> Entity:
         """The two states that exist only as a comparison BETWEEN claims (§8.3).

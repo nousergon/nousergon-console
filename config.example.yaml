@@ -1657,3 +1657,10 @@ citations:
   base_url: https://github.com/example-org
   repos: [example-repo, example-config]
   aliases: {ex: example-repo, cfg: example-config}
+
+# Which issue tracks each red row, and at what priority (console/index/triage.py).
+# Read once per build; a row it names shows `tracked by <issue>` on /exceptions
+# and sorts into that issue's P-tier. Unreadable = a FAILED source, named.
+# triage:
+#   bucket: alpha-engine-research
+#   key: ops/daily-summaries/console-triage.json

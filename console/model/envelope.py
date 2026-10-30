@@ -114,6 +114,15 @@ class AdapterResult:
     # a discovery adapter that really does cover the whole population, and it
     # preserves the pre-existing behaviour for one that has not said.
     discovery_scope: tuple[tuple[str, str], ...] = ()
+    # How far back this DISCOVERY pass can see, in days, when it enumerates
+    # only what was ACTIVE recently rather than everything that exists —
+    # CloudWatch `ListMetrics` returns only metrics with a datapoint in the
+    # past two weeks, so a Lambda idle longer than that is invisible to it,
+    # not absent (alpha-engine-config-I12856). `None` (the default) means a
+    # true enumeration with no horizon. The index uses it to keep `ABSENT`
+    # off a row whose own declaration says it may be silent longer than the
+    # pass can see; it never narrows the scope above.
+    discovery_horizon_days: float | None = None
     # Component descriptors this source declared (§2.6). Only a registry
     # adapter populates it. Carried on the result rather than read by the
     # adapter itself, because walking a descriptor's bindings means reaching

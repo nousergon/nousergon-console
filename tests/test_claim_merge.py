@@ -13,6 +13,8 @@ rules about which source may say what.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from console.index.graph import Index, NamespaceCollision
@@ -226,6 +228,43 @@ def test_an_unscoped_discovery_pass_still_claims_the_whole_fleet():
     unscoped = _result("systemd", ClaimClass.DISCOVERY,
                        _comp(State.HEALTHY, "systemd", cid="comp-other"))
     assert _index(declared, unscoped).entity("comp-alpha").state is State.ABSENT
+
+
+def _horizon_case(detail, *, horizon=14.0, unlimited=False):
+    """A declared Lambda the metrics enumeration did not list."""
+    declared = _result("registry", ClaimClass.DECLARATION, dataclasses.replace(
+        _comp(State.UNREPORTED, "registry", facets={"substrate": "lambda"}),
+        detail=detail))
+    scoped = AdapterResult(
+        name="cloudwatch", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=(_comp(State.HEALTHY, "cloudwatch", facets={"substrate": "lambda"},
+                        cid="comp-other"),),
+        discovery_scope=(("substrate", "lambda"),), discovery_horizon_days=horizon)
+    results = [declared, scoped]
+    if unlimited:
+        results.append(_result("lister", ClaimClass.DISCOVERY,
+                               _comp(State.HEALTHY, "lister", cid="comp-other"),
+                               discovery_scope=(("substrate", "lambda"),)))
+    return _index(*results).entity("comp-alpha").state
+
+
+def test_an_event_driven_row_is_not_absent_from_a_recent_activity_listing():
+    """alpha-engine-config-I12856: ListMetrics forgets a metric two weeks after
+    its last datapoint, so an idle event-driven Lambda is unseen, not absent."""
+    assert _horizon_case({"cadence": "event_driven"}) is State.UNREPORTED
+
+
+def test_a_cadence_longer_than_the_horizon_is_not_absent():
+    assert _horizon_case({"cadence_minutes": 30 * 1440.0}) is State.UNREPORTED
+
+
+@pytest.mark.parametrize("detail", [{}, {"cadence_minutes": 1440.0}])
+def test_a_row_that_should_have_been_seen_is_still_absent(detail):
+    assert _horizon_case(detail) is State.ABSENT
+
+
+def test_a_true_enumeration_overrides_the_horizon():
+    assert _horizon_case({"cadence": "event_driven"}, unlimited=True) is State.ABSENT
 
 
 # ------------------------------------------------------- conflict, §9.9 -----

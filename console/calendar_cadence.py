@@ -93,6 +93,8 @@ def effective_cadence_minutes(
     trading_day_checker: TradingDayChecker | None = None,
     sla_minutes_after_cron: float | None = None,
     interval_minutes: float | None = None,
+    run_calendar: str | None = None,
+    active_hours_utc: Any = None,
 ) -> float | None:
     """Translate a symbolic cadence into a minute ceiling valid AS OF `now`.
 
@@ -113,7 +115,16 @@ def effective_cadence_minutes(
     if symbol == CONTINUOUS:
         if not interval_minutes:
             return None
-        return float(interval_minutes) + grace
+        flat = float(interval_minutes) + grace
+        if now is None and not (run_calendar or active_hours_utc):
+            return flat
+        return flat + _continuous_idle_minutes(
+            float(interval_minutes) + grace,
+            now=now or datetime.now(timezone.utc),
+            run_calendar=run_calendar,
+            active_hours_utc=active_hours_utc,
+            trading_day_checker=trading_day_checker,
+        )
 
     now = now or datetime.now(timezone.utc)
 
@@ -135,6 +146,93 @@ def effective_cadence_minutes(
     if boundary is None:
         return None
     return _minutes_since(boundary, now) + _ONE_DAY_MINUTES + grace
+
+
+#: `run_calendar` symbols for a `continuous` producer, the same closed
+#: vocabulary the fleet's freshness monitor reads from the same registry row
+#: (`ARTIFACT_REGISTRY.yaml`): `all_days` runs every calendar day,
+#: `trading_days` only on session days, `market_hours` only inside the
+#: `active_hours_utc` `[start, end)` window on session days.
+ALL_DAYS = "all_days"
+TRADING_DAYS = "trading_days"
+MARKET_HOURS = "market_hours"
+
+
+def _active_window(active_hours_utc: Any) -> tuple[int, int] | None:
+    """`[start, end)` UTC hours, or `None` when the declaration is not one."""
+    if not isinstance(active_hours_utc, (list, tuple)) or len(active_hours_utc) != 2:
+        return None
+    try:
+        start, end = int(active_hours_utc[0]), int(active_hours_utc[1])
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= start < end <= 24:
+        return None
+    return start, end
+
+
+def _continuous_idle_minutes(
+    settle_minutes: float,
+    *,
+    now: datetime,
+    run_calendar: str | None,
+    active_hours_utc: Any,
+    trading_day_checker: TradingDayChecker | None,
+) -> float:
+    """Extra minutes a session-bound `continuous` producer is owed while idle
+    (alpha-engine-config-I12860).
+
+    A flat `interval + sla` ceiling is right for a producer that runs around
+    the clock. For one declared `run_calendar: market_hours` (a daemon that
+    writes only inside its `active_hours_utc` window on session days) it makes
+    the row stale by construction every night, weekend and holiday — measured
+    2026-10-30 01:17Z: `trades/open_orders/latest.json`, last written at
+    20:00Z by a healthy daemon, rendered `stale` on both daily snapshots.
+
+    The answer is the time since the producer was last EXPECTED to write: the
+    close of the most recent active window that has closed. Inside a window,
+    once one `interval + sla` has passed since it opened, nothing is owed and
+    the flat ceiling applies, so a daemon that dies mid-session is still
+    caught. Before that settle point, the floor would reach back before the
+    window existed, so the previous window's close is the anchor (the same
+    leading-edge rule the freshness monitor applies, alpha-engine-config-I8681).
+
+    `trading_days` is the same rule with a whole-day window. `all_days`, an
+    undeclared calendar, a malformed window, and a daily-or-longer interval
+    owe nothing — the flat ceiling stands. So does a missing trading calendar:
+    without one a weekend cannot be told from a miss, and the stricter
+    ceiling is the honest one, never an assumed-fresh one.
+    """
+    rc = str(run_calendar or "").strip().lower()
+    window = _active_window(active_hours_utc)
+    if not rc and window is not None:
+        rc = MARKET_HOURS
+    if rc == TRADING_DAYS:
+        window = (0, 24)
+    elif rc != MARKET_HOURS or window is None:
+        return 0.0
+    if settle_minutes >= _ONE_DAY_MINUTES:
+        return 0.0
+    checker = trading_day_checker or default_trading_day_checker()
+    if checker is None:
+        return 0.0
+    start, end = window
+    today = now.date()
+    if checker(today.isoformat()):
+        opened = datetime(today.year, today.month, today.day, start, tzinfo=timezone.utc)
+        closes = opened + timedelta(hours=end - start)
+        if opened + timedelta(minutes=settle_minutes) <= now < closes:
+            return 0.0  # inside the window and settled: the flat ceiling holds
+        if now >= closes:
+            return (now - closes).total_seconds() / 60.0
+    cursor = today - timedelta(days=1)
+    for _ in range(_TRADING_DAY_LOOKBACK_LIMIT):
+        if checker(cursor.isoformat()):
+            closed = datetime(cursor.year, cursor.month, cursor.day,
+                              tzinfo=timezone.utc) + timedelta(hours=end)
+            return max(0.0, (now - closed).total_seconds() / 60.0)
+        cursor -= timedelta(days=1)
+    return 0.0
 
 
 def _minutes_since(boundary: date, now: datetime) -> float:
@@ -210,6 +308,8 @@ def apply_declared_cadence(
         trading_day_checker=trading_day_checker,
         sla_minutes_after_cron=entry.get("sla_minutes_after_cron"),
         interval_minutes=entry.get("interval_minutes"),
+        run_calendar=entry.get("run_calendar"),
+        active_hours_utc=entry.get("active_hours_utc"),
     )
     if minutes is not None:
         detail["cadence_minutes"] = minutes

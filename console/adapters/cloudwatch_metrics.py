@@ -50,6 +50,7 @@ Over the configured trailing window, per `observability-policy.md` §8.3:
 | `invocations == 0`, and no datapoint in the history lookback | `NEVER_RAN` |
 | `invocations == 0`, with a datapoint in the history lookback | `UNREPORTED` |
 | declared in the registry, absent from the namespace | `ABSENT` (by merge) |
+| …and declared silent longer than `ListMetrics`' 14 days | `UNREPORTED` (by merge) |
 
 The fourth row is the one that costs something and it is deliberate. A
 component that has invoked before but not inside the window is either idle by
@@ -340,9 +341,30 @@ def fetch(
         unavailable=("cadence", "cost", "history") if partial
         else ("cadence", "cost"),
         discovery_scope=scope,
+        discovery_horizon_days=_discovery_horizon_days(config),
     )
     _CACHE[configured_name] = (clock(), result)
     return result
+
+
+#: CloudWatch `ListMetrics` returns only metrics that have had a datapoint in
+#: the past two weeks (AWS API reference, ListMetrics). Enumerating the
+#: namespace therefore finds what was ACTIVE in that window, not everything
+#: that exists — the horizon the index needs before it may call an unseen
+#: declared component ABSENT (alpha-engine-config-I12856).
+LIST_METRICS_HORIZON_DAYS = 14.0
+
+
+def _discovery_horizon_days(config: dict[str, Any]) -> float:
+    """The enumeration's look-back, configurable only DOWNWARD: a deployment
+    may know its namespace forgets sooner, but a value above the API's own
+    two weeks would claim a sight the enumerator does not have."""
+    try:
+        configured = float(config.get("discovery_horizon_days") or LIST_METRICS_HORIZON_DAYS)
+    except (TypeError, ValueError):
+        return LIST_METRICS_HORIZON_DAYS
+    return min(configured, LIST_METRICS_HORIZON_DAYS) if configured > 0 \
+        else LIST_METRICS_HORIZON_DAYS
 
 
 def _discovery_scope(config: dict[str, Any]) -> tuple[tuple[str, str], ...]:

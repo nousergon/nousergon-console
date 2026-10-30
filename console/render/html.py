@@ -36,6 +36,7 @@ from ..model.fields import (
 )
 from ..index.numbers import artifact_observation_coverage
 from ..model.kinds import (
+    DECLARED_LIFECYCLE_STATES,
     EXCEPTION_VALUES,
     REPORTED_STATE_DETAIL,
     STATE_FILTER,
@@ -97,13 +98,64 @@ def _is_component_echo(ent: Entity, index: Index) -> bool:
     return False
 
 
+#: The three declared lifecycle dispositions (§8.3). A component in one of
+#: them is a decision already taken — the reason it is absent from
+#: `EXCEPTION_STATES` — and the same decision covers what it emitted.
+_DECIDED_STATES = frozenset(DECLARED_LIFECYCLE_STATES.values())
+
+
+def _is_decided_residue(ent: Entity, index: Index) -> bool:
+    """Whether a RUN or ARTIFACT row is the leftover of a component whose
+    declared lifecycle is DISABLED, DEPRECATED or RETIRED.
+
+    A check envelope mints a Component, a Run and an Artifact from one publish
+    (`adapters/checks_envelope.py`). When the registry later declares that
+    component off, the component leaves the exception view — but its last run
+    (`belongs-to` it) and its envelope artifact (which it `produces`) kept
+    listing as DEGRADED/FAILED/stale, forever, because nothing will write
+    either again. Measured 2026-10-30 on the exceptions snapshot: 17 such rows
+    (alpha-engine-config-I12830), every one of them work nobody can do.
+
+    Both halves are strict. A run counts only when the component it belongs to
+    is itself in a declared state. An artifact counts only when it has at least
+    one producer and EVERY producer is in a declared state — an artifact still
+    written by one in-service component is that component's fact and lists.
+    The rows stay in the index and on their own pages; only the exception VIEW
+    drops them (§4.3), exactly as `_is_component_echo` does.
+    """
+    if ent.kind is Kind.RUN:
+        owners = [edge.target for edge in index.related(ent.id)
+                  if edge.source == ent.id and edge.rel == "belongs-to"]
+    elif ent.kind is Kind.ARTIFACT:
+        # The index stores an adapter's `produces` edge in both directions;
+        # read either spelling so the rule does not depend on which one a
+        # given adapter emitted.
+        owners = [
+            edge.target if edge.source == ent.id else edge.source
+            for edge in index.related(ent.id)
+            if (edge.source == ent.id and edge.rel == "produced-by")
+            or (edge.target == ent.id and edge.rel == "produces")
+        ]
+    else:
+        return False
+    components = [index.entity(o) for o in owners]
+    components = [c for c in components if c is not None and c.kind is Kind.COMPONENT]
+    if not components:
+        return False
+    return all(c.state in _DECIDED_STATES for c in components)
+
+
 def landing_exceptions(index: Index) -> list[Entity]:
     """The §4.3 exception list: every non-HEALTHY row, minus a run that only
-    echoes the component derived from it (alpha-engine-config-I8979). The
-    component row stays; its latest run is reachable from it by relation."""
+    echoes the component derived from it (alpha-engine-config-I8979), and
+    minus a run or artifact left behind by a component whose lifecycle is
+    declared off (alpha-engine-config-I12830). The component row stays; its
+    runs and artifacts are reachable from it by relation."""
     return [
         e for e in index.all()
-        if is_exception(e) and not _is_component_echo(e, index)
+        if is_exception(e)
+        and not _is_component_echo(e, index)
+        and not _is_decided_residue(e, index)
     ]
 
 

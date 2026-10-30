@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from console.adapters import checks_envelope
 from console.config import ADAPTERS
 from console.index.graph import Index
@@ -329,3 +331,85 @@ def test_body_without_check_id_falls_back_to_path_group():
 
 def test_checks_envelope_is_registered():
     assert "checks-envelope" in ADAPTERS
+
+
+def _decided_index(component_state):
+    """A declared component (registry claim) plus the run and envelope artifact
+    a check envelope minted for it before it was declared off."""
+    from console.model.entity import Edge, Entity, Provenance
+    from console.model.envelope import AdapterResult, ClaimClass
+
+    at = "2026-08-06T09:26:14+00:00"
+    declared = Entity(
+        kind=Kind.COMPONENT, id="comp-gone", state=component_state,
+        provenance=Provenance(source="registry", as_of=None, evidence="file://registry"),
+    )
+    # The component's latest observation is HEALTHY and later than the run,
+    # so the run is NOT a component echo (I8979) and lists on its own merit.
+    observed = Entity(
+        kind=Kind.COMPONENT, id="comp-gone", state=State.HEALTHY,
+        provenance=Provenance(source="s3://x", as_of="2026-08-07T09:26:14+00:00",
+                              evidence="s3://x/comp-gone"),
+    )
+    run = Entity(
+        kind=Kind.RUN, id=f"comp-gone@{at}", state=State.DEGRADED,
+        provenance=Provenance(source="s3://x", as_of=at, evidence="s3://x/comp-gone"),
+    )
+    artifact = Entity(
+        kind=Kind.ARTIFACT, id=f"{PREFIX}comp-gone/latest.json", state="stale",
+        provenance=Provenance(source="s3://x", as_of=at, evidence="s3://x/comp-gone"),
+    )
+    index = Index()
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.DECLARATION, fetched_at=at, name="registry",
+        status=AdapterStatus.OK, entities=(declared,),
+    ))
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.OBSERVATION, fetched_at=at, name="checks",
+        status=AdapterStatus.OK, entities=(observed, run, artifact),
+        edges=(Edge(source=run.id, rel="belongs-to", target="comp-gone"),
+               Edge(source="comp-gone", rel="produces", target=artifact.id)),
+    ))
+    return index, run, artifact
+
+
+@pytest.mark.parametrize("decided", [State.RETIRED, State.DISABLED, State.DEPRECATED])
+def test_run_and_artifact_of_a_component_declared_off_leave_the_exception_view(decided):
+    """alpha-engine-config-I12830: the component left the list when it was
+    declared off; its last run and its envelope artifact must leave with it.
+    Both stay in the index and remain exceptions in isolation."""
+    index, run, artifact = _decided_index(decided)
+    assert index.entity("comp-gone").state is decided
+    exceptions = landing_exceptions(index)
+    ids = {e.id for e in exceptions}
+    assert run.id not in ids and artifact.id not in ids
+    assert is_exception(index.entity(run.id))
+    assert is_exception(index.entity(artifact.id))
+
+
+def test_run_and_artifact_of_an_in_service_component_still_list():
+    """Without a declared lifecycle the same rows are live facts and list."""
+    index, run, artifact = _decided_index(State.UNREPORTED)
+    ids = {e.id for e in landing_exceptions(index)}
+    assert run.id in ids and artifact.id in ids
+
+
+def test_artifact_with_one_in_service_producer_still_lists():
+    """An artifact is residue only when EVERY producer is declared off."""
+    from console.model.entity import Edge, Entity, Provenance
+    from console.model.envelope import AdapterResult, ClaimClass
+
+    index, run, artifact = _decided_index(State.RETIRED)
+    live = Entity(
+        kind=Kind.COMPONENT, id="comp-live", state=State.HEALTHY,
+        provenance=Provenance(source="s3://y", as_of="2026-10-30T00:00:00+00:00",
+                               evidence="s3://y"),
+    )
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.OBSERVATION, fetched_at="2026-10-30T00:00:00+00:00",
+        name="other", status=AdapterStatus.OK, entities=(live,),
+        edges=(Edge(source="comp-live", rel="produces", target=artifact.id),),
+    ))
+    ids = {e.id for e in landing_exceptions(index)}
+    assert artifact.id in ids
+    assert run.id not in ids

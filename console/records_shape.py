@@ -451,9 +451,30 @@ def _facet_value_map(facet_name: Any, spec: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def _first_present(path_root: dict, state_field: Any) -> Any:
+    """The state value at `state_field`, which is one path or an ordered LIST
+    of paths: the first path carrying a non-null value wins.
+
+    The list form exists for a source that publishes its own resolved
+    disposition beside its raw verdict (alpha-engine-config-I12859): the
+    freshness monitor writes `console_state: DISABLED` on a row a recorded
+    ruling declared off, and `state: stale` on every row, so
+    `[console_state, state]` renders the declaration where one exists and
+    the raw verdict everywhere else. A single string behaves exactly as before.
+    """
+    if not state_field:
+        return None
+    paths = state_field if isinstance(state_field, (list, tuple)) else (state_field,)
+    for path in paths:
+        value = get_path(path_root, path)
+        if value is not None:
+            return value
+    return None
+
+
 def resolve_state(
     kind: Kind,
-    state_field: str | None,
+    state_field: str | list[str] | None,
     state_default: Any,
     state_map: dict[str, Any] | None,
     path_root: dict,
@@ -472,7 +493,7 @@ def resolve_state(
     `state_map` entry naming a state that does not exist is also `DEGRADED`
     — a typo in the map must never read as healthy.
     """
-    raw = get_path(path_root, state_field) if state_field else None
+    raw = _first_present(path_root, state_field)
     if raw is None:
         raw = state_default
 

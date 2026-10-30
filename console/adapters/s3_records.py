@@ -73,7 +73,8 @@ is carried as ``detail["job_label"]``. It may instead be a map from job id
 to name, for one adapter that mints several jobs (``{"director:plan":
 "Evening plan", "director:run": "Nightly run record"}``).
 
-**Component/Run state** comes from ``state_field`` (a dotted path), resolved in
+**Component/Run state** comes from ``state_field`` (a dotted path, or an
+ordered list of them where the first non-null value wins), resolved in
 this order: an optional ``state_map`` translating the source's own vocabulary
 (``{"passed": "HEALTHY", "failed": "FAILED"}``) into
 `observability-policy.md` §8.3's thirteen, then a direct match on a state name.

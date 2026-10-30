@@ -413,3 +413,58 @@ def test_artifact_with_one_in_service_producer_still_lists():
     ids = {e.id for e in landing_exceptions(index)}
     assert artifact.id in ids
     assert run.id not in ids
+
+
+def _event_driven_index(producer_cadences):
+    """One envelope artifact reading `no-cadence-declared`, produced by one
+    registry-declared component per entry in `producer_cadences`."""
+    from console.model.entity import Edge, Entity, Provenance
+    from console.model.envelope import AdapterResult, ClaimClass
+
+    at = "2026-10-29T20:59:32+00:00"
+    artifact = Entity(
+        kind=Kind.ARTIFACT, id=f"{PREFIX}comp-event/latest.json",
+        state="no-cadence-declared",
+        provenance=Provenance(source="s3://x", as_of=at, evidence="s3://x/comp-event"),
+    )
+    index = Index()
+    edges = []
+    for n, cadence in enumerate(producer_cadences):
+        cid = f"comp-event-{n}"
+        detail = {"cadence": cadence} if cadence else {}
+        index.add_result(AdapterResult(
+            claim_class=ClaimClass.DECLARATION, fetched_at=at, name=f"registry-{n}",
+            status=AdapterStatus.OK, entities=(Entity(
+                kind=Kind.COMPONENT, id=cid, state=State.HEALTHY, detail=detail,
+                provenance=Provenance(source="registry", as_of=None,
+                                      evidence="file://registry")),),
+        ))
+        edges.append(Edge(source=cid, rel="produces", target=artifact.id))
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.OBSERVATION, fetched_at=at, name="checks",
+        status=AdapterStatus.OK, entities=(artifact,), edges=tuple(edges),
+    ))
+    return index, artifact
+
+
+def test_envelope_of_an_event_driven_producer_leaves_the_exception_view():
+    """alpha-engine-config-I12858: a producer declared `cadence: event_driven`
+    has no cadence to stamp, so `no-cadence-declared` is its declared answer."""
+    index, artifact = _event_driven_index(["event_driven"])
+    assert artifact.id not in {e.id for e in landing_exceptions(index)}
+    assert is_exception(index.entity(artifact.id))
+
+
+@pytest.mark.parametrize("cadences", [[None], ["event_driven", None], []])
+def test_envelope_with_an_undeclared_or_no_producer_still_lists(cadences):
+    index, artifact = _event_driven_index(cadences)
+    assert artifact.id in {e.id for e in landing_exceptions(index)}
+
+
+def test_a_stale_envelope_of_an_event_driven_producer_still_lists():
+    """Only the one value folds: a stale or absent envelope is a real fact."""
+    index, artifact = _event_driven_index(["event_driven"])
+    import dataclasses
+    index._entities[artifact.id] = dataclasses.replace(
+        index.entity(artifact.id), state="stale")
+    assert artifact.id in {e.id for e in landing_exceptions(index)}

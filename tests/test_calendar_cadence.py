@@ -255,3 +255,89 @@ def test_a_literal_key_without_a_glob_is_still_returned_unchanged():
     assert calendar_cadence.resolve_key_template(
         "ops/console/exceptions-latest.json", cadence="continuous", now=TUESDAY_MORNING,
     ) == "ops/console/exceptions-latest.json"
+
+
+# ------------------------------------- continuous, session-bound producer ---
+# alpha-engine-config-I12860: `trades/open_orders/latest.json` is written every
+# 30 minutes inside `active_hours_utc: [14, 20]` on session days only. A flat
+# `interval + sla` ceiling made it stale every night.
+
+_OPEN_ORDERS = dict(interval_minutes=30, sla_minutes_after_cron=15,
+                    run_calendar="market_hours", active_hours_utc=[14, 20])
+
+
+def _ceiling(now, **row):
+    return calendar_cadence.effective_cadence_minutes(
+        "continuous", now=now, trading_day_checker=_weekday_only_checker, **row)
+
+
+def test_market_hours_overnight_is_owed_the_time_since_the_window_closed():
+    # Thursday 2026-08-13 window closed at 20:00Z; Friday 01:17Z is 317 min later.
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    assert _ceiling(now, **_OPEN_ORDERS) == 317.0 + 45.0
+
+
+def test_market_hours_mid_session_keeps_the_flat_ceiling():
+    """A daemon that dies mid-session is still caught at interval + sla."""
+    now = datetime(2026, 8, 14, 16, 0, tzinfo=timezone.utc)
+    assert _ceiling(now, **_OPEN_ORDERS) == 45.0
+
+
+def test_market_hours_leading_edge_anchors_on_the_previous_close():
+    # 14:10Z Friday: less than interval + sla since the 14:00Z open, so the
+    # floor still precedes the window. Thursday's 20:00Z close is 18h10m back.
+    now = datetime(2026, 8, 14, 14, 10, tzinfo=timezone.utc)
+    assert _ceiling(now, **_OPEN_ORDERS) == 18 * 60 + 10 + 45.0
+    settled = datetime(2026, 8, 14, 14, 45, tzinfo=timezone.utc)
+    assert _ceiling(settled, **_OPEN_ORDERS) == 45.0
+
+
+def test_market_hours_weekend_reaches_back_to_fridays_close():
+    # Monday 09:00Z: Friday 20:00Z close is 2 days 13 hours back.
+    assert _ceiling(MONDAY_MORNING, **_OPEN_ORDERS) == (2 * 24 + 13) * 60 + 45.0
+
+
+def test_active_hours_alone_implies_market_hours():
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    row = dict(_OPEN_ORDERS)
+    row.pop("run_calendar")
+    assert _ceiling(now, **row) == 317.0 + 45.0
+
+
+def test_trading_days_is_idle_only_on_non_session_days():
+    row = dict(interval_minutes=60, sla_minutes_after_cron=0, run_calendar="trading_days")
+    assert _ceiling(TUESDAY_MORNING, **row) == 60.0
+    sunday = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+    # Friday's whole-day window closed at Saturday 00:00Z, 36h before.
+    assert _ceiling(sunday, **row) == 36 * 60 + 60.0
+
+
+def test_all_days_and_undeclared_calendars_keep_the_flat_ceiling():
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    assert _ceiling(now, interval_minutes=30, sla_minutes_after_cron=15,
+                    run_calendar="all_days", active_hours_utc=[14, 20]) == 45.0
+    assert _ceiling(now, interval_minutes=30, sla_minutes_after_cron=15) == 45.0
+
+
+def test_a_malformed_window_or_no_calendar_never_loosens_the_ceiling():
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    assert _ceiling(now, interval_minutes=30, sla_minutes_after_cron=15,
+                    run_calendar="market_hours", active_hours_utc=[20, 14]) == 45.0
+    assert calendar_cadence.effective_cadence_minutes(
+        "continuous", now=now, trading_day_checker=lambda _d: False,
+        **_OPEN_ORDERS) == 45.0
+
+
+def test_a_daily_interval_is_left_to_the_flat_ceiling():
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    assert _ceiling(now, interval_minutes=1440, sla_minutes_after_cron=0,
+                    run_calendar="trading_days") == 1440.0
+
+
+def test_apply_declared_cadence_reads_the_session_declaration():
+    now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
+    detail: dict = {}
+    calendar_cadence.apply_declared_cadence(
+        detail, {"cadence": "continuous", **_OPEN_ORDERS},
+        now=now, trading_day_checker=_weekday_only_checker)
+    assert detail["cadence_minutes"] == 317.0 + 45.0

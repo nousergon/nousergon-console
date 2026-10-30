@@ -75,6 +75,13 @@ class Index:
         # so it is not a member of this set and must not be modelled as one.
         self._discovery_scope: set[tuple[str, str]] = set()
         self._saw_fleetwide_discovery = False
+        # The same two facts for passes with NO horizon (a true enumeration),
+        # and the shortest horizon per scope for passes that only see what
+        # was recently active (`AdapterResult.discovery_horizon_days`).
+        self._unlimited_scope: set[tuple[str, str]] = set()
+        self._saw_unlimited_fleetwide = False
+        self._horizon_scope: dict[tuple[str, str], float] = {}
+        self._horizon_fleetwide: float | None = None
         self._saw_ok_declaration = False
         # §8.3's DISABLED/MISSED separation is a comparison between a declared
         # cadence and an observed silence, so it needs the same tolerance
@@ -350,6 +357,7 @@ class Index:
                     self._discovery_scope.update(result.discovery_scope)
                 else:
                     self._saw_fleetwide_discovery = True
+                self._note_discovery_horizon(result)
             elif result.claim_class is ClaimClass.DECLARATION:
                 self._saw_ok_declaration = True
         for ent in result.entities:
@@ -438,7 +446,9 @@ class Index:
             if not declared and self._saw_ok_declaration:
                 return _unregistered(ent)
             if declared and not discovered and self._saw_ok_discovery:
-                if ent.state is State.UNREPORTED and self._within_discovery_scope(ent):
+                if (ent.state is State.UNREPORTED
+                        and self._within_discovery_scope(ent)
+                        and not self._silence_outlives_horizon(ent)):
                     return dataclasses.replace(ent, state=State.ABSENT)
         # The third state that exists only as a comparison between claims:
         # `MISSED` (and the `HEALTHY` on its other side) for a component a
@@ -523,6 +533,61 @@ class Index:
             c.claim_class in (ClaimClass.OBSERVATION, ClaimClass.DISCOVERY)
             for c in self._claims.get(entity_id, [])
         )
+
+    def _note_discovery_horizon(self, result: AdapterResult) -> None:
+        horizon = result.discovery_horizon_days
+        if horizon is None:
+            if result.discovery_scope:
+                self._unlimited_scope.update(result.discovery_scope)
+            else:
+                self._saw_unlimited_fleetwide = True
+            return
+        horizon = float(horizon)
+        if not result.discovery_scope:
+            self._horizon_fleetwide = (horizon if self._horizon_fleetwide is None
+                                       else min(self._horizon_fleetwide, horizon))
+            return
+        for pair in result.discovery_scope:
+            known = self._horizon_scope.get(pair)
+            self._horizon_scope[pair] = horizon if known is None else min(known, horizon)
+
+    def _silence_outlives_horizon(self, ent: Entity) -> bool:
+        """Whether every discovery pass that could have found this entity sees
+        only RECENT activity, and the entity's own declaration says it may be
+        silent for longer than that (alpha-engine-config-I12856).
+
+        The fourth guard on `ABSENT`. CloudWatch `ListMetrics` forgets a
+        metric two weeks after its last datapoint, so a Lambda declared
+        `cadence: event_driven` (or with a declared cadence longer than the
+        horizon) that has simply not fired lately is not in the namespace —
+        and reading that as "not there" is the absence-of-evidence read §8.3
+        forbids. Measured 2026-10-30: `alpha-engine-vcpu-runaway-responder`
+        and `alpha-engine-arctic-migration-dispatcher` both `Active`, both
+        rendered ABSENT. Such a row stays UNREPORTED, where an event-trigger
+        anchor can still move it (`index/event_trigger.py`).
+
+        A true enumeration covering the entity always wins, and a row with no
+        declared silence (no cadence, or one shorter than the horizon) is
+        still ABSENT when unseen — there the absence is a real finding.
+        """
+        if self._saw_unlimited_fleetwide or any(
+            ent.facets.get(facet) == value for facet, value in self._unlimited_scope
+        ):
+            return False
+        horizons = [h for (facet, value), h in self._horizon_scope.items()
+                    if ent.facets.get(facet) == value]
+        if self._horizon_fleetwide is not None:
+            horizons.append(self._horizon_fleetwide)
+        if not horizons:
+            return False
+        horizon_minutes = min(horizons) * 1440.0
+        if str(ent.detail.get("cadence") or "").strip().lower() == "event_driven":
+            return True
+        try:
+            cadence_minutes = float(ent.detail.get("cadence_minutes") or 0)
+        except (TypeError, ValueError):
+            return False
+        return cadence_minutes > horizon_minutes
 
     def _within_discovery_scope(self, ent: Entity) -> bool:
         """Could any successful discovery pass have found this entity?

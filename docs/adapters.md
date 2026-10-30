@@ -594,7 +594,14 @@ ceiling — trading-day symbols (`weekday_sf`/`eod_sf`) via an injectable
 `trading_day_checker` (same contract as `pipeline-reliability`'s, defaulting
 to `pandas-market-calendars` under the `calendar` extra), `saturday_sf` via
 plain calendar-week arithmetic, `continuous` from a declared
-`interval_minutes`. `event_driven` — and any symbol this module cannot
+`interval_minutes`. A `continuous` row may also declare `run_calendar:
+all_days|trading_days|market_hours` and, for `market_hours`, an
+`active_hours_utc: [start, end)` window (an `active_hours_utc` alone implies
+`market_hours`, as in the fleet's freshness monitor): outside its window, on a
+non-session day, and before one `interval + sla` has passed since the window
+opened, the ceiling reaches back to the close of the last window, so a
+session-only daemon is not stale every night; inside a settled window the flat
+`interval + sla` ceiling stands (alpha-engine-config-I12860). `event_driven` — and any symbol this module cannot
 resolve, including a trading-day symbol with no reachable calendar —
 deliberately gets **no** `cadence_minutes` at all: excluded from
 `staleness_honesty`'s denominator (§5.3), never faked into reading fresh.

@@ -22,6 +22,8 @@ import html
 import re
 from datetime import datetime, timezone
 
+from .. import calendar_cadence
+from ..freshness import NO_CADENCE
 from ..index import citations
 from ..index.citations import Citations
 from ..index.graph import Index
@@ -104,6 +106,19 @@ def _is_component_echo(ent: Entity, index: Index) -> bool:
 _DECIDED_STATES = frozenset(DECLARED_LIFECYCLE_STATES.values())
 
 
+def _producers(ent: Entity, index: Index) -> list[Entity]:
+    """The Component entities that produce an ARTIFACT row, read in either
+    edge spelling (the index stores an adapter's `produces` edge both ways)."""
+    owners = [
+        edge.target if edge.source == ent.id else edge.source
+        for edge in index.related(ent.id)
+        if (edge.source == ent.id and edge.rel == "produced-by")
+        or (edge.target == ent.id and edge.rel == "produces")
+    ]
+    components = [index.entity(o) for o in owners]
+    return [c for c in components if c is not None and c.kind is Kind.COMPONENT]
+
+
 def _is_decided_residue(ent: Entity, index: Index) -> bool:
     """Whether a RUN or ARTIFACT row is the leftover of a component whose
     declared lifecycle is DISABLED, DEPRECATED or RETIRED.
@@ -126,23 +141,48 @@ def _is_decided_residue(ent: Entity, index: Index) -> bool:
     if ent.kind is Kind.RUN:
         owners = [edge.target for edge in index.related(ent.id)
                   if edge.source == ent.id and edge.rel == "belongs-to"]
+        components = [index.entity(o) for o in owners]
+        components = [c for c in components
+                      if c is not None and c.kind is Kind.COMPONENT]
     elif ent.kind is Kind.ARTIFACT:
-        # The index stores an adapter's `produces` edge in both directions;
-        # read either spelling so the rule does not depend on which one a
-        # given adapter emitted.
-        owners = [
-            edge.target if edge.source == ent.id else edge.source
-            for edge in index.related(ent.id)
-            if (edge.source == ent.id and edge.rel == "produced-by")
-            or (edge.target == ent.id and edge.rel == "produces")
-        ]
+        components = _producers(ent, index)
     else:
         return False
-    components = [index.entity(o) for o in owners]
-    components = [c for c in components if c is not None and c.kind is Kind.COMPONENT]
     if not components:
         return False
     return all(c.state in _DECIDED_STATES for c in components)
+
+
+def _is_event_driven_envelope(ent: Entity, index: Index) -> bool:
+    """Whether an ARTIFACT reads `no-cadence-declared` only because every
+    component producing it is DECLARED event-driven (alpha-engine-config-I12858).
+
+    A check envelope's artifact is graded against the envelope's own
+    `cadence_minutes`. A producer that runs only on an event (a merge, a
+    dispatch) has no cadence to stamp, and its registry row says so
+    (`cadence: event_driven`), so `no-cadence-declared` here is the declared
+    answer, not a missing declaration — the same reading `object_store` gives
+    a declared event-driven key (`not-expected`, alpha-engine-config-I8780).
+    Measured 2026-10-30: two such rows on the exceptions snapshot
+    (`overseer-arctic-migration`, `nousergon-data-run-arctic-migrations`),
+    neither one work anybody can do.
+
+    Strict like `_is_decided_residue`: only that one value, at least one
+    producer, and EVERY producer declared event-driven. An envelope with an
+    undeclared producer still lists, because there the fix is a declaration.
+    The row stays in the index and on its own page; only the view drops it.
+    """
+    if ent.kind is not Kind.ARTIFACT:
+        return False
+    if str(ent.state).strip().lower() != NO_CADENCE:
+        return False
+    components = _producers(ent, index)
+    if not components:
+        return False
+    return all(
+        str(c.detail.get("cadence") or "").strip().lower() == calendar_cadence.EVENT_DRIVEN
+        for c in components
+    )
 
 
 def landing_exceptions(index: Index) -> list[Entity]:
@@ -156,6 +196,7 @@ def landing_exceptions(index: Index) -> list[Entity]:
         if is_exception(e)
         and not _is_component_echo(e, index)
         and not _is_decided_residue(e, index)
+        and not _is_event_driven_envelope(e, index)
     ]
 
 

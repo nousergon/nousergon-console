@@ -358,3 +358,13 @@ def test_the_resolution_is_configurable_and_clamped_to_the_window():
     cw.fetch(_config(window_minutes=2, resolution_seconds=8000),
              enumerator=lambda *a: ["fn"], reader=reader, now=NOW, clock=lambda: 0.0)
     assert captured["Invocations"] == 120
+
+
+def test_discovery_declares_the_list_metrics_horizon():
+    """alpha-engine-config-I12856: the enumeration sees two weeks of activity,
+    never more, and a config may only shorten that."""
+    from console.adapters import cloudwatch_metrics as cw
+    assert cw._discovery_horizon_days({}) == 14.0
+    assert cw._discovery_horizon_days({"discovery_horizon_days": 7}) == 7.0
+    assert cw._discovery_horizon_days({"discovery_horizon_days": 90}) == 14.0
+    assert cw._discovery_horizon_days({"discovery_horizon_days": "x"}) == 14.0

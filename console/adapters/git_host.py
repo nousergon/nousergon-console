@@ -55,6 +55,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import shutil
 import subprocess
 from typing import Any, Callable, Iterable
 
@@ -150,20 +151,68 @@ def parse_issue_ref(ref: str) -> tuple[str, int] | None:
     return (m.group("repo"), int(m.group("number"))) if m else None
 
 
+class RefReadError(RuntimeError):
+    """A reader could not read ANY of a repo's named refs, and says why.
+
+    Raised instead of returning an empty list, because an empty list is
+    indistinguishable from "every ref was a PR number" and leaves the source
+    reading FAILED with no reason (alpha-engine-config-I12937: all 60 refs
+    unavailable for days, each failing in well under a millisecond, and
+    nothing on the surface naming the missing CLI that caused it).
+    """
+
+
+#: Bound on host error text carried into ``unavailable`` — a reason, not a log.
+_REASON_CHARS = 240
+
+
+def _first_line(text: str) -> str:
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()[:_REASON_CHARS]
+    return ""
+
+
+def _describe(exc: BaseException) -> str:
+    """One line naming why a host call failed, never its full output."""
+    if isinstance(exc, subprocess.CalledProcessError):
+        detail = _first_line(exc.stderr) or _first_line(exc.stdout)
+        return f"exit {exc.returncode}" + (f": {detail}" if detail else "")
+    return _first_line(f"{type(exc).__name__}: {exc}") or type(exc).__name__
+
+
 def _gh_ref_reader(org: str, repo: str, numbers: list[int],
                    cache: str) -> list[dict[str, Any]]:
     """REST, one issue per call, through `gh api --cache` so a rebuild every
     few minutes costs the host one read per ref per cache window rather than
-    one per build. A ref that errors is omitted, never guessed."""
+    one per build. A ref that errors is omitted, never guessed.
+
+    Two failures are not per-ref and are raised as `RefReadError` so the
+    source carries the reason: `gh` absent from the process's PATH (checked
+    once, before any call — a service unit's PATH is not a login shell's), and
+    EVERY ref in the repo erroring (unauthenticated, no network), where the
+    first error's message is the reason.
+    """
+    gh = shutil.which("gh")
+    if gh is None:
+        raise RefReadError(
+            "gh CLI not found on this process's PATH; named issue refs are read "
+            "through an authenticated `gh` (install it for the service user, or "
+            "set PATH and GH_TOKEN in the service environment)")
     out: list[dict[str, Any]] = []
+    first_error: str | None = None
+    errors = 0
     for number in numbers:
         base = f"repos/{org}/{repo}/issues/{number}"
         try:
             issue = json.loads(subprocess.run(
-                ["gh", "api", "--cache", cache, base],
+                [gh, "api", "--cache", cache, base],
                 capture_output=True, text=True, check=True,
             ).stdout or "{}")
-        except Exception:  # noqa: BLE001 - an unread ref is reported, not raised
+        except Exception as exc:  # noqa: BLE001 - an unread ref is reported, not raised
+            errors += 1
+            if first_error is None:
+                first_error = _describe(exc)
             continue
         if not issue or issue.get("pull_request"):
             continue  # a PR number is not an issue ref
@@ -171,7 +220,7 @@ def _gh_ref_reader(org: str, repo: str, numbers: list[int],
         if str(issue.get("state", "")).lower() == "open":
             try:
                 deps = json.loads(subprocess.run(
-                    ["gh", "api", "--cache", cache, f"{base}/dependencies/blocked_by"],
+                    [gh, "api", "--cache", cache, f"{base}/dependencies/blocked_by"],
                     capture_output=True, text=True, check=True,
                 ).stdout or "[]")
             except Exception:  # noqa: BLE001 - no dependency read is no claim
@@ -191,6 +240,8 @@ def _gh_ref_reader(org: str, repo: str, numbers: list[int],
             "url": issue.get("html_url"),
             "blockedBy": blocked_by,
         })
+    if numbers and errors == len(numbers):
+        raise RefReadError(f"every `gh api` read failed; first: {first_error}")
     return out
 
 
@@ -224,12 +275,20 @@ def fetch_refs(
     reader = ref_reader or _gh_ref_reader
     entities: list[Entity] = []
     unavailable: list[str] = []
+    reasons: list[str] = []
     for repo, numbers in sorted(by_repo.items()):
         wanted = sorted(set(numbers))
         try:
             items = reader(org, repo, wanted, cache)
-        except Exception:  # noqa: BLE001 - this repo's refs are unread, not empty
+        except Exception as exc:  # noqa: BLE001 - this repo's refs are unread, not empty
             unavailable.extend(f"{repo}-I{n}" for n in wanted)
+            # The reason rides in ``unavailable`` beside the refs it explains,
+            # the same carrier `config._config_error_result` uses, so a FAILED
+            # source says WHY on every surface that lists it — once per
+            # distinct reason, not once per repo.
+            reason = f"reason: {_describe(exc)}"
+            if reason not in reasons:
+                reasons.append(reason)
             continue
         seen = set()
         for item in items:
@@ -244,7 +303,7 @@ def fetch_refs(
               else AdapterStatus.OK)
     return AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
                          status=status, entities=tuple(entities),
-                         unavailable=tuple(unavailable))
+                         unavailable=tuple(reasons + unavailable))
 
 
 def fetch(

@@ -463,6 +463,21 @@ def _default_cloudwatch(
         return _aws_client("cloudwatch", region) if region \
             else _aws_client("cloudwatch")
 
+    # A CloudWatch metric's identity is its FULL dimension set, and
+    # `GetMetricData` matches it exactly: asking for `{RuleName: x}` returns
+    # nothing for a metric published as `{EventBusName: b, RuleName: x}`. Rules
+    # on a custom event bus publish only the two-dimension form, so reading them
+    # by `RuleName` alone rendered every one NEVER_RAN while it fired ~50 times
+    # a day (measured 2026-10-31: `nousergon-alert-log` on bus
+    # `nousergon-alerts`, alpha-engine-config-I12852). The enumerator already
+    # SEES the full set; it records it here, keyed by what it enumerated, and
+    # the reader asks for exactly the metric that exists. Where the
+    # single-dimension metric exists (every default-bus rule, every Lambda's
+    # FunctionName series) it is read exactly as before; only a value with NO
+    # single-dimension metric is read through its co-dimensioned series, summed
+    # when there is more than one.
+    co_dimensions: dict[tuple[str, str, str], set[tuple[tuple[str, str], ...]]] = {}
+
     def enumerator(namespace: str, metric: str, dimension: str) -> list[str]:
         client = _client()
         out: list[str] = []
@@ -470,47 +485,80 @@ def _default_cloudwatch(
         for page in paginator.paginate(Namespace=namespace, MetricName=metric,
                                        Dimensions=[{"Name": dimension}]):
             for entry in page.get("Metrics") or []:
-                for dim in entry.get("Dimensions") or []:
+                dims = entry.get("Dimensions") or []
+                for dim in dims:
                     if dim.get("Name") == dimension and dim.get("Value"):
                         out.append(dim["Value"])
+                        extra = tuple(sorted(
+                            (str(d.get("Name")), str(d.get("Value")))
+                            for d in dims
+                            if d.get("Name") != dimension and d.get("Name")
+                        ))
+                        co_dimensions.setdefault(
+                            (namespace, dimension, dim["Value"]), set()
+                        ).add(extra)
         return out
+
+    def _dimension_sets(query: MetricQuery) -> list[list[dict[str, str]]]:
+        base = {"Name": query.dimension_name, "Value": query.dimension_value}
+        seen = co_dimensions.get(
+            (query.namespace, query.dimension_name, query.dimension_value)
+        )
+        if not seen or () in seen:
+            return [[base]]
+        return [
+            [base] + [{"Name": n, "Value": v} for n, v in extra]
+            for extra in sorted(seen)
+        ]
 
     def reader(
         queries: list[MetricQuery], start: datetime, end: datetime,
     ) -> dict[str, list[tuple[str, float]]]:
         client = _client()
-        out: dict[str, list[tuple[str, float]]] = {}
+        # One CloudWatch query per (query, dimension set). A query whose value
+        # carries several co-dimensioned series is summed back into its own id
+        # bucket by bucket, so callers still see one series per query_id.
+        expanded: list[tuple[str, str, list[dict[str, str]], MetricQuery]] = []
+        for query in queries:
+            sets = _dimension_sets(query)
+            if len(sets) == 1:
+                expanded.append((query.query_id, query.query_id, sets[0], query))
+                continue
+            for n, dims in enumerate(sets):
+                expanded.append((f"{query.query_id}x{n}", query.query_id, dims, query))
+        sums: dict[str, dict[str, float]] = {}
         # GetMetricData accepts 500 queries per call; batching is what keeps
         # the pass one-or-two API calls rather than one per component.
-        for batch in (queries[i:i + 500] for i in range(0, len(queries), 500)):
+        for batch in (expanded[i:i + 500] for i in range(0, len(expanded), 500)):
+            owner = {sub_id: query_id for sub_id, query_id, _, _ in batch}
             spec = [
                 {
-                    "Id": query.query_id,
+                    "Id": sub_id,
                     "MetricStat": {
                         "Metric": {
                             "Namespace": query.namespace,
                             "MetricName": query.metric_name,
-                            "Dimensions": [{
-                                "Name": query.dimension_name,
-                                "Value": query.dimension_value,
-                            }],
+                            "Dimensions": dims,
                         },
                         "Period": query.period_seconds,
                         "Stat": "Sum",
                     },
                     "ReturnData": True,
                 }
-                for query in batch
+                for sub_id, _, dims, query in batch
             ]
             response = client.get_metric_data(
                 MetricDataQueries=spec, StartTime=start, EndTime=end,
             )
             for entry in response.get("MetricDataResults") or []:
-                out[entry["Id"]] = [
-                    (t.isoformat() if hasattr(t, "isoformat") else str(t), float(v))
-                    for t, v in zip(entry.get("Timestamps") or [],
-                                    entry.get("Values") or [])
-                ]
-        return out
+                bucket = sums.setdefault(owner.get(entry["Id"], entry["Id"]), {})
+                for t, v in zip(entry.get("Timestamps") or [],
+                                entry.get("Values") or []):
+                    stamp = t.isoformat() if hasattr(t, "isoformat") else str(t)
+                    bucket[stamp] = bucket.get(stamp, 0.0) + float(v)
+        return {
+            query_id: sorted(points.items(), reverse=True)
+            for query_id, points in sums.items()
+        }
 
     return enumerator, reader

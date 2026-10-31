@@ -368,3 +368,129 @@ def test_discovery_declares_the_list_metrics_horizon():
     assert cw._discovery_horizon_days({"discovery_horizon_days": 7}) == 7.0
     assert cw._discovery_horizon_days({"discovery_horizon_days": 90}) == 14.0
     assert cw._discovery_horizon_days({"discovery_horizon_days": "x"}) == 14.0
+
+
+# --------------------------------------------- co-dimensioned metric series ---
+# alpha-engine-config-I12852: a CloudWatch metric is identified by its FULL
+# dimension set, and GetMetricData matches it exactly. Rules on a custom event
+# bus publish only `{EventBusName, RuleName}`, so reading `{RuleName}` alone
+# returned nothing and every such rule rendered NEVER_RAN while it fired.
+
+
+class _FakePaginator:
+    def __init__(self, metrics):
+        self._metrics = metrics
+
+    def paginate(self, **_kwargs):
+        yield {"Metrics": self._metrics}
+
+
+class _FakeCloudWatch:
+    def __init__(self, metrics, series):
+        self._metrics = metrics
+        # frozenset(dimension pairs) -> [(timestamp, value), ...]
+        self._series = series
+        self.requested: list[list[dict]] = []
+
+    def get_paginator(self, _name):
+        return _FakePaginator(self._metrics)
+
+    def get_metric_data(self, MetricDataQueries, StartTime, EndTime):
+        out = []
+        for q in MetricDataQueries:
+            dims = q["MetricStat"]["Metric"]["Dimensions"]
+            self.requested.append(dims)
+            key = frozenset((d["Name"], d["Value"]) for d in dims)
+            points = self._series.get(key, [])
+            out.append({
+                "Id": q["Id"],
+                "Timestamps": [t for t, _ in points],
+                "Values": [v for _, v in points],
+            })
+        return {"MetricDataResults": out}
+
+
+def _default_pair(monkeypatch, fake):
+    monkeypatch.setattr(cw, "_aws_client", lambda *_a, **_k: fake)
+    return cw._default_cloudwatch("us-east-1")
+
+
+def _q(value, qid="w0i"):
+    return cw.MetricQuery(
+        query_id=qid, namespace="AWS/Events", dimension_name="RuleName",
+        dimension_value=value, metric_name="Invocations", period_seconds=300,
+    )
+
+
+def test_a_custom_bus_rule_is_read_through_its_full_dimension_set(monkeypatch):
+    t1 = NOW - timedelta(hours=1)
+    fake = _FakeCloudWatch(
+        metrics=[{"Dimensions": [
+            {"Name": "EventBusName", "Value": "alerts"},
+            {"Name": "RuleName", "Value": "alert-log"},
+        ]}],
+        series={frozenset({("EventBusName", "alerts"), ("RuleName", "alert-log")}):
+                [(t1, 52.0)]},
+    )
+    enumerator, reader = _default_pair(monkeypatch, fake)
+    assert enumerator("AWS/Events", "Invocations", "RuleName") == ["alert-log"]
+    data = reader([_q("alert-log")], NOW - timedelta(days=1), NOW)
+    assert data == {"w0i": [(t1.isoformat(), 52.0)]}
+    assert fake.requested == [[
+        {"Name": "RuleName", "Value": "alert-log"},
+        {"Name": "EventBusName", "Value": "alerts"},
+    ]]
+
+
+def test_a_value_with_a_single_dimension_series_is_read_exactly_as_before(monkeypatch):
+    """Lambda publishes `{FunctionName}` AND `{FunctionName, Resource}`; the
+    single-dimension series is the whole-function total and stays the read."""
+    t1 = NOW - timedelta(hours=2)
+    fake = _FakeCloudWatch(
+        metrics=[
+            {"Dimensions": [{"Name": "RuleName", "Value": "r"}]},
+            {"Dimensions": [{"Name": "RuleName", "Value": "r"},
+                            {"Name": "EventBusName", "Value": "b"}]},
+        ],
+        series={frozenset({("RuleName", "r")}): [(t1, 3.0)]},
+    )
+    enumerator, reader = _default_pair(monkeypatch, fake)
+    enumerator("AWS/Events", "Invocations", "RuleName")
+    data = reader([_q("r")], NOW - timedelta(days=1), NOW)
+    assert data == {"w0i": [(t1.isoformat(), 3.0)]}
+    assert fake.requested == [[{"Name": "RuleName", "Value": "r"}]]
+
+
+def test_several_co_dimensioned_series_sum_into_one_query(monkeypatch):
+    """The same rule name on two buses is one dimension value with two series;
+    the caller still sees one series per query id, summed bucket by bucket."""
+    t1, t2 = NOW - timedelta(hours=1), NOW - timedelta(hours=3)
+    fake = _FakeCloudWatch(
+        metrics=[
+            {"Dimensions": [{"Name": "EventBusName", "Value": "a"},
+                            {"Name": "RuleName", "Value": "r"}]},
+            {"Dimensions": [{"Name": "EventBusName", "Value": "b"},
+                            {"Name": "RuleName", "Value": "r"}]},
+        ],
+        series={
+            frozenset({("EventBusName", "a"), ("RuleName", "r")}): [(t1, 2.0), (t2, 1.0)],
+            frozenset({("EventBusName", "b"), ("RuleName", "r")}): [(t1, 5.0)],
+        },
+    )
+    enumerator, reader = _default_pair(monkeypatch, fake)
+    enumerator("AWS/Events", "Invocations", "RuleName")
+    data = reader([_q("r")], NOW - timedelta(days=1), NOW)
+    assert data == {"w0i": [(t1.isoformat(), 7.0), (t2.isoformat(), 1.0)]}
+
+
+def test_an_unread_query_still_answers_with_an_empty_series(monkeypatch):
+    """`has_history_read` keys on presence: a query CloudWatch answered with no
+    datapoints must still come back, as `[]`, never be dropped."""
+    fake = _FakeCloudWatch(
+        metrics=[{"Dimensions": [{"Name": "EventBusName", "Value": "x"},
+                                 {"Name": "RuleName", "Value": "quiet"}]}],
+        series={},
+    )
+    enumerator, reader = _default_pair(monkeypatch, fake)
+    enumerator("AWS/Events", "Invocations", "RuleName")
+    assert reader([_q("quiet", "h0i")], NOW - timedelta(days=30), NOW) == {"h0i": []}

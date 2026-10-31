@@ -53,6 +53,16 @@ binding's own config, not hardcoded here, so a different deployment's
 schema can say something different. A row that resolves neither renders
 `UNREPORTED` and is named in `unavailable` — loud, never guessed.
 
+**Every row is emitted or rejected, by name** (alpha-engine-config-I12786,
+audit PLAT-08). A query with no `id_template` is declared `<query>:id_template`
+unavailable and never run. A row whose identity cannot be built -- a template
+column missing from the row, or present but null/empty -- is rejected, never
+dropped: the query is named `<query>:identity:rejected N of M rows`, so
+`M == emitted + N` is on the surface. A query whose every row was rejected did
+not produce a reading, and an adapter none of whose queries produced one is
+FAILED -- the same as an unreachable database, never a healthy empty source.
+A query that genuinely returned zero rows is still a successful empty read.
+
 Hermetic: the query execution is one injectable function so tests run over
 recorded row fixtures with no live database (groom-sweep §8.1). Production
 wiring is stdlib `sqlite3` opened read-only — no optional extra to install,
@@ -62,6 +72,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import string
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -69,6 +80,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from ..sqlite_readonly import connect_read_only
 
 #: A query result is an OBSERVATION (§2.5): it reports what the database
 #: currently holds, a fact about state at read time.
@@ -112,26 +124,44 @@ def fetch(
         if entity_kind is None:
             unavailable.append(f"{qname}:entity_kind")
             continue
+        if not q.get("id_template"):
+            unavailable.append(f"{qname}:id_template")
+            continue
         try:
             rows = runner(str(db_path), str(q["query"]))
         except Exception:  # noqa: BLE001 - a failed source is a state, never an exception (§2.3)
             unavailable.append(qname)
             continue
-        read_any = True
         component_id_field = q.get("component_id_field")
+        emitted = rejected = 0
         for row in rows:
             entity, ok = _to_entity(row, entity_kind, q, db_path, qname)
-            if entity is not None:
-                entities.append(entity)
-                if component_id_field:
-                    cid = row.get(component_id_field)
-                    if cid:
-                        edges.append(Edge(source=entity.id, rel="measures", target=str(cid)))
+            if entity is None:
+                rejected += 1
+                continue
+            emitted += 1
+            entities.append(entity)
+            if component_id_field:
+                cid = row.get(component_id_field)
+                if cid:
+                    edges.append(Edge(source=entity.id, rel="measures", target=str(cid)))
             if not ok:
                 unavailable.append(f"{qname}:state")
+        if rejected:
+            unavailable.append(f"{qname}:identity:rejected {rejected} of {len(rows)} rows")
+        if emitted or not rows:
+            read_any = True
 
     if not read_any:
-        return _failed(config, "source")
+        # Keep every named reason (an unrun query, a rejected identity) beside
+        # the headline: "source" alone would hide WHY nothing was read.
+        return AdapterResult(
+            claim_class=CLAIM_CLASS,
+            fetched_at=now_iso(),
+            name=config.get("_name", name),
+            status=AdapterStatus.FAILED,
+            unavailable=tuple(dict.fromkeys([*unavailable, "source"])),
+        )
 
     return AdapterResult(
         claim_class=CLAIM_CLASS,
@@ -148,13 +178,9 @@ def _to_entity(
     row: Row, kind: Kind, q: dict[str, Any], db_path: str, qname: str,
 ) -> tuple[Entity | None, bool]:
     row = _decode_json_columns(row, q.get("json_columns") or [])
-    id_template = q.get("id_template")
-    if not id_template:
-        return None, True
-    try:
-        entity_id = str(id_template).format(**row)
-    except (KeyError, IndexError):
-        return None, True
+    entity_id = _identity(str(q.get("id_template") or ""), row)
+    if entity_id is None:
+        return None, False
 
     facets: dict[str, str] = {}
     for facet_name, column in (q.get("facets") or {}).items():
@@ -198,6 +224,29 @@ def _to_entity(
         detail=detail,
     )
     return entity, ok
+
+
+def _identity(id_template: str, row: Row) -> str | None:
+    """The row's entity id, or None when the template cannot name it: no
+    template, a malformed one, or a field it references that the row lacks or
+    holds as null/empty (which would format as ``None:...``, an identity that
+    names nothing)."""
+    if not id_template:
+        return None
+    try:
+        fields = [f for _, f, _, _ in string.Formatter().parse(id_template) if f is not None]
+    except ValueError:
+        return None
+    for field in fields:
+        if not field:
+            return None  # positional `{}` -- a row has no positions
+        value = row.get(field.split(".", 1)[0].split("[", 1)[0])
+        if value is None or value == "":
+            return None
+    try:
+        return id_template.format(**row)
+    except (KeyError, IndexError, AttributeError, ValueError):
+        return None
 
 
 def _resolve_state(row: Row, kind: Kind, q: dict[str, Any]) -> tuple[State | str, bool]:
@@ -284,7 +333,7 @@ def _default_runner() -> QueryRunner:
     source shape this adapter exists for."""
 
     def runner(db_path: str, query: str) -> list[Row]:
-        connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        connection = connect_read_only(db_path, timeout=5)
         try:
             connection.row_factory = sqlite3.Row
             cursor = connection.execute(query)

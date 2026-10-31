@@ -411,6 +411,13 @@ class _FakeCloudWatch:
 
 
 def _default_pair(monkeypatch, fake):
+    # `_default_cloudwatch` only checks that boto3 imports (the `[aws]` extra);
+    # CI installs `[test]` alone, so a stand-in module satisfies the import and
+    # the client itself is the fake below.
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "boto3", sys.modules.get("boto3") or types.ModuleType("boto3"))
     monkeypatch.setattr(cw, "_aws_client", lambda *_a, **_k: fake)
     return cw._default_cloudwatch("us-east-1")
 

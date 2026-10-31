@@ -396,3 +396,12 @@ def test_a_page_without_links_renders_no_link_line():
     html = _html(_index(), resolve("/page/cost"))
     assert 'class="page-links"' not in html
     assert render_json.payload(_index(), resolve("/page/cost"))["page"]["links"] == []
+
+
+def test_home_counts_the_red_by_priority_p0_first():
+    html = _html(_index(), resolve("/"))
+    line = html[html.index("by priority:"):]
+    line = line[:line.index("</p>")]
+    assert line.index("1 P0") < line.index("1 untriaged") < line.index("1 P1")
+    assert 'href="/exceptions#tier-P0"' in line
+    assert "P2" not in line  # an empty tier other than P0 is not listed

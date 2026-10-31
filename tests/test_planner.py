@@ -162,6 +162,69 @@ def test_fetch_refs_without_an_org_reaches_no_host():
     assert result.status is AdapterStatus.FAILED
 
 
+def test_fetch_refs_names_why_a_repo_could_not_be_read():
+    # alpha-engine-config-I12937: a reader that cannot reach the host must not
+    # leave a FAILED source with sixty bare refs and no reason.
+    def no_cli(org, repo, numbers, cache):
+        raise git_host.RefReadError("gh CLI not found on this process's PATH")
+
+    result = git_host.fetch_refs({"org": "o"}, ["a-I1", "a-I2", "b-I3"], ref_reader=no_cli)
+    assert result.status is AdapterStatus.FAILED
+    reason, *refs = result.unavailable
+    assert reason == "reason: RefReadError: gh CLI not found on this process's PATH"
+    assert refs == ["a-I1", "a-I2", "b-I3"]  # one reason, every ref still named
+
+
+def test_gh_ref_reader_fails_fast_when_gh_is_not_on_path(monkeypatch):
+    monkeypatch.setattr(git_host.shutil, "which", lambda name: None)
+
+    def must_not_run(*a, **k):
+        raise AssertionError("no host call without a CLI")
+
+    monkeypatch.setattr(git_host.subprocess, "run", must_not_run)
+    with pytest.raises(git_host.RefReadError, match="gh CLI not found"):
+        git_host._gh_ref_reader("o", "r", [1, 2], "15m")
+
+
+def test_gh_ref_reader_carries_the_first_host_error_when_every_ref_fails(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(git_host.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def unauthenticated(cmd, **k):
+        raise subprocess.CalledProcessError(
+            4, cmd, output="", stderr="\nTo get started with GitHub CLI, please run:  gh auth login\n")
+
+    monkeypatch.setattr(git_host.subprocess, "run", unauthenticated)
+    with pytest.raises(git_host.RefReadError) as err:
+        git_host._gh_ref_reader("o", "r", [1, 2], "15m")
+    assert "exit 4: To get started with GitHub CLI" in str(err.value)
+
+    result = git_host.fetch_refs({"org": "o"}, ["r-I1", "r-I2"])
+    assert result.status is AdapterStatus.FAILED
+    assert result.unavailable[0].startswith("reason: RefReadError: every `gh api` read failed")
+
+
+def test_gh_ref_reader_omits_one_unreadable_ref_without_failing_the_rest(monkeypatch):
+    import json as _json
+    import subprocess
+
+    monkeypatch.setattr(git_host.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def one_missing(cmd, **k):
+        if cmd[-1].endswith("/issues/2"):
+            raise subprocess.CalledProcessError(1, cmd, stderr="gh: Not Found (HTTP 404)")
+        return subprocess.CompletedProcess(cmd, 0, stdout=_json.dumps(
+            {"number": 1, "title": "t", "state": "closed", "labels": [],
+             "updated_at": "u", "closed_at": "c", "html_url": "h"}))
+
+    monkeypatch.setattr(git_host.subprocess, "run", one_missing)
+    rows = git_host._gh_ref_reader("o", "r", [1, 2], "15m")
+    assert [r["number"] for r in rows] == [1]
+    result = git_host.fetch_refs({"org": "o"}, ["r-I1", "r-I2"])
+    assert result.status is AdapterStatus.OK and result.unavailable == ("r-I2",)
+
+
 def test_routes_resolve():
     assert resolve("/planner").view == "planner"
     req = resolve("/planner/data-collector")

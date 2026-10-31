@@ -99,6 +99,7 @@ def fetch(
 
     regex = re.compile(pattern)
     staleness_factor = float(config.get("staleness_factor", 1.5))
+    status_aliases = _status_aliases(config.get("status_aliases"))
     now = now or datetime.now(timezone.utc)
     source_label = f"s3://{bucket}/{prefix}"
 
@@ -144,6 +145,15 @@ def fetch(
             partial = True
             continue
 
+        raw_status = str(body.get("status") or "").lower()
+        if raw_status in status_aliases:
+            # A body published under its own contract's status vocabulary
+            # (alpha-engine-config-I12852: `cloudtrail_evidence.v1` writes
+            # `verified_sample`), translated by a DECLARED alias rather than
+            # read as an unknown status and rendered UNREPORTED. The published
+            # word is kept beside the translation, never overwritten.
+            body = {**body, "status": status_aliases[raw_status],
+                    "status_as_published": raw_status}
         mapped = _from_envelope(body, key, bucket, source_label, last_modified,
                                 staleness_factor, now, groups)
         if mapped is None:
@@ -249,6 +259,10 @@ def _from_envelope(
             "label": body.get("label") or check_id,
             "summary": body.get("summary"),
             "status": status or None,
+            # Present only when a declared `status_aliases` entry translated
+            # the body's own word (fetch above); absent otherwise.
+            **({"status_as_published": body["status_as_published"]}
+               if body.get("status_as_published") else {}),
             "cadence_minutes": cadence_minutes,
             "findings_count": len(body.get("findings") or []),
             # The rows behind the count (alpha-engine-config-I12535). A check
@@ -424,6 +438,28 @@ def _component_state(
     if age > cadence_s * staleness_factor:
         return State.MISSED
     return base
+
+
+#: The envelope's own status vocabulary — the only targets an alias may name.
+_ENVELOPE_STATUSES = frozenset({"ok", "attention", "error"})
+
+
+def _status_aliases(raw: Any) -> dict[str, str]:
+    """`config.status_aliases`: {published status -> envelope status}.
+
+    For a body that lives under the checks prefix but publishes under its own
+    contract's vocabulary. Only a mapping ONTO `ok`/`attention`/`error` is
+    accepted; anything else is dropped, so a mistyped alias leaves the body
+    UNREPORTED (loud) rather than inventing a fourth state. A word not listed
+    falls through to `_status_to_state` exactly as before.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k).strip().lower(): str(v).strip().lower()
+        for k, v in raw.items()
+        if str(v).strip().lower() in _ENVELOPE_STATUSES and str(k).strip()
+    }
 
 
 def _status_to_state(status: str) -> State:

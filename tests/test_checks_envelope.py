@@ -468,3 +468,60 @@ def test_a_stale_envelope_of_an_event_driven_producer_still_lists():
     index._entities[artifact.id] = dataclasses.replace(
         index.entity(artifact.id), state="stale")
     assert artifact.id in {e.id for e in landing_exceptions(index)}
+
+
+# ------------------------------------------------ declared status aliases ---
+# alpha-engine-config-I12852: a body under the checks prefix that publishes
+# under its OWN contract's status vocabulary rendered UNREPORTED, because the
+# adapter knew only ok/attention/error. A declared alias translates it.
+
+_OWN_VOCAB = {
+    "schema_version": "evidence.v1",
+    "check_id": "comp-evidence",
+    "ran_at": "2026-07-31T11:50:00+00:00",
+    "status": "verified_sample",
+    "cadence_minutes": 60,
+}
+
+
+def _one(body):
+    key = f"{PREFIX}{body['check_id']}/latest.json"
+    return (lambda b, p: [(key, body.get("ran_at"))]), (lambda b, k: dict(body))
+
+
+def test_an_unknown_status_without_an_alias_stays_unreported():
+    lister, reader = _one(_OWN_VOCAB)
+    result = checks_envelope.fetch(_cfg(), lister=lister, reader=reader, now=NOW)
+    assert _by_id(result)["comp-evidence"].state is State.UNREPORTED
+
+
+def test_a_declared_alias_translates_the_published_status():
+    lister, reader = _one(_OWN_VOCAB)
+    result = checks_envelope.fetch(
+        _cfg(status_aliases={"verified_sample": "ok", "unobserved": "attention"}),
+        lister=lister, reader=reader, now=NOW,
+    )
+    comp = _by_id(result)["comp-evidence"]
+    assert comp.state is State.HEALTHY
+    assert comp.detail["status"] == "ok"
+    assert comp.detail["status_as_published"] == "verified_sample"
+
+
+def test_an_alias_onto_a_word_outside_the_vocabulary_is_ignored():
+    """A mistyped target must not invent a state: the body stays UNREPORTED."""
+    lister, reader = _one(_OWN_VOCAB)
+    result = checks_envelope.fetch(
+        _cfg(status_aliases={"verified_sample": "green"}),
+        lister=lister, reader=reader, now=NOW,
+    )
+    assert _by_id(result)["comp-evidence"].state is State.UNREPORTED
+
+
+def test_an_alias_never_hides_staleness():
+    stale = {**_OWN_VOCAB, "ran_at": "2026-07-30T00:00:00+00:00"}
+    lister, reader = _one(stale)
+    result = checks_envelope.fetch(
+        _cfg(status_aliases={"verified_sample": "ok"}),
+        lister=lister, reader=reader, now=NOW,
+    )
+    assert _by_id(result)["comp-evidence"].state is State.MISSED

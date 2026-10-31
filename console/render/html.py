@@ -1807,6 +1807,17 @@ def exception_summary(model) -> str:
     counts = " ".join(
         f'<a class="state-{esc(v)}" href="/exceptions">{groups[v]} {esc(v)}</a>'
         for v in sorted(groups, key=state_rank)) or "0 not healthy"
+    # Brian 2026-10-29: home must say how urgent the red is, not only how
+    # much. One link per priority tier, P0 first, each to its section.
+    from ..index import pages
+
+    tiers: dict[str, int] = {}
+    for e in view_rows:
+        t = pages.PRIORITY_TIERS[pages.priority_rank(e)]
+        tiers[t] = tiers.get(t, 0) + 1
+    by_tier = " · ".join(
+        f'<a href="/exceptions#tier-{esc(t)}">{tiers.get(t, 0)} {esc(t)}</a>'
+        for t in pages.PRIORITY_TIERS if t == "P0" or tiers.get(t))
     gap = model.gap
     gap_txt = (f'{gap["count"]} / {gap["of"]} unreported' if gap.get("computable", True)
                is not False else "transparency gap not computable")
@@ -1815,7 +1826,8 @@ def exception_summary(model) -> str:
                 else "unknown")
     return (f'<section class="page-section"><h2>exceptions</h2>'
             f'<p class="list-summary">{counts}</p>'
-            f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
+            + (f'<p class="list-summary">by priority: {by_tier}</p>' if view_rows else "")
+            + f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
             f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a> · '
             f'{esc(gap_txt)} · population completeness {esc(comp_txt)}</p></section>')
 

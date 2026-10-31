@@ -27,8 +27,18 @@ ReadWritePaths=/home/ec2-user/nousergon-console
 # not re-read every retained execution (console/sf_execution_cache.py,
 # alpha-engine-config-I11792). Survives restarts; safe to delete (cold start).
 CacheDirectory=nousergon-console
-MemoryMax=112M
-OOMPolicy=restart
+# Memory limits are owned by the dashboard box's budget
+# (crucible-dashboard infrastructure/systemd/resource-limits/budget.yaml, row
+# nousergon-console.service), which installs them as the 99-resource-limits.conf
+# drop-in. These two lines mirror that row so the unit is still sanely capped if
+# the drop-in is ever missing (fresh box, failed install). They used to read
+# MemoryMax=112M (half the live working set) and OOMPolicy=restart, which is not
+# an OOMPolicy value (continue|stop|kill), so systemd warned and ignored it on
+# every daemon-reload (alpha-engine-config-I7673). Restart=always above already
+# restarts the service after an OOM stop.
+MemoryHigh=300M
+MemoryMax=400M
+OOMPolicy=stop
 
 [Install]
 WantedBy=multi-user.target

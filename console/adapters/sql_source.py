@@ -35,7 +35,6 @@ Component, nothing else.
 """
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -43,6 +42,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import Kind
+from ..sqlite_readonly import connect_read_only
 
 #: A recorded query result is telemetry — what was actually observed, not a
 #: statement of what should exist (§2.5).
@@ -187,4 +187,5 @@ def _string_list(value: Any) -> tuple[str, ...]:
 
 
 def _default_connect(database: str) -> Any:
-    return sqlite3.connect(database)
+    # Read-only, never creating a missing source (nousergon-console#213).
+    return connect_read_only(database)

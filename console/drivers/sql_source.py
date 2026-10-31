@@ -1,11 +1,11 @@
 """`sql-source` driver — read descriptor-declared metrics from a query result."""
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..model.descriptor import Binding
+from ..sqlite_readonly import connect_read_only
 from ..model.entity import Entity, Provenance
 from ..model.kinds import Kind, State
 from .base import Cost, DriverResult
@@ -56,4 +56,5 @@ def _finding(binding: Binding, provenance: Provenance, condition: str, **detail:
 
 
 def _connect(target: str, timeout: float):
-    return sqlite3.connect(target, timeout=timeout)
+    # Read-only, never creating a missing source (nousergon-console#213).
+    return connect_read_only(target, timeout)

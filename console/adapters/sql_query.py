@@ -80,6 +80,7 @@ from ..model.entity import Edge, Entity, Provenance
 from ..index.build import now_iso
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from ..model.kinds import COMPONENT_STATE_KINDS, Kind, State
+from ..sqlite_readonly import connect_read_only
 
 #: A query result is an OBSERVATION (§2.5): it reports what the database
 #: currently holds, a fact about state at read time.
@@ -332,7 +333,7 @@ def _default_runner() -> QueryRunner:
     source shape this adapter exists for."""
 
     def runner(db_path: str, query: str) -> list[Row]:
-        connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        connection = connect_read_only(db_path, timeout=5)
         try:
             connection.row_factory = sqlite3.Row
             cursor = connection.execute(query)

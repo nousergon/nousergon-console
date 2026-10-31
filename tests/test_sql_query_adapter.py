@@ -286,6 +286,85 @@ def test_all_queries_fail_marks_adapter_failed():
     assert result.status is AdapterStatus.FAILED
 
 
+# ------------------------------------- identity accounting (PLAT-08) --
+# alpha-engine-config-I12786: every row is emitted or rejected, by name.
+
+
+def _sig(extra=None, template="{ticker}:{eval_date}"):
+    q = {"name": "sig", "entity_kind": "signal", "query": "SELECT x", "id_template": template}
+    q.update(extra or {})
+    return q
+
+
+def test_a_row_missing_an_identity_column_is_rejected_by_name():
+    rows = [
+        {"ticker": "AAA", "eval_date": "2026-10-01"},
+        {"ticker": "BBB"},  # eval_date absent
+    ]
+    result = sql_query.fetch(_cfg([_sig()]), runner=_runner({"SELECT x": rows}))
+    assert result.status is AdapterStatus.OK
+    assert [e.id for e in result.entities] == ["AAA:2026-10-01"]
+    assert "sig:identity:rejected 1 of 2 rows" in result.unavailable
+
+
+def test_a_null_or_empty_identity_value_is_rejected_not_rendered_as_none():
+    rows = [{"ticker": None, "eval_date": "2026-10-01"}, {"ticker": "", "eval_date": "d"}]
+    result = sql_query.fetch(_cfg([_sig()]), runner=_runner({"SELECT x": rows}))
+    assert not any("None" in e.id for e in result.entities)
+    assert result.status is AdapterStatus.FAILED
+    assert "sig:identity:rejected 2 of 2 rows" in result.unavailable
+
+
+def test_every_row_rejected_is_never_a_healthy_empty_source():
+    """The audit's probe: one row missing the declared id column."""
+    result = sql_query.fetch(
+        _cfg([_sig(template="{metric_id}")]),
+        runner=_runner({"SELECT x": [{"ticker": "AAA"}]}),
+    )
+    assert result.status is AdapterStatus.FAILED
+    assert result.entities == ()
+    assert "sig:identity:rejected 1 of 1 rows" in result.unavailable
+
+
+def test_a_query_with_no_id_template_is_declared_and_never_run():
+    def runner(db_path, query):
+        raise AssertionError("a query with no identity must not run")
+
+    q = _sig()
+    del q["id_template"]
+    result = sql_query.fetch(_cfg([q]), runner=runner)
+    assert result.status is AdapterStatus.FAILED
+    assert result.unavailable == ("sig:id_template", "source")
+
+
+def test_a_malformed_template_rejects_rows():
+    result = sql_query.fetch(
+        _cfg([_sig(template="{ticker")]),
+        runner=_runner({"SELECT x": [{"ticker": "AAA"}]}),
+    )
+    assert result.status is AdapterStatus.FAILED
+    assert "sig:identity:rejected 1 of 1 rows" in result.unavailable
+
+
+def test_a_genuinely_empty_result_stays_a_healthy_empty_read():
+    result = sql_query.fetch(_cfg([_sig()]), runner=_runner({"SELECT x": []}))
+    assert result.status is AdapterStatus.OK
+    assert result.entities == () and result.unavailable == ()
+
+
+def test_one_query_all_rejected_beside_a_good_one_is_named_but_not_failed():
+    good = {"name": "ok", "entity_kind": "signal", "query": "SELECT y",
+            "id_template": "{ticker}", "evidence_template": "https://x/{ticker}"}
+    result = sql_query.fetch(
+        _cfg([_sig(template="{nope}"), good]),
+        runner=_runner({"SELECT x": [{"ticker": "AAA"}], "SELECT y": [{"ticker": "BBB"}]}),
+    )
+    assert result.status is AdapterStatus.OK
+    (entity,) = result.entities
+    assert entity.id == "BBB" and entity.provenance.evidence == "https://x/BBB"
+    assert "sig:identity:rejected 1 of 1 rows" in result.unavailable
+
+
 # --------------------------------------------------------- default runner --
 
 

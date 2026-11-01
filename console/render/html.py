@@ -1860,6 +1860,20 @@ def _tracked_by(e: Entity) -> str:
     return f'<a href="{esc(url)}">{esc(ref)}</a>' if url else esc(ref)
 
 
+def _since_yesterday(delta: dict | None) -> str:
+    """What changed against the previous day's list: new rows are chipped in
+    the tables below; cleared rows are named here, since they are gone."""
+    if delta is None:
+        return '<p class="absent">no previous day\'s list to compare with</p>'
+    cleared = delta["cleared"]
+    names = ", ".join(esc(delta["cleared_labels"].get(i) or i) for i in cleared[:20])
+    more = f" and {len(cleared) - 20} more" if len(cleared) > 20 else ""
+    return (f'<p class="list-summary">since {as_of_html(delta["taken_at"])}: '
+            f'{len(delta["new"])} new · {len(cleared)} cleared</p>'
+            + (f'<details><summary>cleared rows</summary><p>{names}{esc(more)}</p></details>'
+               if cleared else ""))
+
+
 def exceptions_page(index: Index) -> str:
     """Every not-HEALTHY row, one tier per priority: P0, untriaged, P1-P3
     (CN-4.3 `.2`, Brian 2026-10-28 18:13Z). Within a tier, worst state first,
@@ -1874,6 +1888,10 @@ def exceptions_page(index: Index) -> str:
     tiers: dict[str, list[Entity]] = {}
     for e in rows:
         tiers.setdefault(pages.PRIORITY_TIERS[pages.priority_rank(e)], []).append(e)
+    from ..index import baseline as _baseline
+
+    delta = _baseline.compare(index.exceptions_baseline(), [e.id for e in rows])
+    new_ids = set(delta["new"]) if delta else set()
     counts = " · ".join(
         f'<a href="#tier-{esc(t)}">{len(tiers[t])} {esc(t)}</a>'
         for t in pages.PRIORITY_TIERS if t in tiers)
@@ -1883,7 +1901,8 @@ def exceptions_page(index: Index) -> str:
         "<th>owner</th><th>as-of</th><th>evidence</th></tr></thead><tbody>"
         + "".join(
             f'<tr class="state-{esc(e.state_value)}">'
-            f'<td><a href="{esc(path_for_entity(e.kind, e.id))}">{esc(labels.get(e.id) or e.id)}</a></td>'
+            f'<td><a href="{esc(path_for_entity(e.kind, e.id))}">{esc(labels.get(e.id) or e.id)}</a>'
+            + (' <span class="chip">new</span>' if e.id in new_ids else "") + '</td>'
             f'<td><span class="chip">{esc(state_text(e))}</span></td>'
             f'<td>{_tracked_by(e)}</td>'
             f'<td>{esc((e.facets or {}).get("owner") or "—")}</td>'
@@ -1903,6 +1922,7 @@ def exceptions_page(index: Index) -> str:
 <p class="pane-question">{esc(pages.EXCEPTIONS_QUESTION)}</p>
 {index_freshness(index)}
 <p class="list-summary">{len(rows)} not healthy{esc(folded)} · {counts}</p>
+{_since_yesterday(delta)}
 {body}
 <h2 id="decision-queue">waiting on Brian · {len(model.queue)}</h2>
 {_table(model.queue, labels=model.queue_labels)}

@@ -1664,3 +1664,8 @@ citations:
 # triage:
 #   bucket: alpha-engine-research
 #   key: ops/daily-summaries/console-triage.json
+
+# Which red rows are new since yesterday's published list (console/index/baseline.py).
+# exceptions_baseline:
+#   bucket: alpha-engine-research
+#   key: ops/console/exceptions-{date}.json   # {date} = UTC yesterday

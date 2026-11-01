@@ -275,7 +275,10 @@ def test_calendar_colours_each_project_and_keeps_the_state_word():
 
     plan = planner.parse({"org": "o", "projects": [
         {"id": "a", "title": "Alpha", "milestones": [_ms(["repo-I1"], id="a1")]},
-        {"id": "b", "title": "Beta", "milestones": [_ms(["repo-I4"], id="b1")]}]})
+        # A far target keeps Beta ON_TRACK whatever day the suite runs; with
+        # the default 10-31 target this test went red on 2026-11-01.
+        {"id": "b", "title": "Beta", "milestones": [_ms(["repo-I4"], id="b1",
+                                                        target="2099-12-31")]}]})
     index = _index(plan)
     page = planner_page(index)
     assert "<svg" in page

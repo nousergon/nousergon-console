@@ -173,13 +173,21 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         model = index.landing_model()
         view = model.exception_view
         rows = pages.by_priority(list(view.rows))
+        from ..index import baseline as _baseline
+
+        delta = _baseline.compare(index.exceptions_baseline(), [e.id for e in rows])
+        new_ids = set(delta["new"]) if delta else set()
         doc = {"schema_version": SCHEMA_VERSION, "view": "exceptions",
+               "since_baseline": (None if delta is None else {
+                   "taken_at": delta["taken_at"], "new": len(delta["new"]),
+                   "cleared": delta["cleared"]}),
                "question": pages.EXCEPTIONS_QUESTION,
                "tiers": list(pages.PRIORITY_TIERS), "total": len(model.exceptions),
                "rows": [{**entity(e, with_document=False),
                          "label": view.labels.get(e.id),
                          "priority": pages.PRIORITY_TIERS[pages.priority_rank(e)],
                          "tracked_by": (e.facets or {}).get("tracked_by"),
+                         "new": (e.id in new_ids) if delta is not None else None,
                          "runs": view.runs.get(e.id)} for e in rows]}
     elif req.view == "page":
         from ..index import pages

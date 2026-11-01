@@ -40,6 +40,7 @@ from .index import home as declared_home
 from .index import pages as declared_pages
 from .index import reports as report_feeds
 from .index import triage as triage_overlay
+from .index import baseline as exceptions_baseline
 from .index.build import Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
@@ -123,6 +124,7 @@ def validate_config(config: dict[str, Any]) -> None:
     # Third rule: a `triage:` block the build could not read from.
     try:
         triage_overlay.parse(config.get("triage"))
+        exceptions_baseline.parse(config.get("exceptions_baseline"))
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -334,6 +336,20 @@ def build_index(config: dict[str, Any]) -> Index:
         marks, result = triage_overlay.read(triage_source, now_iso())
         index.add_result(result)
         index.set_triage(marks)
+
+    # Which red rows are new since yesterday's published list (`index/baseline.py`).
+    try:
+        baseline_source = exceptions_baseline.parse(config.get("exceptions_baseline"))
+    except ValueError as exc:
+        index.add_result(_config_error_result(exceptions_baseline.SOURCE_NAME,
+                                              ConfigError(str(exc))))
+        baseline_source = None
+    if baseline_source is not None:
+        from datetime import datetime, timezone
+
+        base, result = exceptions_baseline.read(baseline_source, datetime.now(timezone.utc))
+        index.add_result(result)
+        index.set_exceptions_baseline(base)
 
     # §9.8: computed once per build (a git subprocess per registry row is not
     # something a request handler should pay for). Defaults to the process's

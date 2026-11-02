@@ -183,6 +183,9 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "since_baseline": (None if delta is None else {
                    "taken_at": delta["taken_at"], "new": len(delta["new"]),
                    "cleared": delta["cleared"]}),
+               "trend": (None if index.exceptions_trend() is None else [
+                   {"date": p.date, "total": p.total, "by_priority": p.by_priority}
+                   for p in index.exceptions_trend()]),
                "question": pages.EXCEPTIONS_QUESTION,
                "tiers": list(pages.PRIORITY_TIERS), "total": len(model.exceptions),
                "rows": [{**entity(e, with_document=False),

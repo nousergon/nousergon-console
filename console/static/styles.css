@@ -184,3 +184,4 @@ a.health-tile[data-state="HEALTHY"] { --row-state: var(--good); }
    withheld link read as text rather than as a broken link. */
 .demo-banner { color: var(--muted); font-size: .85rem; }
 .demo-tour li { margin: .35rem 0; }
+svg.ts-chart rect.ts-live { fill-opacity: .9; }

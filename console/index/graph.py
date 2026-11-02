@@ -420,6 +420,13 @@ class Index:
     def exceptions_baseline(self):
         return getattr(self, "_exceptions_baseline", None)
 
+    def set_exceptions_trend(self, points) -> None:
+        """Day-by-day exception counts (`index/baseline.py::read_trend`), or None."""
+        self._exceptions_trend = points
+
+    def exceptions_trend(self):
+        return getattr(self, "_exceptions_trend", None)
+
     def set_triage(self, marks: dict) -> None:
         """Which issue tracks each row (`index/triage.py`). Applied at finalize,
         after every state is resolved, so it can only add facets — it never

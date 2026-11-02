@@ -1345,7 +1345,7 @@ def landing_page(index: Index) -> str:
 <title>fleet</title></head><body>
 <h1>fleet</h1>
 {health_strip(home.health(index, exceptions))}
-{exception_summary(model)}
+{exception_summary(model, index.exceptions_trend())}
 {headline_tiles(home.headline(index))}
 {dashboard_links(model.dashboards)}
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
@@ -1859,7 +1859,43 @@ def health_strip(areas: list[dict]) -> str:
             f'<div class="tiles">{"".join(tiles)}</div></section>')
 
 
-def exception_summary(model) -> str:
+def exception_trend(points, now_total: int | None = None) -> str:
+    """The not-healthy count, one bar per published day plus today's live
+    count, so "is the red going down?" is answered on the page (Brian
+    2026-10-29: the console must get materially better every day). With no
+    trend source declared it renders nothing; with one declared but empty it
+    says so rather than drawing a flat line."""
+    if points is None:
+        return ""
+    bars = [(p.date, p.total, False) for p in points]
+    if now_total is not None:
+        bars.append(("now", now_total, True))
+    if not bars:
+        return '<p class="absent">no daily exception counts published yet</p>'
+    hi = max(t for _, t, _ in bars) or 1
+    inner_h = _CHART_H - 2 * _CHART_PAD
+    slot = (_CHART_W - 2 * _CHART_PAD) / len(bars)
+    bar_w = max(slot * 0.8, 0.5)
+    rects = []
+    for i, (label, total, live) in enumerate(bars):
+        h = max(total / hi * inner_h, 0.5)
+        x = _CHART_PAD + i * slot + (slot - bar_w) / 2
+        cls = ' class="ts-live"' if live else ""
+        rects.append(
+            f'<rect x="{x:.2f}" y="{_CHART_H - _CHART_PAD - h:.2f}" width="{bar_w:.2f}" '
+            f'height="{h:.2f}"{cls}>'
+            f"<title>{esc(label)}: {total} not healthy</title></rect>")
+    first, last = bars[0], bars[-1]
+    change = last[1] - first[1]
+    text = (f"not healthy, {first[0]} – {last[0]}: {first[1]} → {last[1]} "
+            f"({'+' if change > 0 else ''}{change}) · lowest {min(t for _, t, _ in bars)}")
+    return (f'<p class="exception-trend"><svg class="ts-chart" viewBox="0 0 {_CHART_W:g} '
+            f'{_CHART_H:g}" preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
+            f"<title>{esc(text)}</title>" + "".join(rects)
+            + f'</svg><br><small class="ts-summary">{esc(text)}</small></p>')
+
+
+def exception_summary(model, trend=None) -> str:
     """Home's second element: counts of everything not HEALTHY by state, each
     linked to the full list, plus the decision queue, the transparency gap
     and population completeness. Counts only — the rows are on `/exceptions`."""
@@ -1890,6 +1926,7 @@ def exception_summary(model) -> str:
     return (f'<section class="page-section"><h2>exceptions</h2>'
             f'<p class="list-summary">{counts}</p>'
             + (f'<p class="list-summary">by priority: {by_tier}</p>' if view_rows else "")
+            + exception_trend(trend, len(view_rows))
             + f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
             f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a> · '
             f'{esc(gap_txt)} · population completeness {esc(comp_txt)}</p></section>')
@@ -1988,6 +2025,7 @@ def exceptions_page(index: Index) -> str:
 {index_freshness(index)}
 <p class="list-summary">{len(rows)} not healthy{esc(folded)} · {counts}</p>
 {_since_yesterday(delta)}
+{exception_trend(index.exceptions_trend(), len(rows))}
 {body}
 <h2 id="decision-queue">waiting on Brian · {len(model.queue)}</h2>
 {_table(model.queue, labels=model.queue_labels)}

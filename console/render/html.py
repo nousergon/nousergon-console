@@ -23,7 +23,7 @@ import re
 from datetime import datetime, timezone
 
 from .. import calendar_cadence
-from ..freshness import NO_CADENCE
+from ..freshness import NO_CADENCE, STALE
 from ..index import citations
 from ..index.citations import Citations
 from ..index.graph import Index, _is_inherited_alias
@@ -185,6 +185,40 @@ def _is_event_driven_envelope(ent: Entity, index: Index) -> bool:
     )
 
 
+def _is_missed_envelope_echo(ent: Entity, index: Index) -> bool:
+    """Whether a RUN or ARTIFACT row only repeats that its check went MISSED
+    (alpha-engine-config-I13097).
+
+    A check envelope mints a Component, a Run and an Artifact from one publish
+    (`adapters/checks_envelope.py`). When the check stops publishing, the
+    component goes MISSED, and the same staleness turns the envelope artifact
+    `stale` while the last run keeps its old verdict. The exception view then
+    showed one dead producer as three rows. The component carries the run's
+    status, summary and findings in its own detail, so it says all of it.
+
+    Strict: the component must be MISSED, the run must share its as-of (it IS
+    the component's latest report), and the artifact must be the envelope the
+    component produces, graded `stale`. A run from an earlier publish, or a
+    component MISSED for another reason, does not match. The rows stay in the
+    index and on their own pages; only the view drops them (§4.3).
+    """
+    if ent.kind is Kind.RUN:
+        for edge in index.related(ent.id):
+            if edge.source != ent.id or edge.rel != "belongs-to":
+                continue
+            component = index.entity(edge.target)
+            if (component is not None and component.kind is Kind.COMPONENT
+                    and component.state is State.MISSED
+                    and component.provenance.as_of == ent.provenance.as_of):
+                return True
+        return False
+    if ent.kind is Kind.ARTIFACT and str(ent.state).strip().lower() == STALE:
+        check_id = ent.detail.get("check_id")
+        return any(c.id == check_id and c.state is State.MISSED
+                   for c in _producers(ent, index))
+    return False
+
+
 def _is_alias_of_listed_parent(ent: Entity, index: Index) -> bool:
     """Whether a row is an alias that only repeats its parent's verdict
     (alpha-engine-config-I13097).
@@ -214,9 +248,10 @@ def landing_exceptions(index: Index) -> list[Entity]:
     """The §4.3 exception list: every non-HEALTHY row, minus a run that only
     echoes the component derived from it (alpha-engine-config-I8979), minus
     a run or artifact left behind by a component whose lifecycle is declared
-    off (alpha-engine-config-I12830), and minus an alias that only repeats a
-    listed parent (alpha-engine-config-I13097). The component row stays; its
-    runs, artifacts and aliases are reachable from it by relation."""
+    off (alpha-engine-config-I12830), minus an alias that only repeats a
+    listed parent, and minus the last run and stale envelope of a MISSED check
+    (both alpha-engine-config-I13097). The component row stays; its runs,
+    artifacts and aliases are reachable from it by relation."""
     return [
         e for e in index.all()
         if is_exception(e)
@@ -224,6 +259,7 @@ def landing_exceptions(index: Index) -> list[Entity]:
         and not _is_decided_residue(e, index)
         and not _is_event_driven_envelope(e, index)
         and not _is_alias_of_listed_parent(e, index)
+        and not _is_missed_envelope_echo(e, index)
     ]
 
 

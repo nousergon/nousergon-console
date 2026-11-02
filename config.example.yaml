@@ -1595,10 +1595,11 @@ home:
 # newest matching row's field, its state, its baseline or "no baseline", and
 # its staleness), `table` (rows with `fields` as columns, optional `sort:
 # [-]<field>` and `limit`), `chart` (one `timeseries` field of the newest
-# matching row), `report` (a declared `reports:` feed's latest report), and
+# matching row), `report` (a declared `reports:` feed's latest report),
 # `exceptions` (the not-healthy matching rows: P0 first, then untriaged, then
 # P1-P3, each tier worst state then oldest first; priority is read from a
-# `priority` facet or field).
+# `priority` facet or field), and `text` (a `body:` of markdown prose — raw
+# HTML off, citations linked — for the narrative between evidence sections).
 #
 # Optional on a selector section: `empty: <text>`, what it says when the
 # selector matches no row at all (a source that has published nothing yet),
@@ -1632,6 +1633,36 @@ pages:
         select: {kind: component, facets: {pane: reports}}
       - type: report
         feed: daily
+
+# ── Demo mode (`/demo/...`) ────────────────────────────────────────────────
+# The same declared pages, shown to an audience with what is private left out
+# (console/demo.py). OFF unless `enabled: true`: every /demo URL is then a 404.
+# Authentication is unchanged — /demo is served by the same process behind the
+# same edge identity as everything else.
+#
+# Default deny. Only the tour (`/demo/`) and the pages `pages:` names (page-id
+# patterns, in tour order) are served, HTML only; every other view and every
+# JSON request answers "not part of the demo", and a link to one renders as
+# plain text. Rows whose kind is in `hide.kinds`, or that carry a value listed
+# under `hide.facets`, do not exist in the demo; `hide.fields` are stripped
+# from every row. Report sections are not shown. Every response is redacted
+# for account ids, ARNs, key and token shapes, private keys, e-mail and IP
+# addresses, instance ids and storage URIs — always, whatever this block says
+# — plus `redact.prefixes` (e.g. parameter-store paths) and `redact.patterns`.
+#
+# A bad declaration (an unknown key, `enabled` not a boolean, enabled with no
+# pages, a page pattern matching no declared page, a pattern that is not a
+# regex) FAILS THE BUILD naming the key.
+demo:
+  enabled: false
+  title: Guided tour
+  intro: What this system is, in a few pages; each page links to its evidence.
+  pages: [reliability]
+  hide:
+    facets: {pane: [cost]}
+    fields: [budget]
+  redact:
+    prefixes: [/example-org/]
 
 # ── Citation links (rendered markdown documents) ───────────────────────────
 # Reports cite work as plain text — `ex#12`, `example-repo-I12`,

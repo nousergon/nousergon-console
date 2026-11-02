@@ -2026,9 +2026,16 @@ def _page_chart(index: Index, sec: dict) -> str:
             f'</figcaption></figure>')
 
 
-def _page_section(index: Index, sec: dict, links: Citations | None) -> str:
+def _page_section(index: Index, sec: dict, links: Citations | None,
+                  demo: bool = False) -> str:
     title = f'<h2>{esc(sec["title"])}</h2>' if sec.get("title") else ""
-    if sec["type"] == "tiles":
+    if sec["type"] == "text":
+        body = document_body({"format": DOCUMENT_MARKDOWN, "text": sec["body"]}, links)
+    elif sec["type"] == "report" and (demo or "withheld" in sec):
+        # A report is free text from a source; nothing reads it ahead of an
+        # audience, so a demo shows that it exists and not what it says.
+        body = '<p class="absent">this report is not shown in the demo view</p>'
+    elif sec["type"] == "tiles":
         body = ('<div class="tiles">' + "".join(_page_tile(t, _empty_note(sec)) for t in sec["tiles"])
                 + "</div>")
     elif sec["type"] == "report":
@@ -2049,10 +2056,17 @@ def _page_section(index: Index, sec: dict, links: Citations | None) -> str:
     return f'<section class="page-section page-{esc(sec["type"])}">{title}{body}</section>'
 
 
-def page_page(index: Index, page_id: str, params: dict | None = None) -> str:
+def page_page(index: Index, page_id: str, params: dict | None = None,
+              demo=None) -> str:
     """A declared page (`/page/<id>`): the sections its config lays out, over
     rows other adapters mint, for the URL's range and variables. Declared in
-    config, evaluated per request, nothing stored (§5.6)."""
+    config, evaluated per request, nothing stored (§5.6).
+
+    ``demo`` (a `console.demo.Demo`) renders the page for an audience
+    (alpha-engine-config-I13023): ``index`` is then the demo VIEW of the index,
+    the page switcher and breadcrumb name only the tour, the index's own as-of
+    is one line rather than every source's read, and report sections are not
+    shown. The numbers are the same evaluation either way."""
     from ..index import pages
 
     found = pages.page(index, page_id)
@@ -2067,26 +2081,79 @@ def page_page(index: Index, page_id: str, params: dict | None = None) -> str:
 <p class="absent">no page {esc(page_id)} is declared in the `pages:` config block</p>
 </body></html>"""
     pg = pages.evaluate(index, found, params or {})
+    if demo:
+        pg = demo.page_doc(pg)
     links = citations.declared(index)
+    listed = demo.tour(pages.declared(index)) if demo else pages.declared(index)
     others = " · ".join(f'<a href="{esc(o.url)}">{esc(o.title)}</a>'
-                        for o in pages.declared(index) if o.id != found.id)
+                        for o in listed if o.id != found.id)
     switcher = f'<p class="report-feeds">other pages: {others}</p>' if others else ""
-    sections = "\n".join(_page_section(index, s, links) for s in pg["sections"])
+    sections = "\n".join(_page_section(index, s, links, demo=demo is not None)
+                         for s in pg["sections"])
     declared_links = (
         '<p class="page-links">' + " · ".join(
             f'<a href="{esc(link["url"])}">{esc(link["title"])}</a>' for link in pg["links"])
         + "</p>") if pg["links"] else ""
     return f"""{head}
 <title>{esc(pg["title"])}</title></head><body>
-<nav><a href="/">fleet</a> &rsaquo; <a href="/dashboards">pages</a> &rsaquo; {esc(pg["title"])}</nav>
+{_page_breadcrumb(pg, demo)}
 <h1>{esc(pg["title"])}</h1>
 <p class="pane-question">{esc(pg["question"])}</p>
 {declared_links}
-{index_freshness(index)}
+{demo_freshness(index) if demo else index_freshness(index)}
 {_page_controls(pg)}
 {switcher}
 {sections}
 </body></html>"""
+
+
+def _page_breadcrumb(pg: dict, demo) -> str:
+    if demo:
+        return (f'<nav><a href="/">{esc(demo.title)}</a> &rsaquo; '
+                f'{esc(pg["title"])}</nav>')
+    return (f'<nav><a href="/">fleet</a> &rsaquo; <a href="/dashboards">pages</a> '
+            f'&rsaquo; {esc(pg["title"])}</nav>')
+
+
+def demo_freshness(index: Index) -> str:
+    """The index's as-of for an audience: when the data was read, without the
+    per-source list `index_freshness` gives an operator (source names are
+    internal topology). An unknown build time still says so."""
+    built = index.build_info.built_at
+    if not built:
+        return '<p class="absent">data time unknown</p>'
+    return f'<p class="index-freshness">data as of {as_of_html(built)}</p>'
+
+
+def demo_tour_page(index: Index, demo) -> str:
+    """The demo's front page: its title, its declared introduction, and the
+    tour — every page the demo shows, in order, each with the question it
+    answers. Nothing else from the console is linked from here."""
+    from ..index import pages
+
+    tour = demo.tour(pages.declared(index))
+    intro = (document_body({"format": DOCUMENT_MARKDOWN, "text": demo.intro},
+                           citations.declared(index)) if demo.intro else "")
+    steps = "".join(
+        f'<li><a href="{esc(p.url)}">{esc(p.title)}</a> — {esc(p.question)}</li>'
+        for p in tour)
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{esc(demo.title)}</title></head><body>
+<h1>{esc(demo.title)}</h1>
+{intro}
+<ol class="demo-tour">{steps}</ol>
+{demo_freshness(index)}
+</body></html>"""
+
+
+def with_demo_nav(page: str, demo) -> str:
+    """The demo's one menu, in place of the site menu: the tour and its pages.
+    The banner says what the reader is looking at — a view with some
+    information left out — so nobody mistakes it for the whole system."""
+    nav = (f'<nav class="site-nav demo-nav"><a href="/">{esc(demo.title)}</a> · '
+           '<span class="demo-banner">demo view — operational, cost and private '
+           'detail is not shown</span></nav>')
+    return page.replace("<body>", "<body>" + nav, 1)
 
 
 def with_site_nav(page: str) -> str:

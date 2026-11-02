@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .. import demo as demo_mode
 from ..index import pages, planner, reports
 from ..index.graph import Index
 from ..render import html as render_html
@@ -39,6 +40,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                        "text/css; charset=utf-8")
             return
         index = self.server.index
+        if parts.path == demo_mode.PREFIX or parts.path.startswith(demo_mode.PREFIX + "/"):
+            self._demo(index, parts.path[len(demo_mode.PREFIX):] or "/", parts.query)
+            return
         path, as_json = negotiate(
             parts.path,
             self.headers.get("Accept"),
@@ -89,6 +93,54 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, body, "application/json; charset=utf-8")
             return
         self._send(200, _html(index, req), "text/html; charset=utf-8")
+
+    def _demo(self, index: Index, path: str, query: str) -> None:
+        """A `/demo/...` request (alpha-engine-config-I13023; `console/demo.py`).
+
+        Off unless the config enables it: a disabled demo is a plain 404, the
+        same answer as a route that does not exist. Enabled, only the tour and
+        its declared pages are served — in both representations, negotiated
+        exactly as every other route is (§3.8) — and every other path answers
+        "not part of the demo". Every byte passes `demo.finish` (HTML) or is
+        built by `demo.payload` (JSON), which redact it."""
+        demo = demo_mode.declared(index)
+
+        def target(p: str):
+            try:
+                req = resolve(p, query)
+            except UnknownRoute:
+                return None
+            return req if demo_mode.resolved(demo, index, req) else None
+
+        path, as_json = negotiate(
+            path, self.headers.get("Accept"),
+            lambda p: demo.enabled and target(p) is not None,
+            lambda p: demo.enabled and _routable(p, query))
+        req = target(path) if demo.enabled else None
+        if req is None:
+            message = ("This is not part of the demo." if demo.enabled
+                       else f"No view at {demo_mode.PREFIX}{path}.")
+            if as_json or not demo.enabled:
+                self._fail(404, as_json, message)
+                return
+            self._send(404, demo_mode.finish(
+                f"<!doctype html><html><head><title>{render_html.esc(demo.title)}</title>"
+                f"</head><body><h1>Not shown</h1><p>{message} "
+                f'<a href="/">Back to the tour</a></p></body></html>', demo),
+                "text/html; charset=utf-8")
+            return
+        if as_json:
+            self._send(200, render_json.dumps(demo_mode.payload(
+                index, demo, req, render_json.SCHEMA_VERSION)),
+                "application/json; charset=utf-8")
+            return
+        if req.view == "landing":
+            body = render_html.demo_tour_page(index, demo)
+        else:
+            body = render_html.page_page(demo_mode.view(index), req.page_id or "",
+                                         dict(req.params), demo=demo)
+        body = render_html.with_scrolling_tables(render_html.with_demo_nav(body, demo))
+        self._send(200, demo_mode.finish(body, demo), "text/html; charset=utf-8")
 
     def _fail(self, status: int, as_json: bool, message: str) -> None:
         """A 404 in the representation that was asked for.

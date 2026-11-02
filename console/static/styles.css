@@ -175,3 +175,7 @@ a.health-tile:hover { border-color: var(--link); }
 a.health-tile[data-state="FAILED"], a.health-tile[data-state="STALLED"], a.health-tile[data-state="MISSED"] { --row-state: var(--bad); }
 a.health-tile[data-state="DEGRADED"], a.health-tile[data-state="UNREPORTED"], a.health-tile[data-state="ABSENT"], a.health-tile[data-state="UNREGISTERED"], a.health-tile[data-state="NEVER_RAN"] { --row-state: var(--warn); }
 a.health-tile[data-state="HEALTHY"] { --row-state: var(--good); }
+/* Demo mode (console/demo.py): say what the reader is looking at, and make a
+   withheld link read as text rather than as a broken link. */
+.demo-banner { color: var(--muted); font-size: .85rem; }
+.demo-tour li { margin: .35rem 0; }

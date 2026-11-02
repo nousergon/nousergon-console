@@ -31,6 +31,7 @@ from .adapters import (
     state_machine,
     yaml_directory,
 )
+from . import demo as demo_mode
 from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
@@ -233,6 +234,11 @@ def build_index(config: dict[str, Any]) -> Index:
     # declared feed, fails the build by name.
     declared_layouts = declared_pages.parse(
         config.get("pages"), feeds={f.id for f in declared_feeds})
+    # And for demo mode (`/demo/...`, alpha-engine-config-I13023): a `demo:`
+    # block that would hide less than it says — an unknown key, a bad regex, a
+    # page pattern matching no declared page — fails the build by name.
+    declared_demo = demo_mode.parse(
+        config.get("demo"), page_ids={p.id for p in declared_layouts})
     # And for the home page's areas and headline tiles (CN-4.3, amended
     # 2026-10-28): an area or tile this build cannot evaluate fails by name.
     declared_front = declared_home.parse(config.get("home"))
@@ -377,6 +383,7 @@ def build_index(config: dict[str, Any]) -> Index:
     delivery_planner.attach(index, declared_plan)
     report_feeds.attach(index, declared_feeds)
     declared_pages.attach(index, declared_layouts)
+    demo_mode.attach(index, declared_demo)
     declared_home.attach(index, declared_front)
     citation_links.attach(index, declared_citations)
     # ONE OBSERVATION PER BUILD (§4.4, alpha-engine-config-I9083). `evaluate`

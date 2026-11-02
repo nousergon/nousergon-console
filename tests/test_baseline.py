@@ -77,3 +77,19 @@ def test_a_malformed_block_fails_the_strict_preflight():
     with pytest.raises(console_config.ConfigError):
         console_config.validate_config({"exceptions_baseline": {"bucket": "b", "key": "k",
                                                                 "days_back": 0}})
+
+
+def test_a_folded_job_failing_under_a_newer_run_is_neither_cleared_nor_new():
+    """Codex review cef0b43561b005e1: the folded row's id is its NEWEST run, so
+    comparing ids reported a persistently failing job as cleared and new."""
+    yesterday = {"view": "exceptions", "snapshot_utc": "2026-10-31T21:24:39Z", "rows": [
+        {"id": "job-x@old", "kind": "run", "state": "FAILED", "label": "Job X"},
+        {"id": "job-y@old", "kind": "run", "state": "FAILED", "label": "Job Y"}]}
+    base = baseline.from_snapshot(yesterday)
+    today = {"job-x@new": "run|job-x|FAILED", "job-y@new": "run|job-y|DEGRADED"}
+    delta = baseline.compare(base, list(today), today)
+    assert delta["new"] == ["job-y@new"]          # a different fact: now DEGRADED
+    assert delta["cleared"] == ["job-y@old"]
+    assert delta["cleared_labels"] == {"job-y@old": "Job Y"}
+    assert baseline.row_key("job-x@new", "run", "FAILED") == "run|job-x|FAILED"
+    assert baseline.row_key("ae-a", "component", "FAILED") == "ae-a"

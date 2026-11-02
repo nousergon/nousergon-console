@@ -1890,7 +1890,9 @@ def exceptions_page(index: Index) -> str:
         tiers.setdefault(pages.PRIORITY_TIERS[pages.priority_rank(e)], []).append(e)
     from ..index import baseline as _baseline
 
-    delta = _baseline.compare(index.exceptions_baseline(), [e.id for e in rows])
+    delta = _baseline.compare(
+        index.exceptions_baseline(), [e.id for e in rows],
+        {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value) for e in rows})
     new_ids = set(delta["new"]) if delta else set()
     counts = " · ".join(
         f'<a href="#tier-{esc(t)}">{len(tiers[t])} {esc(t)}</a>'

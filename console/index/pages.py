@@ -453,11 +453,27 @@ def _sort_key(sort: str, order: tuple[str, ...] = ()):
         number = isinstance(v, (int, float)) and not isinstance(v, bool)
         # A row without the value sorts last in either direction.
         present = v is not None
-        if desc:
-            return (not present, -(float(v)) if number else 0.0, "" if number else str(v))
-        return (not present, float(v) if number else 0.0, "" if number else str(v))
+        value = (float(v) if number else 0.0, "" if number else str(v))
+        # `-` reverses the whole value, text included: negating only the number
+        # left `-trading_day` listing ISO dates oldest first (aec#13053).
+        return (not present, _Descending(value) if desc else value)
 
     return key
+
+
+class _Descending:
+    """A sort-key part that orders in reverse, for values (text) that cannot be negated."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: tuple) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Descending) and self.value == other.value
+
+    def __lt__(self, other: "_Descending") -> bool:
+        return other.value < self.value
 
 
 def priority_rank(ent: Any) -> int:

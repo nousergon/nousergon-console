@@ -57,6 +57,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from typing import Any, Callable, Iterable
 
 from ..model.entity import Entity, Provenance
@@ -181,6 +182,63 @@ def _describe(exc: BaseException) -> str:
     return _first_line(f"{type(exc).__name__}: {exc}") or type(exc).__name__
 
 
+def _issue_row(get_json: Callable[[str], Any], repo: str,
+               base: str) -> dict[str, Any] | None:
+    """One named issue as a ref-reader row, or None for a PR number.
+
+    ``get_json`` reads one host path and RAISES on failure; the issue read's
+    error propagates (the caller counts it), the dependency read's never does —
+    no dependency read is no claim, not an unread ref.
+    """
+    issue = get_json(base) or {}
+    if not issue or "pull_request" in issue:
+        return None  # a PR number is not an issue ref (the key, whatever its body)
+    blocked_by: list[str] = []
+    if str(issue.get("state", "")).lower() == "open":
+        try:
+            deps = get_json(f"{base}/dependencies/blocked_by") or []
+        except Exception:  # noqa: BLE001 - no dependency read is no claim
+            deps = []
+        for dep in deps if isinstance(deps, list) else []:
+            if str(dep.get("state", "")).lower() != "open":
+                continue
+            dep_repo = str(dep.get("repository_url", "")).rsplit("/", 1)[-1] or repo
+            blocked_by.append(f"{dep_repo}-I{dep.get('number')}")
+    return {
+        "number": issue.get("number"),
+        "title": issue.get("title", ""),
+        "state": str(issue.get("state", "")).upper(),
+        "labels": [{"name": lab.get("name", "")} for lab in issue.get("labels", [])],
+        "updatedAt": issue.get("updated_at"),
+        "closedAt": issue.get("closed_at"),
+        "url": issue.get("html_url"),
+        "blockedBy": blocked_by,
+    }
+
+
+def _read_named(get_json: Callable[[str], Any], org: str, repo: str,
+                numbers: list[int], how: str) -> list[dict[str, Any]]:
+    """Every named issue of one repo through ``get_json``. A ref that errors is
+    omitted, never guessed; EVERY ref erroring raises `RefReadError` carrying
+    the first error, because that is a fact about the reader, not the refs."""
+    out: list[dict[str, Any]] = []
+    first_error: str | None = None
+    errors = 0
+    for number in numbers:
+        try:
+            row = _issue_row(get_json, repo, f"repos/{org}/{repo}/issues/{number}")
+        except Exception as exc:  # noqa: BLE001 - an unread ref is reported, not raised
+            errors += 1
+            if first_error is None:
+                first_error = _describe(exc)
+            continue
+        if row is not None:
+            out.append(row)
+    if numbers and errors == len(numbers):
+        raise RefReadError(f"every {how} read failed; first: {first_error}")
+    return out
+
+
 def _gh_ref_reader(org: str, repo: str, numbers: list[int],
                    cache: str) -> list[dict[str, Any]]:
     """REST, one issue per call, through `gh api --cache` so a rebuild every
@@ -197,52 +255,110 @@ def _gh_ref_reader(org: str, repo: str, numbers: list[int],
     if gh is None:
         raise RefReadError(
             "gh CLI not found on this process's PATH; named issue refs are read "
-            "through an authenticated `gh` (install it for the service user, or "
-            "set PATH and GH_TOKEN in the service environment)")
-    out: list[dict[str, Any]] = []
-    first_error: str | None = None
-    errors = 0
-    for number in numbers:
-        base = f"repos/{org}/{repo}/issues/{number}"
-        try:
-            issue = json.loads(subprocess.run(
-                [gh, "api", "--cache", cache, base],
-                capture_output=True, text=True, check=True,
-            ).stdout or "{}")
-        except Exception as exc:  # noqa: BLE001 - an unread ref is reported, not raised
-            errors += 1
-            if first_error is None:
-                first_error = _describe(exc)
-            continue
-        if not issue or issue.get("pull_request"):
-            continue  # a PR number is not an issue ref
-        blocked_by: list[str] = []
-        if str(issue.get("state", "")).lower() == "open":
+            "through an authenticated `gh`, or set `planner.fetch.token_command` "
+            "to read them over REST with no CLI (alpha-engine-config-I12821)")
+
+    def get_json(path: str) -> Any:
+        return json.loads(subprocess.run(
+            [gh, "api", "--cache", cache, path],
+            capture_output=True, text=True, check=True,
+        ).stdout or "null")
+
+    return _read_named(get_json, org, repo, numbers, "`gh api`")
+
+
+#: ``15m`` / ``1h`` / ``30s`` / ``0`` -> seconds. Same vocabulary `gh --cache`
+#: takes, so one config key means one thing whichever reader is configured.
+_DURATION = re.compile(r"^\s*(?P<n>[0-9]+)\s*(?P<unit>[smhd]?)\s*$")
+_UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _cache_seconds(cache: str) -> float:
+    m = _DURATION.match(str(cache))
+    if not m:
+        return 0.0
+    return float(int(m.group("n")) * _UNIT_SECONDS[m.group("unit")])
+
+
+#: In-process, per-path response memo for the REST reader: what `gh api
+#: --cache` keeps on disk, kept in memory instead, so the reader needs no
+#: writable home (the console unit is `ProtectHome=read-only`). Successful
+#: reads only — an error is retried on the next build, never remembered.
+_REST_CACHE: dict[str, tuple[float, Any]] = {}
+
+#: Bound on one host call, so one hung read cannot stall an index build.
+_REST_TIMEOUT_SECONDS = 20
+_TOKEN_TIMEOUT_SECONDS = 60
+
+
+def _mint_token(token_command: list[str], org: str, repo: str) -> str:
+    """Run the configured command and return the first line of its stdout.
+
+    The command is configuration (e.g. a credential helper that mints a
+    short-lived, repo-scoped token), so the console holds no secret and stores
+    none: the token lives for one repo's reads inside one build. Its stderr is
+    carried as the reason when it fails; its stdout never is.
+    """
+    argv = [str(a).replace("{org}", org).replace("{repo}", repo)
+            for a in token_command]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, check=True,
+                             timeout=_TOKEN_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - becomes the source's reason
+        raise RefReadError(f"token_command failed: {_describe(exc)}") from None
+    token = _first_line(out.stdout)
+    if not token:
+        raise RefReadError("token_command printed no token")
+    return token
+
+
+def rest_ref_reader(token_command: list[str],
+                    api_url: str = "https://api.github.com",
+                    urlopen: Callable[..., Any] | None = None) -> RefReader:
+    """A `RefReader` that calls the host's REST API directly with a token
+    from ``token_command`` — no `gh`, no PATH dependency, no writable home
+    (alpha-engine-config-I12821 / -I12937: the box has no `gh`, so the gh
+    reader failed every ref in well under a millisecond).
+
+    ``urlopen`` is injectable for hermetic tests; the default is urllib's.
+    """
+    import urllib.error
+    import urllib.request
+
+    opener = urlopen or urllib.request.urlopen
+    base_url = str(api_url).rstrip("/")
+
+    def reader(org: str, repo: str, numbers: list[int],
+               cache: str) -> list[dict[str, Any]]:
+        ttl = _cache_seconds(cache)
+        token: list[str] = []  # minted lazily: a fully cached repo mints nothing
+
+        def get_json(path: str) -> Any:
+            url = f"{base_url}/{path}"
+            now = time.monotonic()
+            hit = _REST_CACHE.get(url)
+            if hit is not None and hit[0] > now:
+                return hit[1]
+            if not token:
+                token.append(_mint_token(token_command, org, repo))
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {token[0]}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "nousergon-console",
+            })
             try:
-                deps = json.loads(subprocess.run(
-                    [gh, "api", "--cache", cache, f"{base}/dependencies/blocked_by"],
-                    capture_output=True, text=True, check=True,
-                ).stdout or "[]")
-            except Exception:  # noqa: BLE001 - no dependency read is no claim
-                deps = []
-            for dep in deps if isinstance(deps, list) else []:
-                if str(dep.get("state", "")).lower() != "open":
-                    continue
-                dep_repo = str(dep.get("repository_url", "")).rsplit("/", 1)[-1] or repo
-                blocked_by.append(f"{dep_repo}-I{dep.get('number')}")
-        out.append({
-            "number": issue.get("number"),
-            "title": issue.get("title", ""),
-            "state": str(issue.get("state", "")).upper(),
-            "labels": [{"name": lab.get("name", "")} for lab in issue.get("labels", [])],
-            "updatedAt": issue.get("updated_at"),
-            "closedAt": issue.get("closed_at"),
-            "url": issue.get("html_url"),
-            "blockedBy": blocked_by,
-        })
-    if numbers and errors == len(numbers):
-        raise RefReadError(f"every `gh api` read failed; first: {first_error}")
-    return out
+                with opener(req, timeout=_REST_TIMEOUT_SECONDS) as resp:
+                    body = json.loads(resp.read().decode("utf-8") or "null")
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"HTTP {exc.code}: {exc.reason}") from None
+            if ttl > 0:
+                _REST_CACHE[url] = (now + ttl, body)
+            return body
+
+        return _read_named(get_json, org, repo, numbers, "REST")
+
+    return reader
 
 
 def fetch_refs(
@@ -272,7 +388,19 @@ def fetch_refs(
     if not org:
         return AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
                              status=AdapterStatus.FAILED, unavailable=("all",))
-    reader = ref_reader or _gh_ref_reader
+    reader = ref_reader
+    if reader is None:
+        # A configured token command selects the CLI-free REST reader; without
+        # one the `gh` reader is unchanged (alpha-engine-config-I12821).
+        token_command = config.get("token_command")
+        if isinstance(token_command, str):
+            token_command = token_command.split()
+        if token_command:
+            reader = rest_ref_reader(
+                [str(a) for a in token_command],
+                str(config.get("api_url") or "https://api.github.com"))
+        else:
+            reader = _gh_ref_reader
     entities: list[Entity] = []
     unavailable: list[str] = []
     reasons: list[str] = []

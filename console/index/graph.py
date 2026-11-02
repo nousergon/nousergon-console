@@ -25,6 +25,7 @@ from ..model.kinds import COMPONENT_STATE_KINDS, REPORTED_STATE_DETAIL, Kind, St
 from .build import AdapterFetch, BuildInfo
 from .cadence_state import resolve_cadence_state
 from .event_trigger import resolve_event_trigger_state
+from .duty_window import resolve_duty_window_state
 from .merge import Claim, NamespaceCollision, merge
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
@@ -391,6 +392,12 @@ class Index:
             ent = merge(claims)
             ent = self._reconcile(ent, claims)
             self._entities[entity_id] = ent
+        # OFF_DUTY (§8.3, alpha-engine-config-I12940): a comparison between a
+        # MISSED row and its substrate's declared duty anchor, so it needs every
+        # id's merged entity — and it runs BEFORE alias inheritance so an alias
+        # of a folded component inherits OFF_DUTY rather than the raw MISSED.
+        self._entities = resolve_duty_window_state(
+            self._entities, staleness_factor=self._staleness_factor)
         self._apply_alias_inheritance()
         # ARMED (§8.3, alpha-engine-config-I7116): a comparison between an
         # event-driven row and its declared trigger anchor, so — like alias

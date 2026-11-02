@@ -340,6 +340,54 @@ def test_sort_order_lays_rows_out_in_the_declared_value_order():
     assert got == WINDOW_ORDER + ["zzz"]
 
 
+WEEKS = {
+    "weekly": {
+        "title": "Weekly", "question": "How did the last two weeks compare?",
+        "sections": [
+            {"type": "table", "title": "Week over week", "fields": ["trading_day"],
+             "sort": "-trading_day", "limit": 2,
+             "select": {"facets": {"perf": "window"}}},
+        ],
+    },
+}
+
+
+def _week(day: str | None, n: int) -> Entity:
+    at = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    fields = {"trading_day": {"value": day, "render": "text"}} if day else {}
+    return Entity(
+        kind=Kind.SIGNAL, id=f"week:{n}", state=State.HEALTHY,
+        provenance=Provenance("s3://b/w/", at, "s3://b/w/x.json"),
+        facets={"perf": "window"}, detail={"fields": fields})
+
+
+def _weekly_rows(days):
+    idx = Index()
+    idx.add_result(AdapterResult(name="fixture", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION,
+                                 entities=tuple(_week(d, n) for n, d in enumerate(days))))
+    pages.attach(idx, pages.parse(WEEKS))
+    idx.finalize()
+    page = render_json.payload(idx, resolve("/page/weekly"))["page"]
+    return [r["fields"].get("trading_day") for r in page["sections"][0]["rows"]]
+
+
+def test_a_descending_text_sort_puts_the_newest_week_first_before_the_limit():
+    # aec#13053: `-` was ignored for text, so `-trading_day` + `limit: 2` showed
+    # the two OLDEST weeks once three existed.
+    assert _weekly_rows(["2026-10-23", "2026-11-13", None, "2026-10-30"]) == [
+        "2026-11-13", "2026-10-30"]
+
+
+def test_a_descending_sort_still_puts_a_row_without_the_value_last():
+    assert pages._sort_key("-d")({"fields": {}}) > pages._sort_key("-d")({"fields": {"d": "a"}})
+    rows = [{"fields": {"d": v}} for v in ("b", None, "c", "a", 2, 10)]
+    rows.sort(key=pages._sort_key("-d"))
+    assert [r["fields"]["d"] for r in rows] == [10, 2, "c", "b", "a", None]
+    rows.sort(key=pages._sort_key("d"))
+    assert [r["fields"]["d"] for r in rows] == ["a", "b", "c", 2, 10, None]
+
+
 @pytest.mark.parametrize("section, message", [
     ({"type": "table", "title": "x", "sort_order": ["a"],
       "select": {"facets": {"a": "b"}}}, "ascending `sort`"),

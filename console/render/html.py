@@ -23,10 +23,10 @@ import re
 from datetime import datetime, timezone
 
 from .. import calendar_cadence
-from ..freshness import NO_CADENCE
+from ..freshness import NO_CADENCE, STALE
 from ..index import citations
 from ..index.citations import Citations
-from ..index.graph import Index
+from ..index.graph import Index, _is_inherited_alias
 from ..model.entity import DOCUMENT_DETAIL, DOCUMENT_MARKDOWN, LABEL_DETAIL, Entity
 from ..model.fields import (
     Field,
@@ -185,18 +185,81 @@ def _is_event_driven_envelope(ent: Entity, index: Index) -> bool:
     )
 
 
+def _is_missed_envelope_echo(ent: Entity, index: Index) -> bool:
+    """Whether a RUN or ARTIFACT row only repeats that its check went MISSED
+    (alpha-engine-config-I13097).
+
+    A check envelope mints a Component, a Run and an Artifact from one publish
+    (`adapters/checks_envelope.py`). When the check stops publishing, the
+    component goes MISSED, and the same staleness turns the envelope artifact
+    `stale` while the last run keeps its old verdict. The exception view then
+    showed one dead producer as three rows. The component carries the run's
+    status, summary and findings in its own detail, so it says all of it.
+
+    Strict: the component must be MISSED, the run must share its as-of (it IS
+    the component's latest report), and the artifact must be the envelope the
+    component produces, graded `stale`. A run from an earlier publish, or a
+    component MISSED for another reason, does not match. The rows stay in the
+    index and on their own pages; only the view drops them (§4.3).
+    """
+    if ent.kind is Kind.RUN:
+        for edge in index.related(ent.id):
+            if edge.source != ent.id or edge.rel != "belongs-to":
+                continue
+            component = index.entity(edge.target)
+            if (component is not None and component.kind is Kind.COMPONENT
+                    and component.state is State.MISSED
+                    and component.provenance.as_of == ent.provenance.as_of):
+                return True
+        return False
+    if ent.kind is Kind.ARTIFACT and str(ent.state).strip().lower() == STALE:
+        check_id = ent.detail.get("check_id")
+        return any(c.id == check_id and c.state is State.MISSED
+                   for c in _producers(ent, index))
+    return False
+
+
+def _is_alias_of_listed_parent(ent: Entity, index: Index) -> bool:
+    """Whether a row is an alias that only repeats its parent's verdict
+    (alpha-engine-config-I13097).
+
+    An alias with no report of its own renders the PARENT's merged state and
+    as-of (`detail.alias_state: "inherited"`, `index/graph.py::
+    _apply_alias_inheritance`, alpha-engine-config-I8973). On the exception
+    view that made one problem two rows — the parent and its pointer, same
+    state, same as-of. Measured on the 2026-11-02 00:59Z snapshot: 9 of 103
+    rows, each a second copy of a row already listed. `transparency_gap` and
+    `staleness_honesty` already drop the same entities for the same reason.
+
+    Strict: only the inherited shape, and only when the parent is a COMPONENT
+    in the index and is itself an exception, so the problem still lists once.
+    An alias that received its own report (the #8779 shape) keeps its own
+    state and lists as before. The row stays in the index and on its own page;
+    only the view drops it (§4.3), as `_is_component_echo` does.
+    """
+    if ent.kind is not Kind.COMPONENT or not _is_inherited_alias(ent):
+        return False
+    parent = index.entity(str(ent.detail.get("alias_of")))
+    return (parent is not None and parent.kind is Kind.COMPONENT
+            and is_exception(parent))
+
+
 def landing_exceptions(index: Index) -> list[Entity]:
     """The §4.3 exception list: every non-HEALTHY row, minus a run that only
-    echoes the component derived from it (alpha-engine-config-I8979), and
-    minus a run or artifact left behind by a component whose lifecycle is
-    declared off (alpha-engine-config-I12830). The component row stays; its
-    runs and artifacts are reachable from it by relation."""
+    echoes the component derived from it (alpha-engine-config-I8979), minus
+    a run or artifact left behind by a component whose lifecycle is declared
+    off (alpha-engine-config-I12830), minus an alias that only repeats a
+    listed parent, and minus the last run and stale envelope of a MISSED check
+    (both alpha-engine-config-I13097). The component row stays; its runs,
+    artifacts and aliases are reachable from it by relation."""
     return [
         e for e in index.all()
         if is_exception(e)
         and not _is_component_echo(e, index)
         and not _is_decided_residue(e, index)
         and not _is_event_driven_envelope(e, index)
+        and not _is_alias_of_listed_parent(e, index)
+        and not _is_missed_envelope_echo(e, index)
     ]
 
 

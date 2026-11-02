@@ -525,3 +525,64 @@ def test_an_alias_never_hides_staleness():
         lister=lister, reader=reader, now=NOW,
     )
     assert _by_id(result)["comp-evidence"].state is State.MISSED
+
+
+def test_a_missed_check_lists_once_not_as_component_run_and_artifact():
+    """alpha-engine-config-I13097: comp-stale stopped publishing. Its
+    component is MISSED; the last run (status ok, same as-of) and the stale
+    envelope artifact only repeat that. The component lists, the other two
+    stay in the index and remain exceptions on their own pages."""
+    result = checks_envelope.fetch(
+        _cfg(), lister=_lister, reader=_reader, now=NOW,
+    )
+    index = _build_index(result)
+    ids = {e.id for e in landing_exceptions(index)}
+    assert "comp-stale" in ids
+    assert index.entity("comp-stale").state is State.MISSED
+    artifact = index.entity(f"{PREFIX}comp-stale/latest.json")
+    assert artifact.state == "stale" and is_exception(artifact)
+    assert artifact.id not in ids
+    runs = [e for e in index.all() if e.kind is Kind.RUN and e.id.startswith("comp-stale@")]
+    assert runs and all(r.id not in ids for r in runs)
+
+
+def test_a_degraded_run_of_a_missed_check_does_not_list_beside_it():
+    """The live shape: the last publish said `attention`, then the producer
+    died. One row, the MISSED component, which carries that verdict."""
+    body = {**STALE_OK_BODY, "status": "attention",
+            "findings": [{"key": "k", "detail": "d"}]}
+    objects = {f"{PREFIX}comp-stale/latest.json": body}
+    result = checks_envelope.fetch(
+        _cfg(), now=NOW,
+        lister=lambda b, p: [(k, body["ran_at"]) for k in objects],
+        reader=lambda b, k: objects[k],
+    )
+    index = _build_index(result)
+    (run,) = [e for e in index.all() if e.kind is Kind.RUN]
+    assert run.state is State.DEGRADED and is_exception(run)
+    assert [e.id for e in landing_exceptions(index)] == ["comp-stale"]
+
+
+def test_a_fresh_envelope_of_a_missed_component_still_lists():
+    """The artifact echo needs the artifact to be stale: a component MISSED
+    for a reason other than its envelope's age keeps a fresh artifact out of
+    the view anyway, and a stale artifact whose producer is not MISSED lists."""
+    from console.model.entity import Edge, Entity, Provenance
+    from console.model.envelope import AdapterResult, ClaimClass
+
+    index = Index()
+    comp = Entity(kind=Kind.COMPONENT, id="comp-x", state=State.DEGRADED,
+                  provenance=Provenance(source="s3://x", as_of="2026-07-30T00:00:00+00:00",
+                                        evidence="s3://x"))
+    art = Entity(kind=Kind.ARTIFACT, id="ops/checks/comp-x/latest.json", state="stale",
+                 provenance=Provenance(source="s3://x", as_of="2026-07-30T00:00:00+00:00",
+                                       evidence="s3://x"),
+                 detail={"check_id": "comp-x"})
+    index.add_result(AdapterResult(
+        claim_class=ClaimClass.OBSERVATION, fetched_at="2026-07-31T00:00:00+00:00",
+        name="checks-envelope", status=AdapterStatus.OK, entities=(comp, art),
+        edges=(Edge(source="comp-x", rel="produces", target=art.id),),
+    ))
+    index.finalize()
+    ids = {e.id for e in landing_exceptions(index)}
+    assert ids == {"comp-x", art.id}

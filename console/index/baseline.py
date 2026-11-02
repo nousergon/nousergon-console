@@ -20,7 +20,7 @@ marked new; it never claims every row is new.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -49,6 +49,18 @@ class Baseline:
     ids: frozenset[str]
     labels: dict[str, str]
     taken_at: str | None
+    #: id -> row_key(); rows absent here compare by id.
+    keys: dict[str, str] = field(default_factory=dict)
+
+
+def row_key(row_id: str, kind: str | None, state: str | None) -> str:
+    """What a row stands for across days. A run row is folded to one row per
+    job and state whose representative id is its NEWEST run, so a job still
+    failing under a newer run must not read as cleared-and-new: runs compare
+    by job (the id before ``@``) and state; every other row by its id."""
+    if kind == "run" and "@" in row_id:
+        return f"run|{row_id.split('@', 1)[0]}|{state}"
+    return row_id
 
 
 def parse(raw: Any) -> BaselineSource | None:
@@ -67,14 +79,16 @@ def from_snapshot(doc: Any) -> Baseline:
     if not isinstance(doc, dict) or doc.get("view") != "exceptions" \
             or not isinstance(doc.get("rows"), list):
         raise ValueError("baseline is not a console exceptions snapshot")
-    ids, labels = set(), {}
+    ids, labels, keys = set(), {}, {}
     for row in doc["rows"]:
         if isinstance(row, dict) and row.get("id"):
-            ids.add(str(row["id"]))
+            rid = str(row["id"])
+            ids.add(rid)
+            keys[rid] = row_key(rid, row.get("kind"), row.get("state"))
             if row.get("label"):
-                labels[str(row["id"])] = str(row["label"])
+                labels[rid] = str(row["label"])
     return Baseline(ids=frozenset(ids), labels=labels,
-                    taken_at=doc.get("snapshot_utc"))
+                    taken_at=doc.get("snapshot_utc"), keys=keys)
 
 
 def _s3_read(src: BaselineSource, key: str) -> bytes:
@@ -102,12 +116,19 @@ def read(src: BaselineSource, now: datetime,
         fetched_at=base.taken_at or stamp, declared_cadence_seconds=CADENCE_SECONDS)
 
 
-def compare(base: Baseline | None, current_ids: list[str]) -> dict[str, Any] | None:
-    """New and cleared ids against the baseline, or None with no baseline."""
+def compare(base: Baseline | None, current_ids: list[str],
+            current_keys: dict[str, str] | None = None) -> dict[str, Any] | None:
+    """New and cleared ids against the baseline, or None with no baseline.
+
+    Rows match on ``row_key`` (``current_keys``: id -> key for today's rows),
+    so a folded job whose newest run changed is neither new nor cleared."""
     if base is None:
         return None
-    now = set(current_ids)
+    cur = {i: (current_keys or {}).get(i, i) for i in current_ids}
+    old = {i: base.keys.get(i, i) for i in base.ids}
+    old_keys, cur_keys = set(old.values()), set(cur.values())
+    cleared = {i for i, k in old.items() if k not in cur_keys}
     return {"taken_at": base.taken_at,
-            "new": sorted(now - base.ids),
-            "cleared": sorted(base.ids - now),
-            "cleared_labels": {i: base.labels[i] for i in base.ids - now if i in base.labels}}
+            "new": sorted(i for i, k in cur.items() if k not in old_keys),
+            "cleared": sorted(cleared),
+            "cleared_labels": {i: base.labels[i] for i in cleared if i in base.labels}}

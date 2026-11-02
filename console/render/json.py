@@ -175,7 +175,9 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         rows = pages.by_priority(list(view.rows))
         from ..index import baseline as _baseline
 
-        delta = _baseline.compare(index.exceptions_baseline(), [e.id for e in rows])
+        delta = _baseline.compare(
+            index.exceptions_baseline(), [e.id for e in rows],
+            {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value) for e in rows})
         new_ids = set(delta["new"]) if delta else set()
         doc = {"schema_version": SCHEMA_VERSION, "view": "exceptions",
                "since_baseline": (None if delta is None else {

@@ -13,6 +13,13 @@ Declared in config as::
     exceptions_baseline:
       bucket: alpha-engine-research
       key: ops/console/exceptions-{date}.json   # {date} = UTC yesterday
+      trend_key: ops/console/exceptions-trend.json   # optional
+
+`trend_key` names the small day-by-day count history the same snapshot job
+keeps (one point per UTC day: total and per-priority counts). Home and
+`/exceptions` chart it, so "is the red going down?" is answered on the page
+rather than in a thread. Unreadable trend = a FAILED `exceptions-trend`
+source and no chart; it never draws a flat line it did not read.
 
 Unreadable baseline = a FAILED `exceptions-baseline` source, and no row is
 marked new; it never claims every row is new.
@@ -27,7 +34,10 @@ from typing import Any, Callable
 from ..model.envelope import AdapterResult, AdapterStatus
 
 SOURCE_NAME = "exceptions-baseline"
+TREND_SOURCE_NAME = "exceptions-trend"
 CADENCE_SECONDS = 86_400.0
+#: The most days a chart draws; older points stay in the file, unshown.
+TREND_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -36,6 +46,7 @@ class BaselineSource:
     key: str
     region: str | None = None
     days_back: int = 1
+    trend_key: str | None = None
 
     def resolved_key(self, now: datetime) -> str:
         day = (now.astimezone(timezone.utc) - timedelta(days=self.days_back)).date()
@@ -71,8 +82,12 @@ def parse(raw: Any) -> BaselineSource | None:
     days = raw.get("days_back", 1)
     if not isinstance(days, int) or days < 1:
         raise ValueError("exceptions_baseline.days_back must be a whole number of days >= 1")
+    trend = raw.get("trend_key")
+    if trend is not None and (not isinstance(trend, str) or not trend.strip()):
+        raise ValueError("exceptions_baseline.trend_key must be a non-empty S3 key")
     return BaselineSource(bucket=str(raw["bucket"]), key=str(raw["key"]),
-                          region=raw.get("region"), days_back=days)
+                          region=raw.get("region"), days_back=days,
+                          trend_key=trend.strip() if trend else None)
 
 
 def from_snapshot(doc: Any) -> Baseline:
@@ -132,3 +147,54 @@ def compare(base: Baseline | None, current_ids: list[str],
             "new": sorted(i for i, k in cur.items() if k not in old_keys),
             "cleared": sorted(cleared),
             "cleared_labels": {i: base.labels[i] for i in cleared if i in base.labels}}
+
+
+@dataclass(frozen=True)
+class TrendPoint:
+    date: str
+    total: int
+    by_priority: dict[str, int]
+
+
+def trend_points(doc: Any) -> list[TrendPoint]:
+    """The day-by-day counts, oldest first, at most `TREND_DAYS`. Raises
+    ValueError on a malformed file: a guessed count is worse than no chart."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("days"), list):
+        raise ValueError("trend file has no `days` list")
+    by_date: dict[str, TrendPoint] = {}
+    for d in doc["days"]:
+        if not isinstance(d, dict) or not isinstance(d.get("date"), str):
+            raise ValueError(f"trend entry {d!r} names no date")
+        total = d.get("total")
+        if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+            raise ValueError(f"trend entry {d['date']} has total {total!r}")
+        prio = d.get("by_priority") or {}
+        if not isinstance(prio, dict):
+            raise ValueError(f"trend entry {d['date']} has a non-mapping by_priority")
+        by_date[d["date"]] = TrendPoint(
+            date=d["date"], total=total,
+            by_priority={str(k): int(v) for k, v in prio.items()})
+    return [by_date[k] for k in sorted(by_date)][-TREND_DAYS:]
+
+
+def read_trend(src: BaselineSource, now: datetime,
+               reader: Callable[[BaselineSource, str], bytes] | None = None,
+               ) -> tuple[list[TrendPoint] | None, AdapterResult | None]:
+    """The trend, or (None, None) when no `trend_key` is declared. Never
+    raises: a failure is a FAILED `exceptions-trend` source."""
+    if not src.trend_key:
+        return None, None
+    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        doc = json.loads((reader or _s3_read)(src, src.trend_key))
+        points = trend_points(doc)
+    except Exception as exc:  # noqa: BLE001 - rendered as a failed source
+        return None, AdapterResult(
+            name=TREND_SOURCE_NAME, status=AdapterStatus.FAILED, fetched_at=stamp,
+            declared_cadence_seconds=CADENCE_SECONDS,
+            unavailable=(f"s3://{src.bucket}/{src.trend_key}: "
+                         f"{type(exc).__name__}: {exc}"[:300],))
+    return points, AdapterResult(
+        name=TREND_SOURCE_NAME, status=AdapterStatus.OK,
+        fetched_at=str(doc.get("updated_utc") or stamp),
+        declared_cadence_seconds=CADENCE_SECONDS)

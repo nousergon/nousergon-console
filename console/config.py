@@ -356,6 +356,11 @@ def build_index(config: dict[str, Any]) -> Index:
         base, result = exceptions_baseline.read(baseline_source, datetime.now(timezone.utc))
         index.add_result(result)
         index.set_exceptions_baseline(base)
+        points, trend_result = exceptions_baseline.read_trend(
+            baseline_source, datetime.now(timezone.utc))
+        if trend_result is not None:
+            index.add_result(trend_result)
+        index.set_exceptions_trend(points)
 
     # §9.8: computed once per build (a git subprocess per registry row is not
     # something a request handler should pay for). Defaults to the process's

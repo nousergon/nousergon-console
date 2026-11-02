@@ -1707,3 +1707,4 @@ citations:
 # exceptions_baseline:
 #   bucket: alpha-engine-research
 #   key: ops/console/exceptions-{date}.json   # {date} = UTC yesterday
+#   trend_key: ops/console/exceptions-trend.json   # optional: day-by-day counts chart

@@ -24,6 +24,13 @@ So an adapter returns **claims**, and this module resolves them:
   proposing one is superseded and the entity falls back to `UNREPORTED`, which
   is loud. The proposal stays visible — "systemd says this unit is masked" is
   worth reading even when nothing authoritative has said it should be off.
+- **A scoped discovery pass describing a NAMESAKE is not a peer.** A pass
+  declaring `discovery_scope` speaks only for entities in that slice (the same
+  rule `graph._within_discovery_scope` applies to `ABSENT`). When the registry
+  declares the identifier OUTSIDE that slice, the pass found a different
+  substrate object that shares the name — an EventBridge rule and the Lambda
+  it triggers. Its claim is retained as superseded and contests nothing
+  (alpha-engine-config-I13074).
 - **A genuine collision still fails.** Two claims with different `kind` for one
   identifier is `§3.6` violated, and it raises. `kind` disagreement is the
   discriminator between "one thing seen twice" and "two things, one name".
@@ -69,6 +76,40 @@ class Claim:
     claim_class: ClaimClass
     adapter: str
     reachable: bool = True
+    #: The `(facet, value)` slice a DISCOVERY pass declared it enumerates
+    #: (`AdapterResult.discovery_scope`); empty means fleet-wide.
+    scope: tuple[tuple[str, str], ...] = ()
+
+
+def _declared_facets(claims: list[Claim]) -> dict[str, str]:
+    facets: dict[str, str] = {}
+    for c in claims:
+        if c.claim_class is ClaimClass.DECLARATION and c.reachable:
+            for key, value in c.entity.facets.items():
+                facets.setdefault(key, value)
+    return facets
+
+
+def is_namesake(claim: Claim, declared: dict[str, str]) -> bool:
+    """Whether a scoped discovery claim describes a different thing of this name.
+
+    True only when the claim's pass declared a scope, NONE of its pairs
+    matches the declaration, and the declaration names at least one of those
+    facets with a different value. A declaration silent on the facet cannot
+    place the identifier, so the claim stays a peer — this never guesses.
+
+    Measured 2026-11-01 (alpha-engine-config-I13074): the registry declares
+    `alpha-engine-predictor-health-check` `substrate: lambda`; the
+    `AWS/Events` pass (scope `substrate: eventbridge`) reported its same-named
+    rule silent on a Sunday while the `AWS/Lambda` pass reported two canary
+    runs. Both were true, about two objects, and the equal-rank "disagreement"
+    rendered the row DEGRADED every weekend and every canary day.
+    """
+    if claim.claim_class is not ClaimClass.DISCOVERY or not claim.scope:
+        return False
+    if any(declared.get(facet) == value for facet, value in claim.scope):
+        return False
+    return any(facet in declared for facet, _ in claim.scope)
 
 
 def merge(claims: list[Claim]) -> Entity:
@@ -93,12 +134,24 @@ def merge(claims: list[Claim]) -> Entity:
     if len(claims) == 1:
         return claims[0].entity
 
-    ordered = sorted(claims, key=lambda c: c.claim_class.rank)
+    declared = _declared_facets(claims)
+    namesakes = [c for c in claims if is_namesake(c, declared)]
+    peers = [c for c in claims if not is_namesake(c, declared)]
+    ordered = sorted(peers, key=lambda c: c.claim_class.rank)
     base = ordered[0].entity
 
     field_sources: dict[str, Provenance] = {}
     superseded: list[tuple[str, object, Provenance]] = []
     conflicts: list[str] = []
+
+    # A namesake contributes no field and contests none, but what it said
+    # stays on the entity page: a silent same-named trigger is worth reading.
+    for claim in namesakes:
+        superseded.append(("state", claim.entity.state, claim.entity.provenance))
+        for name in _MERGED_FIELDS:
+            for key, value in getattr(claim.entity, name).items():
+                superseded.append(
+                    (f"{name}.{key}", value, claim.entity.provenance))
 
     state, state_extras = _merge_state(ordered)
     superseded.extend(state_extras.superseded)

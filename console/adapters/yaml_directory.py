@@ -253,6 +253,13 @@ def _detail(
         anchor = row.get("event_trigger_anchor")
         if isinstance(anchor, str) and anchor.strip():
             detail["event_trigger_anchor"] = anchor.strip()
+    # `duty_anchor` (alpha-engine-config-I12940): the component whose own
+    # heartbeat proves this row's substrate is powered and on duty. Carried
+    # verbatim; `index/duty_window.py` is the only reader, and it can only
+    # ever move a MISSED row to OFF_DUTY when that anchor is itself MISSED.
+    duty_anchor = row.get("duty_anchor")
+    if isinstance(duty_anchor, str) and duty_anchor.strip():
+        detail["duty_anchor"] = duty_anchor.strip()
     return detail
 
 

@@ -231,6 +231,17 @@ trigger is intact (`HEALTHY`, `NEVER_RAN` or `RUNNING`) — never from the
 resolves to nothing in this build, or an anchor resolved to a broken/disabled
 state all leave the row `UNREPORTED`, exactly as before this state existed.
 
+**`duty_anchor`** names the component whose own heartbeat proves the row's
+substrate is powered and on duty — for a laptop that sleeps, its launchd
+heartbeat publisher (`observability-policy.md` §8.3 `OFF_DUTY`,
+`alpha-engine-config-I12940`). `index/duty_window.py::resolve_duty_window_state`
+moves a `MISSED` row to `OFF_DUTY` only while that anchor is itself `MISSED`
+**and** the row was still inside its own window when the anchor last
+published; its `…/latest.json` envelope artifact reads `off-duty` instead of
+`stale` in the same case. The anchor never folds, so a sleeping or dead
+substrate stays one visible `MISSED` row, and a row that missed while the
+anchor was current stays `MISSED`.
+
 ## `object-store`
 
 | | |

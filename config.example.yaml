@@ -1482,7 +1482,14 @@ self:
 # declares no `org`, so its refs render UNREPORTED rather than reaching a host.
 planner:
   # org: your-org
-  fetch: {cache: 15m}
+  fetch:
+    cache: 15m            # per-ref response cache window (both readers)
+    # Without `token_command`, refs are read through an authenticated `gh` on
+    # the service's PATH. With it, they are read over REST with no CLI and no
+    # writable home: the command's first stdout line is the bearer token,
+    # `{org}`/`{repo}` are substituted, and nothing is stored.
+    # token_command: ["/usr/local/bin/your-token-helper", "--token", "{repo}"]
+    # api_url: https://api.github.com
   thresholds: {threatened_gap: 0.15, off_track_gap: 0.40, blocker_window_days: 7}
   blocker_labels: ["gate:decision", "gate:operator", "gate:device", "blocked"]
   projects:

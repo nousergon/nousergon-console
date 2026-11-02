@@ -545,3 +545,147 @@ def test_a_list_no_project_names_shows_no_plan():
 def test_bad_panes_fail_by_name(panes, needle):
     with pytest.raises(planner.PlannerConfigError, match=needle):
         _pane_plan(panes)
+
+
+class _Resp:
+    def __init__(self, body):
+        self._body = body
+
+    def read(self):
+        import json as _json
+        return _json.dumps(self._body).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _rest_host(issues, deps=None, calls=None):
+    """A fake REST host: issues keyed by number, blocked_by keyed by number."""
+    import urllib.error
+
+    def urlopen(req, timeout=None):
+        if calls is not None:
+            calls.append((req.full_url, req.get_header("Authorization")))
+        path = req.full_url.split("/repos/", 1)[1]
+        parts = path.split("/")
+        number = int(parts[3])
+        if path.endswith("/dependencies/blocked_by"):
+            return _Resp((deps or {}).get(number, []))
+        if number not in issues:
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        return _Resp(issues[number])
+    return urlopen
+
+
+def _token_ok(monkeypatch, seen=None):
+    import subprocess
+
+    def run(argv, **k):
+        if seen is not None:
+            seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="tok-123\n", stderr="")
+
+    monkeypatch.setattr(git_host.subprocess, "run", run)
+
+
+@pytest.fixture(autouse=False)
+def _empty_rest_cache(monkeypatch):
+    monkeypatch.setattr(git_host, "_REST_CACHE", {})
+
+
+def test_rest_reader_reads_named_issues_without_gh(monkeypatch, _empty_rest_cache):
+    monkeypatch.setattr(git_host.shutil, "which", lambda name: None)  # no CLI at all
+    seen, calls = [], []
+    _token_ok(monkeypatch, seen)
+    host = _rest_host(
+        {1: {"number": 1, "title": "t1", "state": "closed", "labels": [{"name": "P1"}],
+             "updated_at": "u", "closed_at": "c", "html_url": "h1"},
+         2: {"number": 2, "title": "t2", "state": "open", "labels": [],
+             "updated_at": "u", "closed_at": None, "html_url": "h2"},
+         5: {"number": 5, "pull_request": {}, "state": "open"}},
+        deps={2: [{"state": "open", "number": 9,
+                   "repository_url": "https://api.github.com/repos/o/other"},
+                  {"state": "closed", "number": 8, "repository_url": ""}]},
+        calls=calls)
+    reader = git_host.rest_ref_reader(["helper", "--token", "{repo}"], urlopen=host)
+    rows = reader("o", "r", [1, 2, 5], "15m")
+    assert [r["number"] for r in rows] == [1, 2]  # the PR number is not an issue
+    assert rows[0]["state"] == "CLOSED" and rows[0]["labels"] == [{"name": "P1"}]
+    assert rows[1]["blockedBy"] == ["other-I9"]
+    assert seen == [["helper", "--token", "r"]]  # one mint per repo, {repo} substituted
+    assert all(auth == "Bearer tok-123" for _, auth in calls)
+    assert calls[0][0] == "https://api.github.com/repos/o/r/issues/1"
+
+
+def test_rest_reader_caches_successful_reads_for_the_window(monkeypatch, _empty_rest_cache):
+    seen, calls = [], []
+    _token_ok(monkeypatch, seen)
+    host = _rest_host({1: {"number": 1, "title": "t", "state": "closed", "labels": [],
+                           "updated_at": "u", "closed_at": "c", "html_url": "h"}},
+                      calls=calls)
+    reader = git_host.rest_ref_reader(["helper"], urlopen=host)
+    reader("o", "r", [1], "15m")
+    reader("o", "r", [1], "15m")
+    assert len(calls) == 1 and len(seen) == 1  # second build: no host call, no mint
+
+    git_host._REST_CACHE.clear()
+    reader("o", "r", [1], "0")
+    reader("o", "r", [1], "0")
+    assert len(calls) == 3  # a zero window caches nothing
+
+
+def test_rest_reader_names_why_when_every_ref_fails(monkeypatch, _empty_rest_cache):
+    _token_ok(monkeypatch)
+    reader = git_host.rest_ref_reader(["helper"], urlopen=_rest_host({}))
+    with pytest.raises(git_host.RefReadError, match="every REST read failed; first: .*HTTP 404"):
+        reader("o", "r", [1, 2], "15m")
+
+
+def test_rest_reader_carries_the_token_command_failure_not_its_output(monkeypatch, _empty_rest_cache):
+    import subprocess
+
+    def denied(argv, **k):
+        raise subprocess.CalledProcessError(1, argv, output="SECRET-SHOULD-NOT-SHOW",
+                                            stderr="mint failed: installation lacks issues:read\n")
+
+    monkeypatch.setattr(git_host.subprocess, "run", denied)
+
+    def must_not_call(*a, **k):
+        raise AssertionError("no host call without a token")
+
+    reader = git_host.rest_ref_reader(["helper"], urlopen=must_not_call)
+    with pytest.raises(git_host.RefReadError) as err:
+        reader("o", "r", [1], "15m")
+    assert "token_command failed: exit 1: mint failed" in str(err.value)
+    assert "SECRET" not in str(err.value)
+
+
+def test_fetch_refs_selects_the_rest_reader_from_config(monkeypatch, _empty_rest_cache):
+    monkeypatch.setattr(git_host.shutil, "which", lambda name: None)
+    _token_ok(monkeypatch)
+    built = {}
+
+    def fake_rest(token_command, api_url):
+        built["args"] = (token_command, api_url)
+        return _reader
+
+    monkeypatch.setattr(git_host, "rest_ref_reader", fake_rest)
+    result = git_host.fetch_refs(
+        {"org": "o", "token_command": "helper --token {repo}"}, ["repo-I1", "repo-I4"])
+    assert result.status is AdapterStatus.OK and result.unavailable == ()
+    assert built["args"] == (["helper", "--token", "{repo}"], "https://api.github.com")
+
+    # No token_command: the gh reader, unchanged, and its reason names the option.
+    result = git_host.fetch_refs({"org": "o"}, ["repo-I1"])
+    assert result.status is AdapterStatus.FAILED
+    assert "planner.fetch.token_command" in result.unavailable[0]
+
+
+def test_cache_window_vocabulary():
+    assert git_host._cache_seconds("15m") == 900
+    assert git_host._cache_seconds("1h") == 3600
+    assert git_host._cache_seconds("30s") == 30 == git_host._cache_seconds("30")
+    assert git_host._cache_seconds("0") == 0 == git_host._cache_seconds("bogus")

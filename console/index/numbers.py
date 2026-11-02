@@ -37,8 +37,11 @@ from ..render.panes import orphan_counts as _pane_orphan_counts
 _DECLARED_LIFECYCLE_STATES = frozenset(
     {State.DISABLED, State.DEPRECATED, State.RETIRED}
 )
+#: `OFF_DUTY` (alpha-engine-config-I12940) states WHY its age is what it is —
+#: its substrate's own duty anchor is overdue — which is a disclosure, never a
+#: claim of freshness; its envelope artifact's `off-duty` likewise.
 _DISCLOSED_COMPONENT_STATES = frozenset(
-    {State.MISSED, State.STALLED, State.UNREPORTED, State.ABSENT}
+    {State.MISSED, State.STALLED, State.UNREPORTED, State.ABSENT, State.OFF_DUTY}
 ) | _DECLARED_LIFECYCLE_STATES
 #: `unobserved` joins them (alpha-engine-config-I8765) for the same reason the
 #: DECLARED lifecycle states are here: a row saying "nothing has looked at me"
@@ -49,7 +52,7 @@ _DISCLOSED_COMPONENT_STATES = frozenset(
 #: actually is (`artifact_observation_coverage`).
 _DISCLOSED_VALUES = frozenset(
     {"stale", "no-freshness-stamp", "no-cadence-declared", "unreadable",
-     UNOBSERVED_VALUE}
+     UNOBSERVED_VALUE, "off-duty"}
 )
 
 

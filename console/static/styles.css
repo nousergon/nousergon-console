@@ -41,7 +41,7 @@ tr[class*="state-"] > td:first-child { box-shadow: inset .3rem 0 0 var(--row-sta
 .state-DEGRADED, .state-UNREPORTED, .state-ABSENT, .state-UNREGISTERED, .state-NEVER_RAN { --row-state: var(--warn); --chip: var(--warn); --chip-bg: var(--warn-bg); }
 .state-HEALTHY, .state-ARMED { --row-state: var(--good); --chip: var(--good); --chip-bg: var(--good-bg); }
 .state-RUNNING { --row-state: var(--info); --chip: var(--info); --chip-bg: var(--info-bg); }
-.state-DISABLED, .state-DEPRECATED, .state-RETIRED { --row-state: var(--off); --chip: var(--off); --chip-bg: var(--off-bg); }
+.state-DISABLED, .state-DEPRECATED, .state-RETIRED, .state-OFF_DUTY, .state-off-duty { --row-state: var(--off); --chip: var(--off); --chip-bg: var(--off-bg); }
 /* A state count or summary outside a table (`a.state-X`, `summary.state-X`,
    `span.state-X`) reads as a chip too. */
 a[class*="state-"], .list-summary span[class*="state-"] { display: inline-block; padding: .05rem .55rem; border-radius: 1rem; font-weight: 600; text-decoration: none; background: var(--chip-bg, var(--off-bg)); color: var(--chip, var(--off)); border-left: 0; }

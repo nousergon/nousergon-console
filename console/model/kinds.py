@@ -76,7 +76,7 @@ FACETS: tuple[str, ...] = (
 STATE_FILTER: str = "state"
 
 
-#: The fourteen-state closed vocabulary is NORMATIVE in observability-policy.md
+#: The fifteen-state closed vocabulary is NORMATIVE in observability-policy.md
 #: §8.3. This console renders it and does not define one: console-policy.md's
 #: superordinate note says §8.3's vocabulary "is the only state vocabulary this
 #: policy renders". Adding a member here is a PR against observability-policy.md
@@ -99,7 +99,9 @@ STATE_FILTER: str = "state"
 #: claim) · ARMED vs UNREPORTED (a resolved, VERIFIED placement, never granted
 #: from the `event_driven` declaration alone — `alpha-engine-config-I7116`; see
 #: `index/event_trigger.py` for the anchor-resolution guard that keeps it from
-#: being a rubber stamp).
+#: being a rubber stamp) · OFF_DUTY vs MISSED (the substrate was proven powered
+#: down by its own duty anchor vs a job that did not start while it was up,
+#: added `alpha-engine-config-I12940` — see `index/duty_window.py`).
 class State(enum.Enum):
     HEALTHY = "HEALTHY"            # ran inside its window, ended ok
     RUNNING = "RUNNING"            # started, not finished, heartbeat within cadence (or none declared)
@@ -115,6 +117,7 @@ class State(enum.Enum):
     UNREGISTERED = "UNREGISTERED"  # found running on a substrate with no registry row
     UNREPORTED = "UNREPORTED"      # registered, in service, emitting nothing — the transparency gap
     ARMED = "ARMED"                # event_driven, silent by design, trigger anchor VERIFIED intact
+    OFF_DUTY = "OFF_DUTY"          # its substrate's declared duty anchor is itself overdue; it was current when the substrate went down
 
 
 #: The three states a registry `lifecycle` field DECLARES (§8.3: "declared in

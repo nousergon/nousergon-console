@@ -198,10 +198,22 @@ def _continuous_idle_minutes(
     leading-edge rule the freshness monitor applies, alpha-engine-config-I8681).
 
     `trading_days` is the same rule with a whole-day window. `all_days`, an
-    undeclared calendar, a malformed window, and a daily-or-longer interval
-    owe nothing — the flat ceiling stands. So does a missing trading calendar:
-    without one a weekend cannot be told from a miss, and the stricter
-    ceiling is the honest one, never an assumed-fresh one.
+    undeclared calendar and a malformed window owe nothing — the flat ceiling
+    stands. So does a missing trading calendar: without one a weekend cannot
+    be told from a miss, and the stricter ceiling is the honest one, never an
+    assumed-fresh one.
+
+    A daily-or-longer interval never settles inside a one-day window, so the
+    window rule above does not apply to it. It is owed exactly the whole
+    non-session days since the last session day instead
+    (alpha-engine-config-I13079): a once-per-trading-day producer last written
+    Friday is not late on Saturday, Sunday or early Monday. Measured on the
+    2026-11-02 00:59Z snapshot: `health/predictor_inference.json` (Fri 12:27Z),
+    `health/predictor_health_check.json` (Fri 14:40Z) and
+    `health/daily_data.json` (Sat 09:05Z), all three healthy producers,
+    rendered `stale` against a flat 1440-minute ceiling. On a session day that
+    follows a session day nothing is owed, so a missed weekday write is caught
+    exactly as before.
     """
     rc = str(run_calendar or "").strip().lower()
     window = _active_window(active_hours_utc)
@@ -211,11 +223,11 @@ def _continuous_idle_minutes(
         window = (0, 24)
     elif rc != MARKET_HOURS or window is None:
         return 0.0
-    if settle_minutes >= _ONE_DAY_MINUTES:
-        return 0.0
     checker = trading_day_checker or default_trading_day_checker()
     if checker is None:
         return 0.0
+    if settle_minutes >= _ONE_DAY_MINUTES:
+        return _non_session_days_owed(now.date(), checker) * _ONE_DAY_MINUTES
     start, end = window
     today = now.date()
     if checker(today.isoformat()):
@@ -233,6 +245,25 @@ def _continuous_idle_minutes(
             return max(0.0, (now - closed).total_seconds() / 60.0)
         cursor -= timedelta(days=1)
     return 0.0
+
+
+def _non_session_days_owed(today: date, checker: TradingDayChecker) -> int:
+    """Whole non-session days after the most recent session day before
+    `today`, counting `today` itself when it is not a session day.
+
+    Saturday 1, Sunday 2, a Monday after a normal weekend 2, a Tuesday after a
+    Monday holiday 3, any session day after a session day 0. A checker that
+    finds no session day inside the lookback owes nothing, so the stricter
+    flat ceiling stands rather than an unbounded one.
+    """
+    cursor = today - timedelta(days=1) if checker(today.isoformat()) else today
+    owed = 0
+    for _ in range(_TRADING_DAY_LOOKBACK_LIMIT):
+        if checker(cursor.isoformat()):
+            return owed
+        owed += 1
+        cursor -= timedelta(days=1)
+    return 0
 
 
 def _minutes_since(boundary: date, now: datetime) -> float:

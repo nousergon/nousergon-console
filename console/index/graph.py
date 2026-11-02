@@ -371,6 +371,9 @@ class Index:
                     claim_class=result.claim_class,
                     adapter=result.name,
                     reachable=result.status is AdapterStatus.OK,
+                    scope=(tuple(result.discovery_scope)
+                           if result.claim_class is ClaimClass.DISCOVERY
+                           else ()),
                 )
             )
         for edge in result.edges:

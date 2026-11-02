@@ -929,7 +929,11 @@ it the index would read one namespace's successful pass as licence to assert
 `ABSENT` over every substrate in the registry — GitHub Actions workflows and
 launchd agents included — turning "I did not look there" into "it is not
 there". A pass declaring no scope claims the whole fleet, which is what every
-discovery adapter predating the field meant.
+discovery adapter predating the field meant. The same slice bounds what the
+pass may *contest*: where the registry declares an identifier on a different
+value of that facet (an EventBridge rule named like the Lambda it triggers),
+the pass found a namesake, and its claim is kept as superseded rather than
+merged as a peer (`index/merge.py::is_namesake`).
 
 **Zero is never green.** `errors > 0` is `FAILED`; `invocations > 0` with no
 errors is `HEALTHY`; zero invocations with no datapoint in the history lookback

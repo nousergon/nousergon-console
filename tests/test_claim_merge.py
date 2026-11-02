@@ -396,3 +396,98 @@ def test_a_conflict_still_degrades_an_undeclared_row():
     )
     ent = idx.finalize().entity("comp-alpha")
     assert ent.state is State.DEGRADED
+
+
+# ── a scoped pass describing a namesake is not a peer (config-I13074) ───────
+
+
+def _counter(state, namespace, invocations, cid="comp-alpha", **extra):
+    return Entity(
+        kind=Kind.COMPONENT, id=cid, state=state,
+        provenance=_prov(f"cloudwatch:{namespace}"),
+        detail={"invocations": invocations, "errors": 0.0,
+                "window_minutes": 1440, **extra},
+    )
+
+
+def _shared_name_index(declared_substrate, rule_state, rule_n, fn_state, fn_n,
+                       registry_facets=None):
+    facets = ({"substrate": declared_substrate} if registry_facets is None
+              else registry_facets)
+    return _index(
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.UNREPORTED, "registry", facets=facets)),
+        _result("lambda-metrics", ClaimClass.DISCOVERY,
+                _counter(fn_state, "AWS/Lambda", fn_n),
+                discovery_scope=[("substrate", "lambda")]),
+        _result("events-metrics", ClaimClass.DISCOVERY,
+                _counter(rule_state, "AWS/Events", rule_n,
+                         last_invocation="2026-10-30T14:40:00+00:00",
+                         unplaceable_reason="silent in window"),
+                discovery_scope=[("substrate", "eventbridge")]),
+    )
+
+
+def test_a_silent_same_named_rule_does_not_degrade_a_running_lambda():
+    """Measured 2026-11-01: the rule did not fire on a Sunday (by design) and
+    the Lambda ran two canaries. Both true, about two objects; the row
+    rendered DEGRADED. The registry places the id on `substrate: lambda`, so
+    the `AWS/Events` pass found a namesake, not a second opinion."""
+    ent = _shared_name_index("lambda", State.UNREPORTED, 0.0,
+                             State.HEALTHY, 2.0).finalize().entity("comp-alpha")
+    assert ent.state is State.HEALTHY
+    assert ent.conflicts == ()
+    assert ent.detail["invocations"] == 2.0
+    # The namesake contributes no field — a HEALTHY row must not carry the
+    # rule's "unplaceable" note — but what it said stays readable.
+    assert "unplaceable_reason" not in ent.detail
+    said = {(f, v) for f, v, p in ent.superseded
+            if p.source == "cloudwatch:AWS/Events"}
+    assert ("state", State.UNREPORTED) in said
+    assert ("detail.invocations", 0.0) in said
+    assert ent.provenance.source == "cloudwatch:AWS/Lambda"
+
+
+def test_a_trigger_firing_less_than_its_function_ran_is_not_a_conflict():
+    """A weekday canary: rule 1, function 3. Not a contradiction."""
+    ent = _shared_name_index("lambda", State.HEALTHY, 1.0,
+                             State.HEALTHY, 3.0).finalize().entity("comp-alpha")
+    assert ent.state is State.HEALTHY
+    assert ent.conflicts == ()
+
+
+def test_the_rule_speaks_for_a_row_declared_on_the_eventbridge_substrate():
+    """Symmetric: declared `substrate: eventbridge`, the Lambda is the namesake."""
+    ent = _shared_name_index("eventbridge", State.UNREPORTED, 0.0,
+                             State.HEALTHY, 2.0).finalize().entity("comp-alpha")
+    assert ent.state is State.UNREPORTED
+    assert ent.conflicts == ()
+    assert ent.detail["invocations"] == 0.0
+
+
+def test_a_declaration_silent_on_the_scope_facet_still_conflicts():
+    """No declared substrate places the id nowhere, so neither pass can be
+    called a namesake and the disagreement still renders DEGRADED."""
+    ent = _shared_name_index(None, State.UNREPORTED, 0.0, State.HEALTHY, 2.0,
+                             registry_facets={}).finalize().entity("comp-alpha")
+    assert ent.state is State.DEGRADED
+    assert "state" in ent.conflicts
+
+
+def test_two_in_scope_passes_still_conflict():
+    """The narrowing touches only an out-of-scope pass: two passes that both
+    speak for the declared substrate still contest each other."""
+    idx = _index(
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.UNREPORTED, "registry",
+                      facets={"substrate": "lambda"})),
+        _result("lambda-a", ClaimClass.DISCOVERY,
+                _counter(State.HEALTHY, "AWS/Lambda", 2.0),
+                discovery_scope=[("substrate", "lambda")]),
+        _result("lambda-b", ClaimClass.DISCOVERY,
+                _counter(State.FAILED, "Custom/Lambda", 2.0),
+                discovery_scope=[("substrate", "lambda")]),
+    )
+    ent = idx.finalize().entity("comp-alpha")
+    assert ent.state is State.DEGRADED
+    assert "state" in ent.conflicts

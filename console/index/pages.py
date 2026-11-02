@@ -17,7 +17,7 @@ pure function of the built index, recomputed per request and never cached
 release of this code.
 
 **The section vocabulary is closed** — `tiles`, `table`, `chart`, `report`,
-`exceptions` — for the reason §5.8's render hints are: an open set is a plugin
+`exceptions`, `text` — for the reason §5.8's render hints are: an open set is a plugin
 API, and a plugin API is a per-page rendering path with a nicer name.
 
 **The URL is the whole state** (§3.2). `?range=7d` narrows every table, chart
@@ -43,7 +43,7 @@ _ATTR = "_console_pages"
 _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 #: The closed section vocabulary. Adding one is a PR here, never config.
-SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions")
+SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions", "text")
 
 #: The closed time-range vocabulary, as the URL spells it.
 RANGES: dict[str, timedelta | None] = {
@@ -107,6 +107,10 @@ class Section:
     #: source has published nothing yet ("no data yet: ..."). Rendered beside
     #: the selector, never instead of it.
     empty: str | None = None
+    #: text only: the declared prose, rendered as markdown (raw HTML off,
+    #: citations linked) — the narrative a guided page reads in, between the
+    #: sections that carry its evidence (alpha-engine-config-I13023).
+    body: str | None = None
 
 
 @dataclass(frozen=True)
@@ -224,6 +228,14 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     if empty is not None and kind == "report":
         raise PagesConfigError(f"{where}: a report section already says \"no report yet\"; "
                                "`empty` is for selector sections")
+    if empty is not None and kind == "text":
+        raise PagesConfigError(f"{where}: `empty` is for selector sections; a text "
+                               "section selects no rows")
+    if kind == "text":
+        body = raw.get("body")
+        if not isinstance(body, str) or not body.strip():
+            raise PagesConfigError(f"{where}: `body` must be non-empty text")
+        return Section(type=kind, title=title, body=body.strip())
     if kind == "tiles":
         tiles = raw.get("tiles")
         if not isinstance(tiles, list) or not tiles:
@@ -517,6 +529,9 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
     doc: dict[str, Any] = {"type": s.type, "title": s.title}
     if s.empty is not None:
         doc["empty"] = s.empty
+    if s.type == "text":
+        doc["body"] = s.body
+        return doc
     if s.type == "tiles":
         doc["tiles"] = [_safe_tile(index, t, variables) for t in s.tiles]
         return doc

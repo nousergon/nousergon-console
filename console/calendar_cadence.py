@@ -148,6 +148,76 @@ def effective_cadence_minutes(
     return _minutes_since(boundary, now) + _ONE_DAY_MINUTES + grace
 
 
+#: Nominal period of each schedulable symbol, in minutes: how often a source
+#: of that cadence is expected to change. NOT a staleness ceiling (that is
+#: `effective_cadence_minutes`, which depends on `now`); this is the plain
+#: period an adapter reports as its own `declared_cadence_seconds`.
+#: `continuous` is its declared `interval_minutes`; `event_driven` has none.
+_NOMINAL_MINUTES = {SATURDAY_SF: 7 * _ONE_DAY_MINUTES, WEEKDAY_SF: _ONE_DAY_MINUTES,
+                    EOD_SF: _ONE_DAY_MINUTES}
+
+
+def nominal_period_minutes(cadence: str | None,
+                           interval_minutes: float | None = None) -> float | None:
+    """How often `cadence` is expected to refresh, or `None` when it declares
+    no period (`event_driven`, an unknown symbol, `continuous` with no
+    `interval_minutes`)."""
+    symbol = str(cadence or "").strip().lower()
+    if symbol == CONTINUOUS:
+        return float(interval_minutes) if interval_minutes else None
+    return _NOMINAL_MINUTES.get(symbol)
+
+
+# ------------------------------------------------------- weekly deadline --
+#
+# alpha-engine-config-I13052. `saturday_sf` alone flips at Sunday 00:00 UTC:
+# the boundary is "the most recent Saturday before today", so the previous
+# week's object goes stale the moment Saturday ends. A weekly source whose
+# owner declares a later DEADLINE ("no object by Sunday 12:00 UTC is not
+# healthy", alpha-engine-config-I12983) declares it as a weekday and an hour,
+# and the ceiling below makes a row stale exactly at that instant.
+
+#: `date.weekday()` numbering (Monday 0 .. Sunday 6), by name.
+WEEKDAY_NAMES = {name: i for i, name in enumerate(
+    ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"))}
+
+
+def parse_weekly_deadline(raw: Any) -> tuple[int, int] | None:
+    """`{weekday: sunday, hour_utc: 12}` -> `(6, 12)`; `None` when malformed.
+
+    `weekday` is a name or `0..6` (Monday 0); `hour_utc` is `0..23`. Anything
+    else is a typo to refuse, never a deadline to guess.
+    """
+    if not isinstance(raw, Mapping) or set(raw) - {"weekday", "hour_utc"}:
+        return None
+    day, hour = raw.get("weekday"), raw.get("hour_utc", 0)
+    if isinstance(day, str):
+        day = WEEKDAY_NAMES.get(day.strip().lower())
+    if (isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 6
+            or isinstance(hour, bool) or not isinstance(hour, int) or not 0 <= hour <= 23):
+        return None
+    return day, hour
+
+
+def weekly_deadline_ceiling_minutes(weekday: int, hour_utc: int, *,
+                                    now: datetime | None = None) -> float:
+    """The age ceiling that makes a weekly row stale exactly at its deadline.
+
+    Let `D` be the most recent deadline instant at or before `now`. A row is
+    fresh while its as-of is at or after the deadline BEFORE that one,
+    `D - 7 days`: every deadline needs an object written since the previous
+    deadline. So the ceiling is `now - (D - 7 days)`, and the only instant a
+    verdict can flip on its own is `D` itself. Compared with no staleness
+    factor: a factor would move the deadline it exists to state.
+    """
+    now = now or datetime.now(timezone.utc)
+    deadline = datetime(now.year, now.month, now.day, hour_utc, tzinfo=timezone.utc)
+    deadline -= timedelta(days=(now.weekday() - weekday) % 7)
+    if deadline > now:
+        deadline -= timedelta(days=7)
+    return (now - (deadline - timedelta(days=7))).total_seconds() / 60.0
+
+
 #: `run_calendar` symbols for a `continuous` producer, the same closed
 #: vocabulary the fleet's freshness monitor reads from the same registry row
 #: (`ARTIFACT_REGISTRY.yaml`): `all_days` runs every calendar day,

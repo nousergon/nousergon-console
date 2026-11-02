@@ -53,6 +53,11 @@ summary[class*="state-"] { border-left: .3rem solid var(--row-state, var(--off))
 body { max-width: 76rem; margin: 1.5rem auto; padding: 0 1rem; line-height: 1.45; }
 a:focus-visible, input:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid var(--warn); }
+/* A source's own run vocabulary, verbatim (alpha-engine-config-I12983): a
+   stage or arc that reports `failed` reads as a failure, and a declared stage
+   that never ran (`not-run`) reads as off, so neither looks like a pass. */
+.state-failed { --row-state: var(--bad); --chip: var(--bad); --chip-bg: var(--bad-bg); }
+.state-not-run { --row-state: var(--off); --chip: var(--off); --chip-bg: var(--off-bg); }
 /* §4.4's milestone pane. A separate selector namespace from `.state-*` on
    purpose: MET and UNMET are not members of observability-policy.md §8.3's
    closed state vocabulary, and a clause's UNREPORTED borrows the same warm

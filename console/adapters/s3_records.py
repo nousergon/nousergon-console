@@ -114,7 +114,9 @@ from ..records_shape import (
     resolve_facets, resolve_id, resolve_label, resolve_state, select,
     valid_date_fields,
 )
+from .. import calendar_cadence
 from .object_store import _parse_cadence  # second adoption, one repo — see below
+from ..trading_calendar import TradingDayChecker
 from ..aws import client as _aws_client
 from ..s3_body_cache import BODY_CACHE, listing_tag, response_tag
 
@@ -144,6 +146,7 @@ def fetch(
     reader: BodyReader | None = None,
     now: datetime | None = None,
     text_reader: TextReader | None = None,
+    trading_day_checker: TradingDayChecker | None = None,
 ) -> AdapterResult:
     bucket = config.get("bucket")
     prefix = config.get("prefix", "")
@@ -208,9 +211,11 @@ def fetch(
     import re
 
     regex = re.compile(pattern)
-    staleness_factor = float(config.get("staleness_factor", 1.5))
-    cadence_seconds = _parse_cadence(config.get("cadence"))
     now = now or datetime.now(timezone.utc)
+    cadence = _row_cadence(config, now, trading_day_checker)
+    if isinstance(cadence, tuple) and isinstance(cadence[0], str):
+        return _failed(config, cadence)
+    cadence_seconds, declared_cadence_seconds, staleness_factor = cadence
     source_label = f"s3://{bucket}/{prefix}"
 
     capped = False
@@ -316,7 +321,7 @@ def fetch(
     return AdapterResult(
         claim_class=CLAIM_CLASS,
         fetched_at=now_iso(),
-        declared_cadence_seconds=cadence_seconds,
+        declared_cadence_seconds=declared_cadence_seconds,
         name=config.get("_name", name),
         status=AdapterStatus.OK,
         entities=tuple(entities),
@@ -325,6 +330,63 @@ def fetch(
         + ((f"malformed_lines:{malformed}",) if malformed else ())
         + (("max_objects",) if capped else ()),
     )
+
+
+def _row_cadence(
+    config: dict[str, Any],
+    now: datetime,
+    trading_day_checker: TradingDayChecker | None,
+) -> tuple[float | None, float | None, float] | tuple[str, ...]:
+    """`(row ceiling seconds, declared cadence seconds, staleness factor)`, or
+    the names of the keys that make the declaration unusable.
+
+    A flat `cadence` (`7d`, `1h`, `300`) is a fixed ceiling, as it always was.
+    A calendar SYMBOL (`saturday_sf`, `weekday_sf`, `eod_sf`, `continuous`,
+    `event_driven`) goes through `calendar_cadence`, the module
+    `object-store`, `declared-registry`, `yaml-directory` and
+    `document-fields` already share (alpha-engine-config-I13052), with the
+    same optional `sla_minutes_after_cron`, `interval_minutes`,
+    `run_calendar` and `active_hours_utc`; its ceiling is valid as of `now`,
+    so a weekday row is not stale over a weekend. A symbol that cannot be
+    translated (`event_driven`, no reachable trading calendar) leaves the
+    row `no-cadence-declared`, never assumed fresh.
+
+    `deadline: {weekday, hour_utc}` beside `saturday_sf` makes a weekly row
+    stale exactly at that instant (`calendar_cadence.
+    weekly_deadline_ceiling_minutes`). The ceiling is then exact, so a
+    `staleness_factor` other than 1 beside it is refused: it would move the
+    declared deadline. The adapter's own `declared_cadence_seconds` is the
+    symbol's nominal period (7 days for `saturday_sf`), never the
+    `now`-dependent ceiling.
+    """
+    raw = config.get("cadence")
+    deadline_raw = config.get("deadline")
+    factor = float(config.get("staleness_factor", 1.5))
+    symbol = str(raw).strip().lower() if isinstance(raw, str) else ""
+    if symbol not in calendar_cadence.KNOWN_SYMBOLS:
+        if deadline_raw is not None:
+            return ("deadline",)
+        flat = _parse_cadence(raw)
+        return flat, flat, factor
+    nominal = calendar_cadence.nominal_period_minutes(
+        symbol, config.get("interval_minutes"))
+    declared = nominal * 60.0 if nominal else None
+    if deadline_raw is not None:
+        deadline = calendar_cadence.parse_weekly_deadline(deadline_raw)
+        if symbol != calendar_cadence.SATURDAY_SF or deadline is None:
+            return ("deadline",)
+        if float(config.get("staleness_factor", 1.0)) != 1.0:
+            return ("staleness_factor",)
+        minutes = calendar_cadence.weekly_deadline_ceiling_minutes(*deadline, now=now)
+        return minutes * 60.0, declared, 1.0
+    minutes = calendar_cadence.effective_cadence_minutes(
+        symbol, now=now, trading_day_checker=trading_day_checker,
+        sla_minutes_after_cron=config.get("sla_minutes_after_cron"),
+        interval_minutes=config.get("interval_minutes"),
+        run_calendar=config.get("run_calendar"),
+        active_hours_utc=config.get("active_hours_utc"),
+    )
+    return (minutes * 60.0 if minutes is not None else None), declared, factor
 
 
 #: `format: jsonl` (alpha-engine-config-I12323). A body is UTF-8 JSON Lines,

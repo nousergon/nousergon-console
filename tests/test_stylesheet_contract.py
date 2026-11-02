@@ -47,3 +47,10 @@ def test_a_row_state_renders_as_a_word_chip_and_a_first_cell_bar():
     assert '<tr class="state-FAILED">' in out
     assert '<span class="chip">FAILED</span>' in out
     assert 'td:first-child { box-shadow: inset' in CSS
+
+
+def test_a_source_reporting_failed_or_not_run_is_styled_not_neutral():
+    # alpha-engine-config-I12983: the Crucible weekly run's stage rows carry
+    # the producer's own `failed` / `not-run`; neither may render like `ok`.
+    assert ".state-failed { --row-state: var(--bad)" in CSS
+    assert ".state-not-run { --row-state: var(--off)" in CSS

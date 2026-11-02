@@ -644,7 +644,21 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON, CSV, or date-partitioned JSON Lines) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`), `job_label` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`), `job_label`, `cadence` with `staleness_factor` (default 1.5), and for a calendar `cadence` the optional `sla_minutes_after_cron` / `interval_minutes` / `run_calendar` / `active_hours_utc` and, with `saturday_sf` only, `deadline: {weekday, hour_utc}` |
+
+**Cadence: flat or calendar** (alpha-engine-config-I13052). A row with no
+domain state reads `fresh`/`stale` against its `cadence`. A flat cadence
+(`7d`, `1h`) is a fixed ceiling from the row's as-of, so a weekly boundary
+moves with whenever the producer happened to finish. A calendar symbol
+(`saturday_sf`, `weekday_sf`, `eod_sf`, `continuous`, `event_driven`) goes
+through `console/calendar_cadence.py`, the same module `object-store`,
+`declared-registry`, `yaml-directory` and `document-fields` read, so a
+weekday row is not stale over a weekend. `deadline: {weekday: sunday,
+hour_utc: 12}` beside `saturday_sf` makes a weekly row stale exactly at that
+instant: each deadline needs an object written since the previous one. The
+ceiling is then exact, so a `staleness_factor` other than 1 beside it fails the
+source, as does a deadline beside any other cadence. The adapter declares the
+symbol's nominal period (7 days for `saturday_sf`) as its own cadence.
 
 **State resolution for `component`/`run`**, in order: `state_map` translates the
 source's own vocabulary (`{"passed": "HEALTHY"}`) into

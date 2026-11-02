@@ -174,6 +174,7 @@ def fetch(
     cadence_seconds = float(config.get("cadence_seconds") or _DEFAULT_CADENCE_SECONDS)
     region = config.get("region")
     id_pattern = config.get("id_pattern")
+    id_capture = config.get("id_capture")
     scope = _discovery_scope(config)
 
     clock = clock or _monotonic
@@ -222,6 +223,8 @@ def fetch(
         regex = re.compile(id_pattern)
         ids = [i for i in ids if regex.search(i)]
     ids = sorted(set(ids))
+    dimension_values = _component_ids(ids, id_capture)
+    ids = sorted(dimension_values)
 
     window_start = now - timedelta(minutes=window_minutes)
     # Clamped both ways: CloudWatch's floor is 60s, and a bucket larger than the
@@ -234,7 +237,7 @@ def fetch(
                 query_id=f"w{ordinal}{suffix}",
                 namespace=namespace,
                 dimension_name=dimension,
-                dimension_value=entity_id,
+                dimension_value=dimension_values[entity_id],
                 metric_name=metric,
                 period_seconds=window_seconds,
             ))
@@ -264,7 +267,7 @@ def fetch(
             query_id=f"h{ordinal}i",
             namespace=namespace,
             dimension_name=dimension,
-            dimension_value=entity_id,
+            dimension_value=dimension_values[entity_id],
             metric_name=invocations_metric,
             period_seconds=86400,
         )
@@ -317,12 +320,13 @@ def fetch(
             detail["unplaceable_reason"] = reason
         entities.append(Entity(
             kind=Kind.COMPONENT,
-            id=entity_id,  # the dimension value verbatim (§3.6)
+            id=entity_id,  # the dimension value, or its `id_capture` name (§3.6)
             state=state,
             provenance=Provenance(
                 source=source_label,
                 as_of=as_of or now.isoformat(),
-                evidence=_evidence(region, namespace, dimension, entity_id),
+                evidence=_evidence(region, namespace, dimension,
+                                   dimension_values[entity_id]),
             ),
             detail=detail,
         ))
@@ -345,6 +349,34 @@ def fetch(
     )
     _CACHE[configured_name] = (clock(), result)
     return result
+
+
+def _component_ids(values: list[str], id_capture: str | None) -> dict[str, str]:
+    """Component id -> the dimension value its metrics are read under.
+
+    Without `id_capture` the dimension value IS the id. With it, the id is the
+    regex's `id` group (or its first group): `AWS/States` keys its metrics by
+    the full `StateMachineArn`, while the registry, like the AWS console, names
+    a state machine by its resource name (`origin: aws:states:<name>`). That is
+    extraction of the name the substrate already gives the thing, never a
+    minted slug (alpha-engine-config-I13080). A value the regex does not match,
+    or whose name another value already took, keeps its verbatim id, so it
+    renders (UNREGISTERED at worst) rather than vanishing.
+    """
+    if not id_capture:
+        return {v: v for v in values}
+    regex = re.compile(id_capture)
+    out: dict[str, str] = {}
+    for value in values:
+        match = regex.search(value)
+        name_ = None
+        if match:
+            name_ = match.group("id") if "id" in regex.groupindex else (
+                match.group(1) if regex.groups else None)
+        if not name_ or name_ in out:
+            name_ = value
+        out[name_] = value
+    return out
 
 
 #: CloudWatch `ListMetrics` returns only metrics that have had a datapoint in

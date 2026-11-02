@@ -215,6 +215,56 @@ def test_id_pattern_scopes_the_enumeration_without_a_code_change():
     assert [e.id for e in result.entities] == ["keep-me"]
 
 
+_SFN = "arn:aws:states:us-east-1:111122223333:stateMachine:"
+_SFN_CAPTURE = r"^arn:aws:states:[^:]+:\d+:stateMachine:(?P<id>[^:]+)$"
+
+
+def test_id_capture_names_a_state_machine_as_the_registry_does():
+    """alpha-engine-config-I13080. `AWS/States` keys metrics by the full ARN;
+    the registry row is the machine's name. The id is the name, the query is
+    still the ARN."""
+    arn = _SFN + "ne-preopen-trading-pipeline"
+    result = _fetch(
+        [arn],
+        {(arn, "ExecutionsStarted"): [("2026-08-12T17:00:00+00:00", 1.0)],
+         (arn, "ExecutionsFailed"): []},
+        namespace="AWS/States", dimension="StateMachineArn",
+        invocations_metric="ExecutionsStarted", errors_metric="ExecutionsFailed",
+        discovery_value="step-functions", id_capture=_SFN_CAPTURE,
+    )
+    assert [e.id for e in result.entities] == ["ne-preopen-trading-pipeline"]
+    assert _state_of(result, "ne-preopen-trading-pipeline") is State.HEALTHY
+    assert arn in result.entities[0].provenance.evidence
+
+
+def test_id_capture_failures_reach_the_row_through_the_arn():
+    arn = _SFN + "ne-postclose-trading-pipeline"
+    result = _fetch(
+        [arn],
+        {(arn, "ExecutionsStarted"): [("2026-08-12T17:00:00+00:00", 1.0)],
+         (arn, "ExecutionsFailed"): [("2026-08-12T17:00:00+00:00", 1.0)]},
+        namespace="AWS/States", dimension="StateMachineArn",
+        invocations_metric="ExecutionsStarted", errors_metric="ExecutionsFailed",
+        id_capture=_SFN_CAPTURE,
+    )
+    assert _state_of(result, "ne-postclose-trading-pipeline") is State.FAILED
+
+
+def test_id_capture_never_hides_a_value_it_cannot_name():
+    """No match, or a name already taken, keeps the verbatim id: it renders
+    (UNREGISTERED at worst) instead of vanishing from the pass."""
+    odd = "arn:aws:states:us-east-1:111122223333:express:odd"
+    a = _SFN + "dup"
+    b = "arn:aws:states:us-west-2:111122223333:stateMachine:dup"
+    result = _fetch([odd, a, b], {}, id_capture=_SFN_CAPTURE)
+    assert sorted(e.id for e in result.entities) == sorted(["dup", odd, b])
+
+
+def test_id_capture_falls_back_to_the_first_group_when_unnamed():
+    result = _fetch([_SFN + "m"], {}, id_capture=r"stateMachine:(.+)$")
+    assert [e.id for e in result.entities] == ["m"]
+
+
 # ---------------------------------------------------- failure is a state ----
 
 def test_an_unenumerable_namespace_fails_loud_and_claims_no_absence():

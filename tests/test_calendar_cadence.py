@@ -334,6 +334,45 @@ def test_a_daily_interval_is_left_to_the_flat_ceiling():
                     run_calendar="trading_days") == 1440.0
 
 
+# alpha-engine-config-I13079: a once-per-trading-day producer is owed the
+# whole non-session days since the last session day, and nothing else.
+_DAILY = dict(interval_minutes=1440, sla_minutes_after_cron=0, run_calendar="trading_days")
+
+
+def test_a_daily_trading_day_producer_is_owed_the_weekend():
+    saturday = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+    sunday = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+    monday_early = datetime(2026, 8, 17, 0, 59, tzinfo=timezone.utc)
+    assert _ceiling(saturday, **_DAILY) == 1440.0 + 1 * 1440.0
+    assert _ceiling(sunday, **_DAILY) == 1440.0 + 2 * 1440.0
+    assert _ceiling(monday_early, **_DAILY) == 1440.0 + 2 * 1440.0
+
+
+def test_a_daily_trading_day_producer_owes_nothing_after_a_session_day():
+    """Tuesday follows Monday: a missed Monday write is caught at the flat
+    ceiling, exactly as before."""
+    assert _ceiling(TUESDAY_MORNING, **_DAILY) == 1440.0
+
+
+def test_a_monday_holiday_is_owed_too():
+    def no_monday_checker(d):
+        return _weekday_only_checker(d) and d != "2026-08-17"
+    tuesday = datetime(2026, 8, 18, 9, 0, tzinfo=timezone.utc)
+    assert calendar_cadence.effective_cadence_minutes(
+        "continuous", now=tuesday, trading_day_checker=no_monday_checker,
+        **_DAILY) == 1440.0 + 3 * 1440.0
+
+
+def test_a_daily_producer_without_a_session_calendar_keeps_the_flat_ceiling():
+    sunday = datetime(2026, 8, 16, 12, 0, tzinfo=timezone.utc)
+    assert _ceiling(sunday, interval_minutes=1440, sla_minutes_after_cron=0,
+                    run_calendar="all_days") == 1440.0
+    assert _ceiling(sunday, interval_minutes=1440, sla_minutes_after_cron=0) == 1440.0
+    assert calendar_cadence.effective_cadence_minutes(
+        "continuous", now=sunday, trading_day_checker=lambda _d: False,
+        **_DAILY) == 1440.0
+
+
 def test_apply_declared_cadence_reads_the_session_declaration():
     now = datetime(2026, 8, 14, 1, 17, tzinfo=timezone.utc)
     detail: dict = {}

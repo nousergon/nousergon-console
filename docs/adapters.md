@@ -908,10 +908,15 @@ it renders `DISABLED`.
 | **Reads** | One CloudWatch metric namespace, enumerated by a dimension |
 | **Emits** | `component` |
 | **Cannot supply** | `cadence` (lives in the registry), `cost` |
-| **Config** | `region`, `namespace`, `dimension`, `invocations_metric`, `errors_metric`, `window_minutes`, `history_days`, `cadence_seconds`, `discovery_facet`, `discovery_value`, `id_pattern` |
+| **Config** | `region`, `namespace`, `dimension`, `invocations_metric`, `errors_metric`, `window_minutes`, `history_days`, `cadence_seconds`, `discovery_facet`, `discovery_value`, `id_pattern`, `id_capture` |
 
 The dimension value **is** the component id, verbatim, so a registry
 declaration and this observation merge instead of double-rendering (§3.6).
+The one exception is a namespace whose dimension value is an ARN rather than
+a name: `AWS/States` keys metrics by `StateMachineArn`, while the registry
+names the machine. `id_capture` is a regex whose `id` group (or first group)
+becomes the id; metrics are still read under the full ARN, and a value it
+cannot name keeps its verbatim id (alpha-engine-config-I13080).
 Generic: `AWS/Lambda`/`FunctionName` is one config entry, and a second
 instance pointed at another namespace/dimension pair needs no code.
 

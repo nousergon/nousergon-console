@@ -356,3 +356,69 @@ def test_an_observed_alias_keeps_its_own_state_and_the_unobserved_parent_inherit
     # The alias DID receive its own report, so it stays counted; the parent
     # is no longer UNREPORTED either way.
     assert idx.transparency_gap() == {"count": 0, "of": 2}
+
+
+# ------------- inherited aliases on the exception view (alpha-engine-config-I13097) -
+
+
+def _alias_index(parent_state: State, alias_reports: bool = False) -> Index:
+    """A parent component and one alias. The parent's state comes from an
+    observation; the alias receives one of its own only when asked."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-alias", rel="alias-of", target="comp-parent"),),
+    ))
+    observed = [Entity(kind=Kind.COMPONENT, id="comp-parent", state=parent_state,
+                       provenance=prov("checks_envelope", as_of="2026-11-01T23:00:00Z"))]
+    if alias_reports:
+        observed.append(Entity(kind=Kind.COMPONENT, id="comp-alias", state=State.FAILED,
+                               provenance=prov("checks_envelope",
+                                               as_of="2026-11-01T23:00:00Z")))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION, entities=tuple(observed),
+    ))
+    idx.finalize()
+    return idx
+
+
+def test_an_inherited_alias_does_not_list_beside_its_parent():
+    """One problem, one row: the alias only repeats the parent's verdict.
+    It stays in the index, still an exception on its own page."""
+    from console.render.html import is_exception, landing_exceptions
+
+    idx = _alias_index(State.DEGRADED)
+    alias = idx.entity("comp-alias")
+    assert alias.state is State.DEGRADED
+    assert alias.detail["alias_state"] == "inherited"
+    assert is_exception(alias)
+    ids = [e.id for e in landing_exceptions(idx)]
+    assert ids == ["comp-parent"]
+
+
+def test_an_alias_with_its_own_report_still_lists():
+    """The #8779 shape keeps its own state, so it is its own fact and lists."""
+    from console.render.html import landing_exceptions
+
+    idx = _alias_index(State.DEGRADED, alias_reports=True)
+    assert "alias_state" not in idx.entity("comp-alias").detail
+    ids = {e.id for e in landing_exceptions(idx)}
+    assert ids == {"comp-parent", "comp-alias"}
+
+
+def test_a_healthy_parent_lists_neither_row():
+    """An inherited alias of a HEALTHY parent is HEALTHY too: nothing lists."""
+    from console.render.html import landing_exceptions
+
+    idx = _alias_index(State.HEALTHY)
+    assert idx.entity("comp-alias").state is State.HEALTHY
+    assert landing_exceptions(idx) == []

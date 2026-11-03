@@ -130,6 +130,7 @@ def read(binding: Binding, context: dict[str, Any]) -> DriverResult:
             raw, fmt, binding.spec.get("records_path"),
             binding.spec.get("array_fields"), binding.spec.get("group_field"),
             binding.spec.get("limit"), binding.spec.get("order"),
+            binding.spec.get("value_field"),
         )
     except RecordsSelectorError as exc:
         # A malformed `limit`/`order` is a defect in the DESCRIPTOR, not a

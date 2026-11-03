@@ -25,7 +25,11 @@ different ways a body expresses that:
   (``"loops.*"``: an apply-audit's per-loop outcomes, the loop id injected)
   with one mechanism, since neither is a JSON array at any single dotted
   path the plain ``records_path`` case above can reach
-  (`nousergon-console#57`).
+  (`nousergon-console#57`). A dict of plain VALUES (a broker statement's
+  ``positions: {"ANF": 255}``) needs ``value_field`` too: it names the field
+  each scalar is carried under (``positions.*``, ``group_field: symbol``,
+  ``value_field: shares`` → one record per symbol). Without it a scalar is
+  skipped, because nothing names its field.
 - **Parallel arrays** (``array_fields``, a list of equal-length array field
   names): zip index-wise into one record per index (`optimizer_shadow`'s
   ``tickers``/``target_weights``/… arrays → one Decision per ticker with no
@@ -552,7 +556,7 @@ def _project(body: Any, fmt: str, config: dict[str, Any]) -> tuple[list[dict], d
         return select(body, config.get("limit"), config.get("order")), {}
     return project(body, fmt, config.get("records_path"), config.get("array_fields"),
                     config.get("group_field"), config.get("limit"),
-                    config.get("order"))
+                    config.get("order"), config.get("value_field"))
 
 
 def _one_entity(

@@ -109,13 +109,20 @@ def select(records: list[dict], limit: Any, order: Any) -> list[dict]:
 def project(body: Any, fmt: str, records_path: str | None,
             array_fields: list[str] | None,
             group_field: str | None,
-            limit: Any = None, order: Any = None) -> tuple[list[dict], dict]:
+            limit: Any = None, order: Any = None,
+            value_field: str | None = None) -> tuple[list[dict], dict]:
     """Turn one body into (records, body_root) per the declared shape.
 
     `limit`/`order` bound the fan-out — see `select`. They are applied HERE,
     inside the one grammar both the adapter and the driver read, so neither
     caller can end up with a different notion of what a bounded window is
     (§2.3). A caller that omits them gets the unbounded behaviour it had.
+
+    `value_field` applies only under a `*` in `records_path`: it names the
+    field a SCALAR reached there is carried under, so a dict of plain values
+    (``{"positions": {"ANF": 255}}`` with ``positions.*``, ``group_field:
+    symbol``, ``value_field: shares``) fans out to one record per key. Without
+    it a scalar is skipped, as before, because nothing names its field.
 
     ``body_root`` is what field paths resolve against for whole-body /
     body-level fields; each record is merged on top of it per-entity (record
@@ -139,7 +146,10 @@ def project(body: Any, fmt: str, records_path: str | None,
     if records_path:
         parts = str(records_path).split(".")
         if "*" in parts:
-            return select(_explode_grouped(parsed, parts, group_field),
+            if value_field is not None and not (
+                    isinstance(value_field, str) and value_field):
+                raise TypeError("value_field must be a non-empty string")
+            return select(_explode_grouped(parsed, parts, group_field, value_field),
                           limit, order), parsed
         raw_list = get_path(parsed, records_path)
         if not isinstance(raw_list, list):
@@ -190,26 +200,32 @@ def parse_jsonl(body: Any) -> tuple[list[dict], int]:
 
 
 def _explode_grouped(cur: Any, parts: list[str],
-                      group_field: str | None) -> list[dict]:
+                      group_field: str | None,
+                      value_field: str | None = None) -> list[dict]:
     """Resolve a `records_path` containing a `*` segment. `*` iterates a
     dict's keys — rather than indexing a named key like every other segment —
     injecting each key under `group_field` into every record reached beneath
     it. The terminal value may be a list (each dict item becomes one record)
     or a dict (a dict-of-records: each VALUE becomes one record, its key
     injected the same way `*` injects one mid-path) — both are "a dict names
-    several records" at different depths, so one walk covers both."""
+    several records" at different depths, so one walk covers both. With
+    `value_field`, a scalar terminal reached under a `*` becomes the record
+    ``{value_field: scalar}`` (a dict of plain values, one record per key)."""
     out: list[dict] = []
-    _walk_grouped(cur, parts, group_field, out)
+    _walk_grouped(cur, parts, group_field, out, value_field)
     return out
 
 
 def _walk_grouped(cur: Any, parts: list[str], group_field: str | None,
-                   out: list[dict]) -> None:
+                   out: list[dict], value_field: str | None = None,
+                   under_star: bool = False) -> None:
     if not parts:
         if isinstance(cur, dict):
             out.append(cur)
         elif isinstance(cur, list):
             out.extend(item for item in cur if isinstance(item, dict))
+        elif value_field and under_star:
+            out.append({value_field: cur})
         return
     part, rest = parts[0], parts[1:]
     if part == "*":
@@ -217,12 +233,12 @@ def _walk_grouped(cur: Any, parts: list[str], group_field: str | None,
             return
         for key, value in cur.items():
             before = len(out)
-            _walk_grouped(value, rest, group_field, out)
+            _walk_grouped(value, rest, group_field, out, value_field, True)
             for rec in out[before:]:
                 rec.setdefault(group_field or "group", key)
         return
     if isinstance(cur, dict) and part in cur:
-        _walk_grouped(cur[part], rest, group_field, out)
+        _walk_grouped(cur[part], rest, group_field, out, value_field, under_star)
 
 
 def flat_context(groups: dict[str, str], body_root: dict, record: dict) -> dict:

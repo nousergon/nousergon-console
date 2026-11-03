@@ -185,3 +185,9 @@ a.health-tile[data-state="HEALTHY"] { --row-state: var(--good); }
 .demo-banner { color: var(--muted); font-size: .85rem; }
 .demo-tour li { margin: .35rem 0; }
 svg.ts-chart rect.ts-live { fill-opacity: .9; }
+
+/* Live freshness (`/console.js`, plan §3): the data's age and the refresh
+   cadence at the end of the site menu; a failed refresh says so in words. */
+.live-status { float: right; font-weight: 400; font-size: .85rem; color: var(--muted); }
+.live-status.live-failed { color: var(--bad); font-weight: 600; }
+@media (max-width: 40rem) { .live-status { float: none; display: block; margin-top: .3rem; } }

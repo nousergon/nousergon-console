@@ -21,6 +21,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from .. import calendar_cadence
 from ..freshness import NO_CADENCE, STALE
@@ -47,6 +48,9 @@ from ..model.kinds import (
     State,
 )
 from ..server.router import path_for_entity, path_for_list
+
+if TYPE_CHECKING:
+    from ..index.build import BuildInfo
 
 #: Component states that mean "look at me" on the exception-first landing view
 #: (§4.3). The three DECLARED states are deliberately absent: DISABLED,
@@ -2277,6 +2281,23 @@ def with_site_nav(page: str) -> str:
 #: which renders every view at an unreadable scale.
 HEAD_INJECT = ('<meta name="viewport" content="width=device-width, initial-scale=1">'
                '<link rel="stylesheet" href="/styles.css">')
+
+
+def head_inject(info: BuildInfo | None = None) -> str:
+    """`HEAD_INJECT` plus the live-freshness enhancement (plan §3).
+
+    Two metas carry what `/console.js` needs and nothing it could not read
+    from the JSON representation too (§3.8): the index's build instant
+    (`build_info.built_at`) and its rebuild cadence in seconds. The script is
+    `defer`red and same-origin; every page reads completely without it. No
+    cadence declared means no auto-refresh: the ages still tick, and the
+    status line names the data time only.
+    """
+    built = esc(info.built_at) if info and info.built_at else ""
+    out = HEAD_INJECT + f'<meta name="console-built" content="{built}">'
+    if info and info.refresh_seconds:
+        out += f'<meta name="console-refresh" content="{info.refresh_seconds:g}">'
+    return out + '<script src="/console.js" defer></script>'
 
 
 def with_scrolling_tables(page: str) -> str:

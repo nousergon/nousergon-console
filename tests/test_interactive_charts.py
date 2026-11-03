@@ -182,3 +182,28 @@ console.log(JSON.stringify({
     assert out["range"][0] == 0 and out["range"][1] > 5
     assert out["negative"][0] < -2 and out["negative"][1] > 4
     assert out["flat"] == [0, 1.05]
+
+
+def test_a_hostile_fragment_cannot_reach_a_prototype():
+    """CodeQL js/prototype-polluting-assignment (code-scanning alert 6): the
+    `#off=` fragment is reader-controlled, so a `__proto__` / `constructor` /
+    `prototype` name is dropped, a malformed escape is ignored, and what is
+    parsed lives in prototype-less maps."""
+    node = shutil.which("node")
+    assert node, "node is required to test charts.js (preinstalled on CI runners)"
+    prog = r"""
+const m = require(process.argv[1]);
+const got = m.hiddenFrom("#off=__proto__~polluted,s3~__proto__,constructor~x," +
+                         "prototype~y,a~constructor,%E0%A4%A~z,s3~ok");
+console.log(JSON.stringify({
+  polluted: ({}).polluted === undefined && Object.prototype.polluted === undefined,
+  keys: Object.keys(got),
+  s3: Object.keys(got.s3),
+  nullProto: Object.getPrototypeOf(got) === null && Object.getPrototypeOf(got.s3) === null,
+  missing: got.toString === undefined,
+}));
+"""
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT)], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out == {"polluted": True, "keys": ["s3"], "s3": ["ok"],
+                   "nullProto": True, "missing": True}

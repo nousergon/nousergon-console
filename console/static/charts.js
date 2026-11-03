@@ -36,15 +36,34 @@
     return String(v) + (unit ? " " + unit : "");
   }
 
+  // The fragment is reader-controlled text, so what it names is only ever a
+  // key of a prototype-less map, and a name that could reach a prototype
+  // (`__proto__`, `constructor`, `prototype`) is dropped, as is a malformed
+  // escape: either way the series simply stays shown.
+  // (A list, not an object literal: `{"__proto__": ...}` sets a prototype.)
+  var RESERVED = ["__proto__", "constructor", "prototype"];
+
+  function bag() {
+    return Object.create(null);
+  }
+
   function hiddenFrom(hash) {
-    var out = {};
+    var out = bag();
     var m = /(?:^#|&)off=([^&]*)/.exec(hash || "");
     if (!m || !m[1]) return out;
     m[1].split(",").forEach(function (pair) {
       var bits = pair.split("~");
       if (bits.length !== 2) return;
-      var key = decodeURIComponent(bits[0]), label = decodeURIComponent(bits[1]);
-      (out[key] = out[key] || {})[label] = true;
+      var key, label;
+      try {
+        key = decodeURIComponent(bits[0]);
+        label = decodeURIComponent(bits[1]);
+      } catch (e) {
+        return;
+      }
+      if (RESERVED.indexOf(key) !== -1 || RESERVED.indexOf(label) !== -1) return;
+      if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = bag();
+      out[key][label] = true;
     });
     return out;
   }
@@ -91,7 +110,7 @@
 
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
-      module.exports = {formatValue: formatValue, hiddenFrom: hiddenFrom, hashFor: hashFor,
+      module.exports = {formatValue: formatValue, hiddenFrom: hiddenFrom, hashFor: hashFor, bag: bag,
                         withAlpha: withAlpha, yRange: yRange};
     }
     return;
@@ -188,7 +207,7 @@
     }
     if (!data || !data.labels || !data.labels.length || !data.series) return;
     var n = data.labels.length;
-    var hidden = hiddenFrom(location.hash)[data.key] || {};
+    var hidden = hiddenFrom(location.hash)[data.key] || bag();
     var host = document.createElement("div");
     host.className = "chart-live";
     svg.parentNode.insertBefore(host, svg);
@@ -267,7 +286,7 @@
         setSeries: [function (u, si) {
           if (si === null || si === undefined || si < 1) return;
           var all = hiddenFrom(location.hash);
-          var mine = all[data.key] || {};
+          var mine = all[data.key] || bag();
           if (u.series[si].show) delete mine[u.series[si].label];
           else mine[u.series[si].label] = true;
           if (Object.keys(mine).length) all[data.key] = mine;

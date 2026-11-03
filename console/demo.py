@@ -348,7 +348,7 @@ def _scrub(value: Any, demo: Demo, key: str | None = None) -> Any:
 # -------------------------------------------------------- the served bytes --
 
 _HREF = re.compile(r'(\s(?:href|action))="(/[^"]*)"')
-_ANCHOR = re.compile(r'<a\s[^>]*?href="([^"]*)"[^>]*>(.*?)</a>', re.DOTALL)
+_ANCHOR_START = re.compile(r"<a\s")
 # An href that leaves the console: a scheme (https:, mailto:) or a fragment.
 # Everything else is internal — absolute (`/run`) or RELATIVE (`../../run`,
 # which the browser resolves against /demo/page/<id> to an operator route).
@@ -365,17 +365,58 @@ def internal_allowed(demo: Demo, url: str) -> bool:
     return len(segments) == 2 and segments[0] == "page" and demo.page_allowed(segments[1])
 
 
+def _link_kept(demo: Demo, href: str) -> bool:
+    if _EXTERNAL_HREF.match(_html.unescape(href).strip()):
+        return True
+    return href.startswith("/") and not href.startswith("//") and internal_allowed(demo, href)
+
+
+def _anchors(body: str):
+    """Each ``<a ... href="X" ...>text</a>`` as (start, end, href, text).
+
+    A scan with str.find, not one regex: the body is rendered from declared and
+    adapter text, and a backtracking anchor pattern is polynomial on a body of
+    repeated unclosed ``<a `` (CodeQL py/polynomial-redos). Linear in the body."""
+    cursor = 0
+    for m in _ANCHOR_START.finditer(body):
+        start = m.start()
+        if start < cursor:
+            continue
+        tag_end = body.find(">", start)
+        if tag_end < 0:
+            return
+        href_at = body.find('href="', start, tag_end)
+        if href_at < 0:
+            continue
+        href_end = body.find('"', href_at + 6, tag_end)
+        if href_end < 0:
+            continue
+        close = body.find("</a>", tag_end)
+        if close < 0:
+            return
+        yield start, close + 4, body[href_at + 6:href_end], body[tag_end + 1:close]
+        cursor = close + 4
+
+
+def _unlink_anchors(body: str, demo: Demo) -> str:
+    out: list[str] = []
+    last = 0
+    for start, end, href, text in _anchors(body):
+        if _link_kept(demo, href):
+            continue
+        out.append(body[last:start])
+        out.append(f'<span class="demo-unlinked">{text}</span>')
+        last = end
+    out.append(body[last:])
+    return "".join(out)
+
+
 def finish(body: str, demo: Demo) -> str:
     """The last step of every demo response: links outside the demo set
     become plain text, links inside it gain the prefix, then the bytes are
     redacted. Order matters — an unwrapped link's URL is gone before the
     redaction runs, so it is never shown even in a form redaction misses."""
-    body = _ANCHOR.sub(
-        lambda m: m.group(0) if (_EXTERNAL_HREF.match(_html.unescape(m.group(1)).strip())
-                                 or (m.group(1).startswith("/")
-                                     and not m.group(1).startswith("//")
-                                     and internal_allowed(demo, m.group(1))))
-        else f'<span class="demo-unlinked">{m.group(2)}</span>', body)
+    body = _unlink_anchors(body, demo)
     body = _HREF.sub(lambda m: f'{m.group(1)}="{PREFIX}{m.group(2)}"'
                      if m.group(2) != "/styles.css" else m.group(0), body)
     return demo.redact(body)

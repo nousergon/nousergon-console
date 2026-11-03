@@ -362,3 +362,31 @@ def test_operator_page_renders_text_sections_too():
     idx = _index()
     out = render_html.page_page(idx, "demo-next")
     assert "Paper weeks before real capital." in out
+
+
+# ------------------------------------- Codex review 2026-11-03 (0afbd50e) --
+
+def test_a_relative_link_cannot_escape_the_demo():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo.finish('<p><a href="../../run">All runs</a> and '
+                      '<a href="run">here</a></p>', d)
+    assert "href" not in out
+    assert out.count('class="demo-unlinked"') == 2
+
+
+def test_external_and_declared_links_are_kept():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo.finish('<a href="https://nousergon.ai/x">site</a> '
+                      '<a href="#top">top</a> <a href="/page/demo-harness">h</a> '
+                      '<a href="//evil.example/run">x</a>', d)
+    assert 'href="https://nousergon.ai/x"' in out
+    assert 'href="#top"' in out
+    assert f'href="{demo.PREFIX}/page/demo-harness"' in out
+    assert 'href="//' not in out
+
+
+def test_a_numeric_account_id_is_redacted_in_json():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo._scrub({"account": 210987654321, "count": 4, "ok": True}, d)
+    assert out["account"] == "[account id hidden]"
+    assert out["count"] == 4 and out["ok"] is True

@@ -829,7 +829,10 @@ number as `"A: 4, B: 3 · total 7"` in the source's order, omitting zero and
 null counts; `format: grouped` writes a list of mappings as `"A: x, y; B: z"`,
 grouped by `group_by`, listing each row's `item` (a key, or a list of keys
 where the first present wins), in `group_order` when declared. Use them with
-`render: text`; URLs in the result are linked by the page. `absent` is the
+`render: text`; URLs in the result are linked by the page. `format: length`
+writes a list or mapping as the number of its members (an empty list is `0`),
+for a count the source carries only as a list; use it with `render: count` and
+a unit. `absent` is the
 text a null renders as (`"not recorded"`), so a night the source never
 recorded does not read as zero. A value of the wrong shape renders unchanged.
 

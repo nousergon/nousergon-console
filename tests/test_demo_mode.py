@@ -413,3 +413,17 @@ def test_redaction_and_link_scan_are_linear_on_hostile_bodies():
         started = time.monotonic()
         demo.finish(body, d)
         assert time.monotonic() - started < 3.0
+
+
+def test_a_hidden_field_named_in_a_tiles_also_list_is_removed_by_name():
+    # alpha-engine-config-I12783: `also:` names further fields; a hidden one
+    # must not print even its name in the demo view.
+    from console.demo import Demo
+
+    demo = Demo(hide_fields=frozenset({"secret"}))
+    page = {"sections": [{"type": "tiles", "tiles": [
+        {"label": "x", "field": "mtd", "also": [
+            {"field": "secret", "label": "secret", "text": "1", "unit": None},
+            {"field": "vs_spy_pct", "label": "vs SPY", "text": "2", "unit": "%"}]}]}]}
+    tiles = demo.page_doc(page)["sections"][0]["tiles"]
+    assert [a["field"] for a in tiles[0]["also"]] == ["vs_spy_pct"]

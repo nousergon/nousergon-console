@@ -453,3 +453,39 @@ def test_home_counts_the_red_by_priority_p0_first():
     assert line.index("1 P0") < line.index("1 untriaged") < line.index("1 P1")
     assert 'href="/exceptions#tier-P0"' in line
     assert "P2" not in line  # an empty tier other than P0 is not listed
+
+
+# ------------------------------------------------------- tile `also` fields --
+
+ALSO = {"cost": {"title": "Cost", "question": "q", "sections": [
+    {"type": "tiles", "title": "t", "tiles": [
+        {"label": "AWS", "field": "mtd",
+         "also": [{"field": "pace", "label": "pace"}, "budget", "missing"],
+         "select": {"facets": {"meter": "spend", "provider": "aws"}}}]}]}}
+
+
+def test_a_tile_shows_its_rows_other_fields_and_says_when_one_is_not_carried():
+    # alpha-engine-config-I12783: a D/W/M return tile shows the benchmarks of
+    # the SAME row beneath its value, never a second row.
+    tile = _page(_index(ALSO))["sections"][0]["tiles"][0]
+    assert tile["text"] == "120"
+    assert [(a["label"], a["text"], a["unit"]) for a in tile["also"]] == [
+        ("pace", "1.2", "ratio"), ("budget", "100", "USD"),
+        ("missing", "not carried", None)]
+    html = _html(_index(ALSO), resolve("/page/cost"))
+    assert 'class="tile-meta tile-also">pace 1.2 <span class="tile-unit">ratio</span>' in html
+    assert "missing not carried" in html
+
+
+def test_a_tile_without_also_carries_no_also_key():
+    tile = _page(_index())["sections"][0]["tiles"][0]
+    assert "also" not in tile
+
+
+@pytest.mark.parametrize("bad", ["pace", [3], [{"label": "x"}]])
+def test_a_bad_also_fails_the_build_by_name(bad):
+    decl = {"cost": {"title": "t", "question": "q", "sections": [
+        {"type": "tiles", "tiles": [{"label": "AWS", "field": "mtd", "also": bad,
+                                     "select": {"facets": {"meter": "spend"}}}]}]}}
+    with pytest.raises(pages.PagesConfigError, match="also"):
+        pages.parse(decl)

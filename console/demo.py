@@ -160,7 +160,10 @@ class Demo:
         for sec in pg["sections"]:
             sec = dict(sec)
             if sec["type"] == "tiles":
-                sec["tiles"] = [t for t in sec["tiles"] if t.get("field") not in hidden]
+                sec["tiles"] = [
+                    {**t, "also": [a for a in t["also"] if a["field"] not in hidden]}
+                    if t.get("also") else t
+                    for t in sec["tiles"] if t.get("field") not in hidden]
                 if not sec["tiles"]:
                     continue
             elif sec["type"] == "chart" and sec.get("field") in hidden:

@@ -82,6 +82,11 @@ class Tile:
     label: str
     select: Selector
     field: str
+    #: Further fields OF THE SAME ROW shown under the value, each as
+    #: (field, label): a return beside its benchmarks, a count beside what it
+    #: counts. Never a second row, so the tile still states one source and one
+    #: as-of (alpha-engine-config-I12783).
+    also: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -282,7 +287,8 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
                 raise PagesConfigError(f"{at}: must be a mapping")
             parsed.append(Tile(label=_text(t, "label", at),
                                select=_selector(t.get("select"), at),
-                               field=_text(t, "field", at)))
+                               field=_text(t, "field", at),
+                               also=_also(t.get("also"), at)))
         return Section(type=kind, title=title, tiles=tuple(parsed), empty=empty)
     if kind == "report":
         feed = _text(raw, "feed", where)
@@ -427,6 +433,25 @@ def _row(ent: Any, columns: tuple[str, ...] | list[str]) -> dict[str, Any]:
     }
 
 
+def _also(raw: Any, where: str) -> tuple[tuple[str, str], ...]:
+    """A tile's `also:` list: each entry a field name, or `{field, label}`."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise PagesConfigError(f"{where}: `also` must be a list of fields")
+    out = []
+    for n, a in enumerate(raw, start=1):
+        if isinstance(a, str) and a.strip():
+            out.append((a.strip(), a.strip()))
+        elif isinstance(a, Mapping):
+            name = _text(a, "field", f"{where} also #{n}")
+            out.append((name, str(a.get("label") or name).strip()))
+        else:
+            raise PagesConfigError(
+                f"{where} also #{n}: must be a field name or a mapping with `field`")
+    return tuple(out)
+
+
 def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {"label": tile.label, "selector": tile.select.text,
                            "field": tile.field}
@@ -449,6 +474,17 @@ def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any
     whole = _fields(ent).get(f.of or "")
     if whole is not None:
         out["of"] = {"name": whole.name, "value": whole.value, "text": format_value(whole)}
+    if tile.also:
+        # The same row's other fields. A field the row does not carry says so
+        # rather than vanishing, like the tile's own value.
+        by_name = _fields(ent)
+        out["also"] = [
+            {"field": name, "label": label, "value": by_name[name].value,
+             "text": format_value(by_name[name]), "unit": by_name[name].unit}
+            if name in by_name else
+            {"field": name, "label": label, "value": None, "text": "not carried",
+             "unit": None}
+            for name, label in tile.also]
     if f.comparable and _number(f.value) and _number(f.baseline):
         out["versus_baseline"] = ("above" if f.value > f.baseline else
                                   "below" if f.value < f.baseline else "at")

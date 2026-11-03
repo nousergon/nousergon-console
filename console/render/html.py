@@ -428,7 +428,8 @@ def _num(v: float) -> str:
     return f"{v:.4g}"
 
 
-def _timeseries_html(f: Field, whole: Field | None) -> str | None:
+def _timeseries_html(f: Field, whole: Field | None,
+                     marks: tuple[tuple[int, str], ...] = ()) -> str | None:
     """A `timeseries` field as an inline SVG bar chart, or None for no shape.
 
     Generic over the field's shape (`series_points`), never over who emitted
@@ -442,6 +443,11 @@ def _timeseries_html(f: Field, whole: Field | None) -> str | None:
     carried by length alone (§5.7): the SVG has a `<title>` per bar and the
     span, latest, peak and reference value are printed beside it in text,
     with how many points sit above the reference.
+
+    ``marks`` are (point index, title) event marks — a declared chart
+    annotation (alpha-engine-config-I12784) — drawn as a thin vertical line
+    through that point's slot, uncoloured for the same reason. The caller
+    lists every mark in text under the chart; the line is only where it is.
     """
     points = series_points(f.value)
     if not points:
@@ -490,12 +496,23 @@ def _timeseries_html(f: Field, whole: Field | None) -> str | None:
         above = sum(1 for y in ys if y > ref)
         summary.append(f"{whole.name} {_num(ref)}{unit} "  # type: ignore[union-attr]
                        f"({above} of {len(ys)} above)")
+    ticks = []
+    for i, title in marks:
+        if 0 <= i < len(points):
+            mx = _CHART_PAD + i * slot + slot / 2
+            ticks.append(
+                f'<line class="ts-mark" x1="{mx:.2f}" x2="{mx:.2f}" y1="0" '
+                f'y2="{_CHART_H:g}" stroke="currentColor" stroke-width="0.6" '
+                f'stroke-dasharray="1 2">'
+                f"<title>{esc(title)}</title></line>")
+    if ticks:
+        summary.append(f"{len(ticks)} event mark{'s' if len(ticks) != 1 else ''}")
     text = " · ".join(summary)
     return (
         f'<svg class="ts-chart" viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
         f'preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
         f"<title>{esc(f.name)}: {esc(text)}</title>"
-        + "".join(bars) + line
+        + "".join(bars) + line + "".join(ticks)
         + f'</svg><br><small class="ts-summary">{esc(text)}</small>'
     )
 
@@ -2121,12 +2138,36 @@ def _page_chart(index: Index, sec: dict) -> str:
     if f is None or not sec["points"]:
         return '<p class="absent">no point inside the selected range</p>'
     shown = dataclasses.replace(f, value=[list(p) for p in sec["points"]])
-    chart = _timeseries_html(shown, by_name.get(f.of or ""))
+    marks = sec.get("annotations") or []
+    chart = _timeseries_html(shown, by_name.get(f.of or ""), tuple(
+        (m["slot"], f'{m["label"]} {m["at"]}: {m["text"]}') for m in marks))
     note = (f'<small> · {sec["outside_range"]} earlier points outside the range</small>'
             if sec.get("outside_range") else "")
-    return (f'<figure class="page-chart">{chart}{note}<figcaption>'
+    return (f'<figure class="page-chart">{chart}{note}{_chart_marks_html(sec)}<figcaption>'
             f'<a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · {as_of_html(sec.get("as_of"))}'
             f'</figcaption></figure>')
+
+
+def _chart_marks_html(sec: dict) -> str:
+    """A chart's event marks as text: every mark the SVG draws, in date order,
+    each linked to its row, plus how many declared events fell outside the
+    chart's dates or carried no date (never dropped silently)."""
+    if "annotations" not in sec:
+        return ""
+    items = "".join(
+        f'<li><time datetime="{esc(m["day"])}">{esc(m["day"])}</time> '
+        f'{esc(m["label"])}: <a href="{esc(m["url"])}">{esc(m["text"])}</a></li>'
+        for m in sec["annotations"])
+    extra = []
+    if sec.get("annotations_outside"):
+        extra.append(f'{sec["annotations_outside"]} outside the chart\'s dates')
+    if sec.get("annotations_undated"):
+        extra.append(f'{sec["annotations_undated"]} without a date')
+    tail = f'<small>Other events: {esc(", ".join(extra))}</small>' if extra else ""
+    body = f'<ul class="chart-marks">{items}</ul>' if items else (
+        "<small>No event inside the chart's dates.</small>")
+    return f'<div class="chart-marks"><strong>Events</strong> {body}{tail}</div>'
+
 
 
 def _page_section(index: Index, sec: dict, links: Citations | None,

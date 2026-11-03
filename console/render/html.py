@@ -1915,42 +1915,65 @@ def health_strip(areas: list[dict]) -> str:
             f'<div class="tiles">{"".join(tiles)}</div></section>')
 
 
-def exception_trend(points, now_total: int | None = None) -> str:
+def _untriaged(by_priority: dict[str, int]) -> int | None:
+    """A day's untriaged count, or None when that day recorded no breakdown."""
+    return by_priority.get("untriaged", 0) if by_priority else None
+
+
+def exception_trend(points, now_total: int | None = None,
+                    now_untriaged: int | None = None) -> str:
     """The not-healthy count, one bar per published day plus today's live
     count, so "is the red going down?" is answered on the page (Brian
-    2026-10-29: the console must get materially better every day). With no
+    2026-10-29: the console must get materially better every day). The
+    untriaged part of each bar is drawn inside it: that is the share no
+    tracked issue owns yet, and the one a day's triage should shrink. With no
     trend source declared it renders nothing; with one declared but empty it
     says so rather than drawing a flat line."""
     if points is None:
         return ""
-    bars = [(p.date, p.total, False) for p in points]
+    bars = [(p.date, p.total, _untriaged(getattr(p, "by_priority", None) or {}), False)
+            for p in points]
     if now_total is not None:
-        bars.append(("now", now_total, True))
+        bars.append(("now", now_total, now_untriaged, True))
     if not bars:
         return '<p class="absent">no daily exception counts published yet</p>'
-    hi = max(t for _, t, _ in bars) or 1
+    hi = max(t for _, t, _, _ in bars) or 1
     inner_h = _CHART_H - 2 * _CHART_PAD
     slot = (_CHART_W - 2 * _CHART_PAD) / len(bars)
     bar_w = max(slot * 0.8, 0.5)
+    base = _CHART_H - _CHART_PAD
     rects = []
-    for i, (label, total, live) in enumerate(bars):
+    for i, (label, total, untriaged, live) in enumerate(bars):
         h = max(total / hi * inner_h, 0.5)
         x = _CHART_PAD + i * slot + (slot - bar_w) / 2
         cls = ' class="ts-live"' if live else ""
         rects.append(
-            f'<rect x="{x:.2f}" y="{_CHART_H - _CHART_PAD - h:.2f}" width="{bar_w:.2f}" '
+            f'<rect x="{x:.2f}" y="{base - h:.2f}" width="{bar_w:.2f}" '
             f'height="{h:.2f}"{cls}>'
             f"<title>{esc(label)}: {total} not healthy</title></rect>")
+        if untriaged:
+            uh = untriaged / hi * inner_h
+            rects.append(
+                f'<rect class="ts-untriaged" x="{x:.2f}" y="{base - uh:.2f}" '
+                f'width="{bar_w:.2f}" height="{uh:.2f}">'
+                f"<title>{esc(label)}: {untriaged} untriaged</title></rect>")
     first, last = bars[0], bars[-1]
     change = last[1] - first[1]
     text = (f"not healthy, {first[0]} – {last[0]}: {first[1]} → {last[1]} "
-            f"({'+' if change > 0 else ''}{change}) · lowest {min(t for _, t, _ in bars)}")
-    data = _chart_data("not-healthy", [label for label, _, _ in bars], [
+            f"({'+' if change > 0 else ''}{change}) · lowest {min(t for _, t, _, _ in bars)}")
+    known = [(label, u) for label, _, u, _ in bars if u is not None]
+    if len(known) >= 2:
+        text += f" · untriaged {known[0][1]} → {known[-1][1]} (from {known[0][0]})"
+    elif known:
+        text += f" · untriaged {known[-1][1]}"
+    data = _chart_data("not-healthy", [label for label, _, _, _ in bars], [
         {"label": "published daily", "kind": "bar", "sparse": True,
-         "values": [None if live else t for _, t, live in bars]},
+         "values": [None if live else t for _, t, _, live in bars]},
         *([{"label": "now (live)", "kind": "bar", "sparse": True,
-            "values": [t if live else None for _, t, live in bars]}]
+            "values": [t if live else None for _, t, _, live in bars]}]
           if now_total is not None else []),
+        *([{"label": "untriaged", "kind": "line",
+            "values": [u for _, _, u, _ in bars]}] if known else []),
     ], "not healthy")
     return (f'<p class="exception-trend"><svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} '
             f'{_CHART_H:g}" preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
@@ -1989,7 +2012,7 @@ def exception_summary(model, trend=None) -> str:
     return (f'<section class="page-section"><h2>exceptions</h2>'
             f'<p class="list-summary">{counts}</p>'
             + (f'<p class="list-summary">by priority: {by_tier}</p>' if view_rows else "")
-            + exception_trend(trend, len(view_rows))
+            + exception_trend(trend, len(view_rows), tiers.get("untriaged", 0))
             + f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
             f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a> · '
             f'{esc(gap_txt)} · population completeness {esc(comp_txt)}</p></section>')
@@ -2088,7 +2111,7 @@ def exceptions_page(index: Index) -> str:
 {index_freshness(index)}
 <p class="list-summary">{len(rows)} not healthy{esc(folded)} · {counts}</p>
 {_since_yesterday(delta)}
-{exception_trend(index.exceptions_trend(), len(rows))}
+{exception_trend(index.exceptions_trend(), len(rows), len(tiers.get("untriaged", ())))}
 {body}
 <h2 id="decision-queue">waiting on Brian · {len(model.queue)}</h2>
 {_table(model.queue, labels=model.queue_labels)}

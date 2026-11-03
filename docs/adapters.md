@@ -655,7 +655,7 @@ facet — on the Component's own entity page with no new rendering path.
 | **Reads** | An S3-compatible prefix whose objects carry zero, one, or many per-instance records (JSON, CSV, or date-partitioned JSON Lines) |
 | **Emits** | Whichever entity kind the config declares — `component`, `run`, `cycle`, `artifact`, `signal`, `decision`, `incident` |
 | **Cannot supply** | anything not reachable by a declared field `path` |
-| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`), `job_label`, `cadence` with `staleness_factor` (default 1.5), and for a calendar `cadence` the optional `sla_minutes_after_cron` / `interval_minutes` / `run_calendar` / `active_hours_utc` and, with `saturday_sf` only, `deadline: {weekday, hour_utc}` |
+| **Config** | `bucket`, `prefix`, `key_pattern`, `kind`, `question`, `id_template`, one of `records_path` (optionally with `group_field` and `value_field`) / `array_fields` / `format: csv` / `format: object` (optionally with `body: text` or `body: markdown`, `body_max_bytes`) / `format: jsonl` (with `days`, `max_objects`, `partition_key`), `state_field`/`state_default`/`state_map`, `as_of_field`, `evidence_template`, `fields`, `facets`, `window_days`, `label_template` (with `date_fields`), `job_label`, `cadence` with `staleness_factor` (default 1.5), and for a calendar `cadence` the optional `sla_minutes_after_cron` / `interval_minutes` / `run_calendar` / `active_hours_utc` and, with `saturday_sf` only, `deadline: {weekday, hour_utc}` |
 
 **Cadence: flat or calendar** (alpha-engine-config-I13052). A row with no
 domain state reads `fresh`/`stale` against its `cadence`. A flat cadence
@@ -719,6 +719,10 @@ csv` ignores both — the whole file is the record list):
   (`"loops.*"`: an apply-audit's per-loop outcomes, loop id injected), since
   neither shape is a JSON array at any single dotted path the plain
   `records_path` case above can name.
+  A dict of plain VALUES (a broker statement's `positions: {"ANF": 255}`)
+  also needs **`value_field`**, naming the field each scalar is carried
+  under (`positions.*`, `group_field: symbol`, `value_field: shares` → one
+  record per symbol). Without it a scalar is skipped, as it always was.
 - **`array_fields`** (a list of equal-length array field names): zip
   index-wise into one record per index — a source with no per-instance object
   at all, only parallel arrays (`tickers`, `target_weights`, …).

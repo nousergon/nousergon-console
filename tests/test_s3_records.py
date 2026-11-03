@@ -350,6 +350,66 @@ def test_grouped_dict_of_records_state_and_body_level_as_of_both_reachable():
     assert by_id["scoring_weights:2026-08-08"].detail["fields"]["consecutive_blocked_weeks"]["value"] == 4
 
 
+STATEMENT = {"trading_day": "2026-10-30", "cash_usd": 29589.0,
+             "positions": {"ANF": 255, "DECK": 467, "SPY": 0}}
+
+
+def _positions_cfg(**extra):
+    return {
+        "bucket": BUCKET, "prefix": "trader/broker_statements/",
+        "key_pattern": r"^trader/broker_statements/(?P<day>\d{4}-\d{2}-\d{2})\.json$",
+        "kind": "signal", "records_path": "positions.*", "group_field": "symbol",
+        "id_template": "position@{day}:{symbol}", "state_default": "HEALTHY",
+        "fields": {"shares": {"path": "shares", "render": "count", "unit": "shares"},
+                   "cash": {"path": "cash_usd", "unit": "USD"}},
+        **extra,
+    }
+
+
+def _positions_fetch(cfg):
+    return s3_records.fetch(
+        cfg, lister=_one_key_lister("trader/broker_statements/2026-10-30.json",
+                                    "2026-10-30T20:01:50+00:00"),
+        reader=_one_key_reader(STATEMENT), now=NOW)
+
+
+def test_grouped_dict_of_scalars_fans_out_under_value_field():
+    """A dict of plain values (symbol -> shares) is one record per key when
+    `value_field` names the scalar's field; zero is a value, not a skip."""
+    result = _positions_fetch(_positions_cfg(value_field="shares"))
+    assert result.status is AdapterStatus.OK
+    by_id = _by_id(result)
+    assert set(by_id) == {"position@2026-10-30:ANF", "position@2026-10-30:DECK",
+                          "position@2026-10-30:SPY"}
+    fields = by_id["position@2026-10-30:DECK"].detail["fields"]
+    assert fields["shares"]["value"] == 467
+    assert fields["cash"]["value"] == 29589.0  # body-level stays reachable
+    assert by_id["position@2026-10-30:SPY"].detail["fields"]["shares"]["value"] == 0
+
+
+def test_grouped_dict_of_scalars_without_value_field_is_skipped_as_before():
+    result = _positions_fetch(_positions_cfg())
+    assert result.status is AdapterStatus.OK
+    assert len(result.entities) == 0 and result.unavailable == ()
+
+
+def test_value_field_never_wraps_a_scalar_outside_a_star():
+    """`positions.ANF` names one scalar with no `*`: there is no key to carry,
+    so `value_field` does not apply (plain records_path still wants a list)."""
+    from console.records_shape import _explode_grouped
+    assert _explode_grouped(STATEMENT, ["cash_usd"], "symbol", "shares") == []
+    assert _explode_grouped(STATEMENT, ["positions", "*"], "symbol", "shares")[0] == {
+        "shares": 255, "symbol": "ANF"}
+
+
+def test_a_malformed_value_field_is_a_finding_not_a_crash():
+    """The key's body is reported unreadable-as-declared (`body`), and the
+    adapter keeps going rather than raising."""
+    result = _positions_fetch(_positions_cfg(value_field=["shares"]))
+    assert len(result.entities) == 0
+    assert result.unavailable == ("body",)
+
+
 def test_grouped_mode_does_not_disturb_plain_records_path():
     """A `records_path` with no `*` still takes the old, direct-array path —
     the grouped walk is opt-in via the literal `*` segment only."""

@@ -77,3 +77,13 @@ def test_a_bad_trend_key_fails_the_preflight():
     with pytest.raises(ValueError):
         baseline.parse({"bucket": "b", "key": "k", "trend_key": ""})
     assert baseline.parse({"bucket": "b", "key": "k", "trend_key": "t.json"}).trend_key == "t.json"
+
+
+def test_every_page_menu_links_the_exceptions_list():
+    idx = Index()
+    idx.finalize()
+    for path in ("/", "/dashboards", "/exceptions"):
+        html = _html(idx, resolve(path))
+        nav = html[html.index('<nav class="site-nav">'):]
+        nav = nav[:nav.index("</nav>")]
+        assert '<a href="/exceptions">exceptions</a>' in nav, path

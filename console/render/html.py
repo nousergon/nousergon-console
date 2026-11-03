@@ -2353,9 +2353,13 @@ def with_demo_nav(page: str, demo) -> str:
 
 
 def with_site_nav(page: str) -> str:
-    """Prepend the one site menu to a rendered page: home · dashboards ·
-    search. Applied once, at the server, so no page can ship without it."""
+    """Prepend the one site menu to a rendered page: home · exceptions ·
+    dashboards · planner · reports · search. Applied once, at the server, so
+    no page can ship without it. `exceptions` is here because the list was
+    reachable only from links inside home's exceptions section (Brian
+    2026-11-03 asked how to get there)."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
+           '<a href="/exceptions">exceptions</a> · '
            '<a href="/dashboards">dashboards</a> · '
            '<a href="/planner">planner</a> · '
            '<a href="/reports">reports</a> · '

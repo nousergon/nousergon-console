@@ -64,9 +64,9 @@ a:focus-visible, input:focus-visible, button:focus-visible { outline: 3px solid 
    border as the state it shares a name with because it is the same fact —
    this clause was not measured. Colour carries one axis (§5.7) and the status
    word is rendered in its own column, so nothing here is colour-only. */
-.milestone-MET { border-left: .35rem solid #087f23; }
-.milestone-UNMET { border-left: .35rem solid #b00020; }
-.milestone-UNREPORTED { border-left: .35rem solid #8a4b00; }
+.milestone-MET { border-left: .35rem solid var(--good); }
+.milestone-UNMET { border-left: .35rem solid var(--bad); }
+.milestone-UNREPORTED { border-left: .35rem solid var(--warn); }
 .pane-question { color: var(--muted); font-style: italic; }
 /* The one site menu (`render/html.py::with_site_nav`), on every page. */
 .site-nav { padding: .55rem 0; margin-bottom: 1.2rem; border-bottom: 1px solid var(--border); font-weight: 600; }
@@ -74,7 +74,7 @@ a:focus-visible, input:focus-visible, button:focus-visible { outline: 3px solid 
 .list-summary span { padding-left: .4rem; margin-right: .4rem; }
 /* Part-of-whole bars (`of:` fields). Uncoloured on purpose: a relation, not a
    verdict (§5.4); the numbers and percentage sit beside it in text (§5.7). */
-progress { width: 6rem; height: .7rem; vertical-align: middle; accent-color: #4c5563; }
+progress { width: 6rem; height: .7rem; vertical-align: middle; accent-color: var(--off); }
 
 /* Landing exception groups and per-source list groups (I11805). */
 details > summary { font-weight: 600; margin: 0.8em 0 0.3em; cursor: pointer; }
@@ -82,12 +82,12 @@ h2.list-group, h3.list-group { margin-top: 1.4em; }
 
 /* A source object's own text on its entity page (`detail["document"]`):
    wrapped, so a long markdown line reads without scrolling sideways. */
-pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch; padding: .75rem 1rem; border: 1px solid #4c5563; border-radius: .25rem; font-size: .92rem; line-height: 1.5; }
+pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch; padding: .75rem 1rem; border: 1px solid var(--off); border-radius: .25rem; font-size: .92rem; line-height: 1.5; }
 .list-window { font-weight: 600; }
 
 /* A markdown document (`body: markdown`), rendered. Kept to the page's own
    measure; a wide table scrolls inside `.md-table`, never the page. */
-.document.markdown { max-width: 100ch; padding: .25rem 1rem; border: 1px solid #4c5563; border-radius: .25rem; overflow-wrap: anywhere; }
+.document.markdown { max-width: 100ch; padding: .25rem 1rem; border: 1px solid var(--off); border-radius: .25rem; overflow-wrap: anywhere; }
 .document.markdown h1 { font-size: 1.4rem; }
 .document.markdown h2 { font-size: 1.2rem; }
 .document.markdown h3, .document.markdown h4, .document.markdown h5, .document.markdown h6 { font-size: 1rem; }
@@ -95,12 +95,12 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 .document.markdown code { font-size: .9em; padding: .05em .3em; border-radius: .2rem; background: rgba(127, 127, 127, .15); }
 .document.markdown pre { overflow-x: auto; padding: .6rem .8rem; border-radius: .25rem; background: rgba(127, 127, 127, .12); }
 .document.markdown pre code { padding: 0; background: none; }
-.document.markdown blockquote { margin: .6em 0; padding-left: .8rem; border-left: .25rem solid #4c5563; color: inherit; }
+.document.markdown blockquote { margin: .6em 0; padding-left: .8rem; border-left: .25rem solid var(--off); color: inherit; }
 .document.markdown .md-table { max-width: 100%; overflow-x: auto; margin: .6em 0; }
 .document.markdown table { border-collapse: collapse; font-size: .92rem; }
-.document.markdown th, .document.markdown td { border: 1px solid #4c5563; padding: .25rem .5rem; text-align: left; vertical-align: top; overflow-wrap: normal; }
+.document.markdown th, .document.markdown td { border: 1px solid var(--off); padding: .25rem .5rem; text-align: left; vertical-align: top; overflow-wrap: normal; }
 .document.markdown th { font-weight: 600; }
-.document.markdown hr { border: 0; border-top: 1px solid #4c5563; }
+.document.markdown hr { border: 0; border-top: 1px solid var(--off); }
 
 /* Phones. The viewport meta (`render/html.py::HEAD_INJECT`) lays the page out
    at the device's width; these keep it there. A table wider than the screen
@@ -117,11 +117,11 @@ input, select, textarea { max-width: 100%; }
    schedule vocabulary, not observability-policy.md §8.3's component states.
    Colour carries that one axis and the state word is always printed beside it
    (§5.7); UNREPORTED is dashed so it never reads as a shade of THREATENED. */
-.schedule-ON_TRACK { border-left: .35rem solid #087f23; }
-.schedule-MET { border-left: .35rem solid #4c5563; }
-.schedule-THREATENED { border-left: .35rem solid #c99700; }
-.schedule-OFF_TRACK { border-left: .35rem solid #b00020; }
-.schedule-UNREPORTED { border-left: .35rem dashed #8a4b00; }
+.schedule-ON_TRACK { border-left: .35rem solid var(--good); }
+.schedule-MET { border-left: .35rem solid var(--off); }
+.schedule-THREATENED { border-left: .35rem solid var(--warn); }
+.schedule-OFF_TRACK { border-left: .35rem solid var(--bad); }
+.schedule-UNREPORTED { border-left: .35rem dashed var(--warn); }
 .schedule-word { padding-left: .3rem; font-weight: 600; }
 .plan-scroll { overflow-x: auto; margin: 1rem 0; }
 .plan-svg { min-width: 56rem; display: block; }
@@ -132,7 +132,7 @@ input, select, textarea { max-width: 100%; }
 .plan-svg a:hover text { text-decoration: underline; }
 .plan-table td, .plan-table th { padding: .25rem .5rem; vertical-align: top; text-align: left; }
 .plan-items ul { margin: 0; padding-left: 1.1rem; font-size: .9rem; }
-.plan-blocker { color: #b00020; }
+.plan-blocker { color: var(--bad); }
 .plan-alerts { margin: .3rem 0 1rem; padding-left: 1.1rem; font-size: .9rem; overflow-wrap: anywhere; }
 .plan-alerts time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .plan-source { opacity: .75; }
@@ -150,18 +150,18 @@ input, select, textarea { max-width: 100%; }
 svg.ts-chart { width: 15rem; height: 4rem; vertical-align: middle; color: inherit; }
 svg.ts-chart rect { fill: currentColor; fill-opacity: .55; }
 svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
-.ts-summary { color: #4c5563; }
+.ts-summary { color: var(--muted); }
 
 /* A report feed (`/reports`): the newest report open, the recent window
    collapsed below it, and the older ones as a dated list. */
 .report { max-width: 102ch; margin: 0 0 1rem; }
 .report-latest > h2 { margin-bottom: .2rem; }
-.report-meta { color: #4c5563; font-size: .9rem; margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
-details.report { border-top: 1px solid #4c5563; padding-top: .2rem; }
+.report-meta { color: var(--muted); font-size: .9rem; margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
+details.report { border-top: 1px solid var(--off); padding-top: .2rem; }
 .report-archive { columns: 2 22rem; }
 /* The declared lead block (`lead:`), above the newest report: one section
    of each source's newest report, read first. */
-.report-lead { border-left: .35rem solid #0b5fa5; padding-left: .8rem; margin: 0 0 1.5rem; }
+.report-lead { border-left: .35rem solid var(--info); padding-left: .8rem; margin: 0 0 1.5rem; }
 .report-lead > h2 { margin-top: 0; }
 /* Declared pages (`/page/<id>`): headline tiles, controls, wide charts. */
 .page-controls { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; margin: .5rem 0 1rem; }

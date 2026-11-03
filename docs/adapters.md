@@ -823,6 +823,16 @@ the same dotted syntax. `question` (`console-policy.md` §4.4) is carried
 through as a synthetic `text` declared field, so the pane renders the
 question with no kind-specific rendering code.
 
+A declared field may also carry **`format`** and **`absent`**
+(`records_shape.format_shape`). `format: counts` writes a mapping of label to
+number as `"A: 4, B: 3 · total 7"` in the source's order, omitting zero and
+null counts; `format: grouped` writes a list of mappings as `"A: x, y; B: z"`,
+grouped by `group_by`, listing each row's `item` (a key, or a list of keys
+where the first present wins), in `group_order` when declared. Use them with
+`render: text`; URLs in the result are linked by the page. `absent` is the
+text a null renders as (`"not recorded"`), so a night the source never
+recorded does not read as zero. A value of the wrong shape renders unchanged.
+
 `state_field`/`state_default` resolve the same way: for `component`/`run`
 (§8.3's twelve-state kinds) the resolved value is mapped through `State` by
 name, defaulting to `UNREPORTED` when nothing matches; for every other kind

@@ -302,6 +302,55 @@ def resolve_label(label_template: str, context: dict[str, Any],
     return label.strip() or None
 
 
+def _is_count(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def format_shape(value: Any, spec: dict[str, Any]) -> Any:
+    """A structured value folded into ONE line of text, from its shape alone.
+
+    A declared field's `format` (with `render: text`) reads a mapping or a list
+    the source already carries and writes it the way a reader scans it, rather
+    than as a Python repr. Nothing here knows what the labels mean (§5.8):
+
+    - ``counts``: a mapping of label to number, in the source's own order,
+      becomes ``"A: 4, B: 3 · total 7"``. A zero or null count is omitted,
+      because the total already says how many there were; nothing non-zero
+      is ``"total 0"``.
+    - ``grouped``: a list of mappings becomes ``"A: x, y; B: z"``, grouped by
+      the ``group_by`` key and listing each item's ``item`` key (a key, or a
+      list of keys where the first present one wins). Groups follow
+      ``group_order`` when declared, then first appearance. An empty list is
+      ``"none"``. A URL item is linked by the page like any other text.
+
+    A value of the wrong shape, or an unknown `format`, is returned unchanged,
+    so it still renders as itself rather than vanishing. A null never reaches
+    here: `absent` (or the page's own "no value") is what a null renders as.
+    """
+    fmt = spec.get("format")
+    if fmt == "counts" and isinstance(value, dict):
+        parts = [f"{k}: {v:g}" for k, v in value.items() if _is_count(v) and v != 0]
+        total = sum(v for v in value.values() if _is_count(v))
+        return " · ".join(p for p in (", ".join(parts), f"total {total:g}") if p)
+    if fmt == "grouped" and isinstance(value, list):
+        if not value:
+            return "none"
+        group_by = str(spec.get("group_by", "group"))
+        item_keys = spec.get("item", "id")
+        item_keys = [item_keys] if isinstance(item_keys, str) else list(item_keys)
+        groups: dict[str, list[str]] = {
+            str(g): [] for g in (spec.get("group_order") or [])}
+        for row in value:
+            if not isinstance(row, dict):
+                groups.setdefault("?", []).append(str(row))
+                continue
+            item = next((row[k] for k in item_keys if row.get(k) not in (None, "")), None)
+            groups.setdefault(str(row.get(group_by)), []).append(
+                "?" if item is None else str(item))
+        return "; ".join(f"{g}: {', '.join(items)}" for g, items in groups.items() if items)
+    return value
+
+
 def build_fields(path_root: dict, fields_config: dict[str, Any] | None,
                   question: str | None) -> dict[str, dict[str, Any]]:
     """Declared-field extraction (§5.8): `{field_name: {path, unit, baseline,
@@ -315,6 +364,10 @@ def build_fields(path_root: dict, fields_config: dict[str, Any] | None,
         # `path` defaults to the field's own name (nousergon-console#79): the
         # overwhelmingly common case is a field named after the key it reads.
         val = get_path(path_root, spec.get("path", fname))
+        if val is None and spec.get("absent") is not None:
+            val = str(spec["absent"])
+        elif spec.get("format") is not None:
+            val = format_shape(val, spec)
         entry: dict[str, Any] = {"value": val, "render": spec.get("render", "value")}
         if spec.get("unit") is not None:
             entry["unit"] = spec["unit"]

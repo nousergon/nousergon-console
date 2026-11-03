@@ -98,3 +98,11 @@ def test_days_without_a_breakdown_draw_no_untriaged_part():
     pts = baseline.trend_points({"days": [{"date": "2026-10-31", "total": 5}]})
     html = exception_trend(pts)
     assert "ts-untriaged" not in html and "untriaged" not in html
+def test_every_page_menu_links_the_exceptions_list():
+    idx = Index()
+    idx.finalize()
+    for path in ("/", "/dashboards", "/exceptions"):
+        html = _html(idx, resolve(path))
+        nav = html[html.index('<nav class="site-nav">'):]
+        nav = nav[:nav.index("</nav>")]
+        assert '<a href="/exceptions">exceptions</a>' in nav, path

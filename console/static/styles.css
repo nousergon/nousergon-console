@@ -210,3 +210,5 @@ svg.ts-chart.ts-enhanced { display: none; }
 .chart-live .u-hz .u-cursor-x { border-right: 1px dashed var(--muted); }
 .chart-live .u-select { background: var(--info-bg); opacity: .6; }
 .chart-tip { position: absolute; z-index: 2; pointer-events: none; white-space: pre; font-size: .8rem; font-variant-numeric: tabular-nums; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: .35rem; padding: .25rem .5rem; }
+/* The untriaged share of an exceptions-trend bar: no tracked issue owns it yet. */
+svg.ts-chart rect.ts-untriaged { fill: var(--warn); fill-opacity: .9; }

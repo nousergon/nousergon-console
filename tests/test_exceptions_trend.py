@@ -45,6 +45,9 @@ def test_days_sort_oldest_first_and_today_is_a_live_bar():
         html = _html(idx, resolve(path))
         assert "2026-10-31 – now: 148 → 1 (-147)" in html
         assert 'class="ts-live"' in html
+        # 10-31 recorded no breakdown, so untriaged starts at 11-01's 31.
+        assert "untriaged 31 → 1 (from 2026-11-01)" in html
+        assert "31 untriaged</title>" in html
     doc = render_json.payload(idx, resolve("/exceptions"))
     assert [d["total"] for d in doc["trend"]] == [148, 151, 109]
 
@@ -79,6 +82,22 @@ def test_a_bad_trend_key_fails_the_preflight():
     assert baseline.parse({"bucket": "b", "key": "k", "trend_key": "t.json"}).trend_key == "t.json"
 
 
+def test_the_live_bar_carries_todays_untriaged_count():
+    from console.render.html import exception_trend
+
+    pts = baseline.trend_points(TREND)
+    html = exception_trend(pts, 111, 39)
+    assert "untriaged 31 → 39 (from 2026-11-01)" in html
+    assert "now: 39 untriaged" in html
+    assert '"label": "untriaged"' in html.replace("&quot;", '"')
+
+
+def test_days_without_a_breakdown_draw_no_untriaged_part():
+    from console.render.html import exception_trend
+
+    pts = baseline.trend_points({"days": [{"date": "2026-10-31", "total": 5}]})
+    html = exception_trend(pts)
+    assert "ts-untriaged" not in html and "untriaged" not in html
 def test_every_page_menu_links_the_exceptions_list():
     idx = Index()
     idx.finalize()

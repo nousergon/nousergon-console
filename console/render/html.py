@@ -2147,8 +2147,14 @@ def _page_tile(t: dict, empty: str = "") -> str:
         defect = (f'<div class="absent">{esc(t["defect"])}</div>' if t.get("defect") else "")
         whole = (f' <span class="tile-unit">of {esc(t["of"]["text"])}</span>'
                  if t.get("of") else "")
+        also = ""
+        if t.get("also"):
+            also = ('<div class="tile-meta tile-also">' + " · ".join(
+                f'{esc(a["label"])} {esc(a["text"])}'
+                + (f' <span class="tile-unit">{esc(a["unit"])}</span>' if a.get("unit") else "")
+                for a in t["also"]) + "</div>")
         body = (f'<div class="tile-value">{esc(t["text"])}{unit}{whole}</div>'
-                f'<div class="tile-meta">{baseline}</div>{defect}')
+                f'{also}<div class="tile-meta">{baseline}</div>{defect}')
     return (f'<div class="tile state-{esc(t["state"])}">{head}{body}'
             f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')
 

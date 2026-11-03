@@ -64,3 +64,20 @@ def test_page_links_the_grouped_urls():
     html = render_html._table([ent], with_fields=True)
     assert "Alpha: 4, Gamma: 3, Other: 1 · total 8" in html
     assert '<a href="https://example.com/b/pull/2">' in html
+
+
+def test_length_counts_a_list_or_mapping_and_an_empty_one_is_zero():
+    # A reconciliation carries its breaks only as `discrepancies[]`; the home
+    # tile shows how many (alpha-engine-config-I12783).
+    spec = {"path": "discrepancies", "render": "count", "unit": "breaks", "format": "length"}
+    assert format_shape([{"instrument": "SPY"}, {"instrument": "QQQ"}], spec) == 2
+    assert format_shape({"a": 1}, spec) == 1
+    assert format_shape([], spec) == 0
+    out = build_fields({"discrepancies": []}, {"open_breaks": spec}, None)
+    assert out["open_breaks"]["value"] == 0 and out["open_breaks"]["unit"] == "breaks"
+
+
+def test_length_of_a_scalar_or_a_missing_list_is_not_invented():
+    spec = {"render": "count", "format": "length"}
+    assert format_shape("3", spec) == "3"
+    assert build_fields({}, {"open_breaks": spec}, None)["open_breaks"]["value"] is None

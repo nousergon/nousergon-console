@@ -337,13 +337,22 @@ def _scrub(value: Any, demo: Demo, key: str | None = None) -> Any:
         if key == "url" and value.startswith("/"):
             return PREFIX + value if internal_allowed(demo, value) else None
         return demo.redact(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        # A JSON number can carry a hidden class too (a 12-digit account id).
+        text = str(value)
+        redacted = demo.redact(text)
+        return value if redacted == text else redacted
     return value
 
 
 # -------------------------------------------------------- the served bytes --
 
 _HREF = re.compile(r'(\s(?:href|action))="(/[^"]*)"')
-_ANCHOR = re.compile(r'<a\s[^>]*?href="(/[^"]*)"[^>]*>(.*?)</a>', re.DOTALL)
+_ANCHOR = re.compile(r'<a\s[^>]*?href="([^"]*)"[^>]*>(.*?)</a>', re.DOTALL)
+# An href that leaves the console: a scheme (https:, mailto:) or a fragment.
+# Everything else is internal — absolute (`/run`) or RELATIVE (`../../run`,
+# which the browser resolves against /demo/page/<id> to an operator route).
+_EXTERNAL_HREF = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*:|#)")
 
 
 def internal_allowed(demo: Demo, url: str) -> bool:
@@ -362,7 +371,10 @@ def finish(body: str, demo: Demo) -> str:
     redacted. Order matters — an unwrapped link's URL is gone before the
     redaction runs, so it is never shown even in a form redaction misses."""
     body = _ANCHOR.sub(
-        lambda m: m.group(0) if internal_allowed(demo, m.group(1))
+        lambda m: m.group(0) if (_EXTERNAL_HREF.match(_html.unescape(m.group(1)).strip())
+                                 or (m.group(1).startswith("/")
+                                     and not m.group(1).startswith("//")
+                                     and internal_allowed(demo, m.group(1))))
         else f'<span class="demo-unlinked">{m.group(2)}</span>', body)
     body = _HREF.sub(lambda m: f'{m.group(1)}="{PREFIX}{m.group(2)}"'
                      if m.group(2) != "/styles.css" else m.group(0), body)

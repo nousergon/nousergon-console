@@ -28,6 +28,21 @@ from .negotiate import negotiate
 from .router import UnknownRoute, resolve
 
 
+#: The only files served from `console/static/`, by exact path.
+_STATIC = {
+    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/console.js": ("console.js", "text/javascript; charset=utf-8"),
+    "/charts.js": ("charts.js", "text/javascript; charset=utf-8"),
+    # uPlot 1.6.32 (MIT), vendored verbatim from the npm tarball and pinned by
+    # digest in tests/test_interactive_charts.py: same-origin, no CDN, no build
+    # step (alpha-engine-config-I12783, plan §3). Its licence ships beside it.
+    "/vendor/uplot/uPlot.iife.min.js": ("vendor/uplot/uPlot.iife.min.js",
+                                        "text/javascript; charset=utf-8"),
+    "/vendor/uplot/uPlot.min.css": ("vendor/uplot/uPlot.min.css", "text/css; charset=utf-8"),
+    "/vendor/uplot/LICENSE": ("vendor/uplot/LICENSE", "text/plain; charset=utf-8"),
+}
+
+
 class ConsoleHandler(BaseHTTPRequestHandler):
     """Serves the four views in two representations. ``index`` is on the server."""
 
@@ -35,9 +50,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         parts = urlsplit(self.path)
-        if parts.path == "/styles.css":
-            self._send(200, (Path(__file__).parent.parent / "static/styles.css").read_text(),
-                       "text/css; charset=utf-8")
+        if parts.path in _STATIC:
+            name, content_type = _STATIC[parts.path]
+            self._send(200, (Path(__file__).parent.parent / "static" / name).read_text(),
+                       content_type)
             return
         index = self.server.index
         if parts.path == demo_mode.PREFIX or parts.path.startswith(demo_mode.PREFIX + "/"):
@@ -159,10 +175,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self._send(status, f"<h1>{status}</h1><p>{render_html.esc(message)}</p>",
                    "text/html; charset=utf-8")
 
+    def _build_info(self):
+        """The served index's build info for the live-freshness metas, or None
+        when there is no index to ask (an error page served before the first
+        build, or a handler built without a server): the metas then say the
+        data time is unknown rather than failing the response."""
+        try:
+            return self.server.index.build_info
+        except AttributeError:
+            return None
+
     def _send(self, status: int, body: str, content_type: str) -> None:
         if content_type.startswith("text/html"):
             body = body.replace(
-                "<head>", "<head>" + render_html.HEAD_INJECT, 1
+                "<head>", "<head>" + render_html.head_inject(self._build_info()), 1
             )
         payload = body.encode("utf-8")
         try:

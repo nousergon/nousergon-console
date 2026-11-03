@@ -339,11 +339,18 @@ def format_shape(value: Any, spec: dict[str, Any]) -> Any:
       ``group_order`` when declared, then first appearance. An empty list is
       ``"none"``. A URL item is linked by the page like any other text.
 
+    - ``length``: a list or a mapping becomes the NUMBER of its members, so a
+      count the source carries only as a list (a reconciliation's
+      ``discrepancies``) can be shown as a number; an empty list is ``0``.
+      Declare it with ``render: count`` and a unit.
+
     A value of the wrong shape, or an unknown `format`, is returned unchanged,
     so it still renders as itself rather than vanishing. A null never reaches
     here: `absent` (or the page's own "no value") is what a null renders as.
     """
     fmt = spec.get("format")
+    if fmt == "length" and isinstance(value, (list, dict)):
+        return len(value)
     if fmt == "counts" and isinstance(value, dict):
         parts = [f"{k}: {v:g}" for k, v in value.items() if _is_count(v) and v != 0]
         total = sum(v for v in value.values() if _is_count(v))

@@ -174,10 +174,14 @@ def _first_line(text: str) -> str:
     return ""
 
 
-def _describe(exc: BaseException) -> str:
-    """One line naming why a host call failed, never its full output."""
+def _describe(exc: BaseException, *, stdout: bool = True) -> str:
+    """One line naming why a host call failed, never its full output.
+
+    ``stdout=False`` for a command whose stdout is a credential (the token
+    command): there the reason comes from stderr or the exit code only.
+    """
     if isinstance(exc, subprocess.CalledProcessError):
-        detail = _first_line(exc.stderr) or _first_line(exc.stdout)
+        detail = _first_line(exc.stderr) or (_first_line(exc.stdout) if stdout else "")
         return f"exit {exc.returncode}" + (f": {detail}" if detail else "")
     return _first_line(f"{type(exc).__name__}: {exc}") or type(exc).__name__
 
@@ -305,7 +309,7 @@ def _mint_token(token_command: list[str], org: str, repo: str) -> str:
         out = subprocess.run(argv, capture_output=True, text=True, check=True,
                              timeout=_TOKEN_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - becomes the source's reason
-        raise RefReadError(f"token_command failed: {_describe(exc)}") from None
+        raise RefReadError(f"token_command failed: {_describe(exc, stdout=False)}") from None
     token = _first_line(out.stdout)
     if not token:
         raise RefReadError("token_command printed no token")

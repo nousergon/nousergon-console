@@ -1613,6 +1613,12 @@ home:
 # shown beside the selector, never instead of it. Optional on a table:
 # `sort_order: [v1, v2, ...]`, the ascending `sort` field's values in display
 # order (unlisted values after them, rows without the field last). Optional on
+# a chart: `annotations: [{label, select, at, text?}]`, event marks (deploys,
+# promotions, incidents) from rows other adapters mint — `at` is the declared
+# field holding each event's date or instant, `text` the field naming it (else
+# the row's label). A mark sits on the last point on or before its day and is
+# listed in text under the chart; events outside the chart's dates or without
+# a date are counted, never dropped. Optional on
 # a page: `links: [{title, url}]` (http(s) or a /path), shown under the
 # question, for the source of truth behind the page's numbers.
 #
@@ -1624,7 +1630,9 @@ home:
 # section type or kind, a selector with no facet, a chart without exactly one
 # field, a report naming no declared feed, a range outside the vocabulary,
 # a `sort_order` without an ascending `sort`, a blank `empty`, a link that is
-# not http(s) or a /path) FAILS THE BUILD naming the page and section.
+# not http(s) or a /path, `annotations` on a section that is not a chart or an
+# annotation without `label`, `at` or a faceted `select`) FAILS THE BUILD
+# naming the page and section.
 pages:
   reliability:
     title: Reliability

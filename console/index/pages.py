@@ -82,6 +82,26 @@ class Tile:
     label: str
     select: Selector
     field: str
+    #: Further fields OF THE SAME ROW shown under the value, each as
+    #: (field, label): a return beside its benchmarks, a count beside what it
+    #: counts. Never a second row, so the tile still states one source and one
+    #: as-of (alpha-engine-config-I12783).
+    also: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class Annotation:
+    """One source of event marks on a chart (alpha-engine-config-I12784).
+
+    `select` names the event rows (a deploy, a promotion, an incident) another
+    adapter already mints; `at` is the declared field carrying each event's
+    date or instant; `text` the declared field naming it (absent: the row's
+    label). `label` says what kind of event the mark is, in words, because a
+    mark's position alone carries nothing (§5.7)."""
+    label: str
+    select: Selector
+    at: str
+    text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,8 @@ class Section:
     #: citations linked) — the narrative a guided page reads in, between the
     #: sections that carry its evidence (alpha-engine-config-I13023).
     body: str | None = None
+    #: chart only: event marks drawn on the chart's dates and listed under it.
+    annotations: tuple[Annotation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -206,6 +228,24 @@ def _links(raw: Any, where: str) -> tuple[Link, ...]:
     return tuple(out)
 
 
+def _annotations(raw: Any, where: str) -> tuple[Annotation, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not raw:
+        raise PagesConfigError(
+            f"{where}: `annotations` must be a non-empty list of {{label, select, at}}")
+    out = []
+    for n, entry in enumerate(raw, start=1):
+        at = f"{where} annotation #{n}"
+        if not isinstance(entry, Mapping):
+            raise PagesConfigError(f"{at}: must be a mapping with `label`, `select` and `at`")
+        text = str(entry.get("text") or "").strip() or None
+        out.append(Annotation(label=_text(entry, "label", at),
+                              select=_selector(entry.get("select"), at),
+                              at=_text(entry, "at", at), text=text))
+    return tuple(out)
+
+
 def _empty(raw: Mapping[str, Any], where: str) -> str | None:
     if "empty" not in raw:
         return None
@@ -247,7 +287,8 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
                 raise PagesConfigError(f"{at}: must be a mapping")
             parsed.append(Tile(label=_text(t, "label", at),
                                select=_selector(t.get("select"), at),
-                               field=_text(t, "field", at)))
+                               field=_text(t, "field", at),
+                               also=_also(t.get("also"), at)))
         return Section(type=kind, title=title, tiles=tuple(parsed), empty=empty)
     if kind == "report":
         feed = _text(raw, "feed", where)
@@ -260,6 +301,9 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     fields = _names(raw.get("fields"), where, "fields")
     if kind == "chart" and len(fields) != 1:
         raise PagesConfigError(f"{where}: `fields` must name exactly one timeseries field")
+    annotations = _annotations(raw.get("annotations"), where)
+    if annotations and kind != "chart":
+        raise PagesConfigError(f"{where}: only a chart takes `annotations`")
     limit = raw.get("limit", DEFAULT_LIMIT)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         raise PagesConfigError(f"{where}: `limit` must be an integer 1..{MAX_LIMIT}")
@@ -274,7 +318,8 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     if len(set(sort_order)) != len(sort_order):
         raise PagesConfigError(f"{where}: `sort_order` names a value twice")
     return Section(type=kind, title=title, select=select, fields=fields,
-                   sort=sort, limit=limit, sort_order=sort_order, empty=empty)
+                   sort=sort, limit=limit, sort_order=sort_order, empty=empty,
+                   annotations=annotations)
 
 
 def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
@@ -388,6 +433,25 @@ def _row(ent: Any, columns: tuple[str, ...] | list[str]) -> dict[str, Any]:
     }
 
 
+def _also(raw: Any, where: str) -> tuple[tuple[str, str], ...]:
+    """A tile's `also:` list: each entry a field name, or `{field, label}`."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise PagesConfigError(f"{where}: `also` must be a list of fields")
+    out = []
+    for n, a in enumerate(raw, start=1):
+        if isinstance(a, str) and a.strip():
+            out.append((a.strip(), a.strip()))
+        elif isinstance(a, Mapping):
+            name = _text(a, "field", f"{where} also #{n}")
+            out.append((name, str(a.get("label") or name).strip()))
+        else:
+            raise PagesConfigError(
+                f"{where} also #{n}: must be a field name or a mapping with `field`")
+    return tuple(out)
+
+
 def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any]:
     out: dict[str, Any] = {"label": tile.label, "selector": tile.select.text,
                            "field": tile.field}
@@ -410,6 +474,17 @@ def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any
     whole = _fields(ent).get(f.of or "")
     if whole is not None:
         out["of"] = {"name": whole.name, "value": whole.value, "text": format_value(whole)}
+    if tile.also:
+        # The same row's other fields. A field the row does not carry says so
+        # rather than vanishing, like the tile's own value.
+        by_name = _fields(ent)
+        out["also"] = [
+            {"field": name, "label": label, "value": by_name[name].value,
+             "text": format_value(by_name[name]), "unit": by_name[name].unit}
+            if name in by_name else
+            {"field": name, "label": label, "value": None, "text": "not carried",
+             "unit": None}
+            for name, label in tile.also]
     if f.comparable and _number(f.value) and _number(f.baseline):
         out["versus_baseline"] = ("above" if f.value > f.baseline else
                                   "below" if f.value < f.baseline else "at")
@@ -538,6 +613,47 @@ def _chart(ent: Any, field: str, since: datetime | None) -> dict[str, Any]:
                           if whole is not None else None)}
 
 
+def _day(value: Any) -> str | None:
+    """The UTC calendar day of a date or instant, or None when it is neither."""
+    when = _instant(value)
+    return when.date().isoformat() if when is not None else None
+
+
+def _marks(index: Any, specs: tuple[Annotation, ...], variables: Mapping[str, str],
+           points: list) -> tuple[list[dict[str, Any]], int, int]:
+    """Place each declared event on the chart's dates.
+
+    A mark sits on the last point whose day is on or before the event's day,
+    so an event on a non-trading day lands on the bar before it. An event
+    before the first point or after the last is OUTSIDE the chart and counted,
+    never pinned to an edge; an event whose `at` is not a date is UNDATED and
+    counted too, never dropped silently. Returns (marks, outside, undated)."""
+    days = [_day(label) for label, _ in points]
+    known = [d for d in days if d is not None]
+    marks: list[dict[str, Any]] = []
+    outside = undated = 0
+    for spec in specs:
+        for ent in _select(index, spec.select, variables):
+            by_name = _fields(ent)
+            raw = by_name[spec.at].value if spec.at in by_name else None
+            day = _day(raw)
+            if day is None:
+                undated += 1
+                continue
+            if not known or day < known[0] or day > known[-1]:
+                outside += 1
+                continue
+            slot = max(i for i, d in enumerate(days) if d is not None and d <= day)
+            named = by_name.get(spec.text) if spec.text else None
+            text = (str(named.value) if named is not None and named.value is not None
+                    else str(ent.detail.get(LABEL_DETAIL) or ent.id))
+            marks.append({"label": spec.label, "at": str(raw), "day": day, "slot": slot,
+                          "point": points[slot][0], "text": text,
+                          "id": ent.id, "url": ent.route})
+    marks.sort(key=lambda m: (m["day"], m["label"], m["id"]))
+    return marks, outside, undated
+
+
 def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
                  since: datetime | None) -> dict[str, Any]:
     from ..render.html import is_exception, state_rank
@@ -573,6 +689,10 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         ent = rows[0]
         doc.update(id=ent.id, url=ent.route, as_of=ent.provenance.as_of,
                    **_chart(ent, s.fields[0], since))
+        if s.annotations and "points" in doc:
+            marks, outside, undated = _marks(index, s.annotations, variables, doc["points"])
+            doc.update(annotations=marks, annotations_outside=outside,
+                       annotations_undated=undated)
         return doc
     in_range = [e for e in rows if _in_range(e, since)]
     if s.type == "exceptions":

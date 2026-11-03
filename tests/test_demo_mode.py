@@ -362,3 +362,68 @@ def test_operator_page_renders_text_sections_too():
     idx = _index()
     out = render_html.page_page(idx, "demo-next")
     assert "Paper weeks before real capital." in out
+
+
+# ------------------------------------- Codex review 2026-11-03 (0afbd50e) --
+
+def test_a_relative_link_cannot_escape_the_demo():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo.finish('<p><a href="../../run">All runs</a> and '
+                      '<a href="run">here</a></p>', d)
+    assert "href" not in out
+    assert out.count('class="demo-unlinked"') == 2
+
+
+def test_external_and_declared_links_are_kept():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo.finish('<a href="https://nousergon.ai/x">site</a> '
+                      '<a href="#top">top</a> <a href="/page/demo-harness">h</a> '
+                      '<a href="//evil.example/run">x</a>', d)
+    assert 'href="https://nousergon.ai/x"' in out
+    assert 'href="#top"' in out
+    assert f'href="{demo.PREFIX}/page/demo-harness"' in out
+    assert 'href="//' not in out
+
+
+def test_a_numeric_account_id_is_redacted_in_json():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    out = demo._scrub({"account": 210987654321, "count": 4, "ok": True}, d)
+    assert out["account"] == "[account id hidden]"
+    assert out["count"] == 4 and out["ok"] is True
+
+
+def test_email_redaction_matches_the_regex_it_replaced():
+    # The linear matcher must hide exactly what the old pattern hid,
+    # including a second address that starts right after the first ends.
+    import re
+    old = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+    new = dict(demo.BUILTIN_REDACTIONS)["e-mail"]
+    for text in ("someone@example.org", "a@b.com.x%y@c.org", "x@@y.co", "@a.bc",
+                 "q.@w.er.ty@u.io z", "mail a.b+c@d-e.f.gh, then x@y", "no at sign"):
+        assert new.sub("[e-mail hidden]", text) == old.sub("[e-mail hidden]", text), text
+
+
+def test_redaction_and_link_scan_are_linear_on_hostile_bodies():
+    # CodeQL py/polynomial-redos: a long run of letters with no `@` made the
+    # e-mail regex quadratic (60 KB took ~6 s); repeated unclosed `<a ` made
+    # the anchor scan quadratic. Both are linear now; the bound is generous.
+    import time
+    d = demo.DISABLED
+    for body in ("a" * 300_000, "<a " * 100_000 + ">", "a@" * 150_000):
+        started = time.monotonic()
+        demo.finish(body, d)
+        assert time.monotonic() - started < 3.0
+
+
+def test_a_hidden_field_named_in_a_tiles_also_list_is_removed_by_name():
+    # alpha-engine-config-I12783: `also:` names further fields; a hidden one
+    # must not print even its name in the demo view.
+    from console.demo import Demo
+
+    demo = Demo(hide_fields=frozenset({"secret"}))
+    page = {"sections": [{"type": "tiles", "tiles": [
+        {"label": "x", "field": "mtd", "also": [
+            {"field": "secret", "label": "secret", "text": "1", "unit": None},
+            {"field": "vs_spy_pct", "label": "vs SPY", "text": "2", "unit": "%"}]}]}]}
+    tiles = demo.page_doc(page)["sections"][0]["tiles"]
+    assert [a["field"] for a in tiles[0]["also"]] == ["vs_spy_pct"]

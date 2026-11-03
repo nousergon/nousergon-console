@@ -689,3 +689,19 @@ def test_cache_window_vocabulary():
     assert git_host._cache_seconds("1h") == 3600
     assert git_host._cache_seconds("30s") == 30 == git_host._cache_seconds("30")
     assert git_host._cache_seconds("0") == 0 == git_host._cache_seconds("bogus")
+
+
+def test_token_command_stdout_never_becomes_the_reason(monkeypatch, _empty_rest_cache):
+    """Codex review 2026-11-03: a helper that prints its token and then exits
+    nonzero with empty stderr put the token in the reason."""
+    import subprocess
+
+    def printed_then_failed(argv, **k):
+        raise subprocess.CalledProcessError(1, argv, output="ghs_TOKENSHOULDNOTSHOW\n", stderr="")
+
+    monkeypatch.setattr(git_host.subprocess, "run", printed_then_failed)
+    reader = git_host.rest_ref_reader(["helper"], urlopen=lambda *a, **k: None)
+    with pytest.raises(git_host.RefReadError) as err:
+        reader("o", "r", [1], "15m")
+    assert "TOKENSHOULDNOTSHOW" not in str(err.value)
+    assert "token_command failed: exit 1" in str(err.value)

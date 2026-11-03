@@ -21,6 +21,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from .. import calendar_cadence
 from ..freshness import NO_CADENCE, STALE
@@ -47,6 +48,9 @@ from ..model.kinds import (
     State,
 )
 from ..server.router import path_for_entity, path_for_list
+
+if TYPE_CHECKING:
+    from ..index.build import BuildInfo
 
 #: Component states that mean "look at me" on the exception-first landing view
 #: (§4.3). The three DECLARED states are deliberately absent: DISABLED,
@@ -428,7 +432,34 @@ def _num(v: float) -> str:
     return f"{v:.4g}"
 
 
-def _timeseries_html(f: Field, whole: Field | None) -> str | None:
+def _chart_data(key: str, labels: list[str], series: list[dict], unit: str) -> str:
+    """The `data-chart` attribute an inline chart SVG carries for `/charts.js`
+    (alpha-engine-config-I12783, plan §3): the same points the SVG draws, at
+    full precision, so the interactive layer reads exact values from the page
+    itself rather than re-parsing the 4-significant-figure `<title>`s.
+
+    Each series is ``{"label", "kind": "bar" | "line", "values"}`` with one
+    value per label; ``None`` is a gap (not measured), never zero, exactly as
+    the SVG leaves it out. A ``"sparse": true`` series holds only its own
+    points, so its ``None`` means "another series' point", not a gap. A
+    non-finite number is a gap too, because JSON cannot carry it. The page reads completely without this: it is consumed
+    only by script, and the SVG and its summary text stay the fallback.
+    """
+    import math
+
+    from . import json as render_json
+
+    def finite(v):
+        return v if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+    payload = {"key": key, "unit": unit, "labels": labels,
+               "series": [{**s, "values": [finite(v) for v in s["values"]]}
+                          for s in series]}
+    return f' data-chart="{esc(render_json.dumps(payload))}"'
+
+
+def _timeseries_html(f: Field, whole: Field | None,
+                     marks: tuple[tuple[int, str], ...] = ()) -> str | None:
     """A `timeseries` field as an inline SVG bar chart, or None for no shape.
 
     Generic over the field's shape (`series_points`), never over who emitted
@@ -442,6 +473,11 @@ def _timeseries_html(f: Field, whole: Field | None) -> str | None:
     carried by length alone (§5.7): the SVG has a `<title>` per bar and the
     span, latest, peak and reference value are printed beside it in text,
     with how many points sit above the reference.
+
+    ``marks`` are (point index, title) event marks — a declared chart
+    annotation (alpha-engine-config-I12784) — drawn as a thin vertical line
+    through that point's slot, uncoloured for the same reason. The caller
+    lists every mark in text under the chart; the line is only where it is.
     """
     points = series_points(f.value)
     if not points:
@@ -490,12 +526,28 @@ def _timeseries_html(f: Field, whole: Field | None) -> str | None:
         above = sum(1 for y in ys if y > ref)
         summary.append(f"{whole.name} {_num(ref)}{unit} "  # type: ignore[union-attr]
                        f"({above} of {len(ys)} above)")
+    ticks = []
+    for i, title in marks:
+        if 0 <= i < len(points):
+            mx = _CHART_PAD + i * slot + slot / 2
+            ticks.append(
+                f'<line class="ts-mark" x1="{mx:.2f}" x2="{mx:.2f}" y1="0" '
+                f'y2="{_CHART_H:g}" stroke="currentColor" stroke-width="0.6" '
+                f'stroke-dasharray="1 2">'
+                f"<title>{esc(title)}</title></line>")
+    if ticks:
+        summary.append(f"{len(ticks)} event mark{'s' if len(ticks) != 1 else ''}")
     text = " · ".join(summary)
+    data = _chart_data(f.name, [label for label, _ in points], [
+        {"label": f.name, "kind": "bar", "values": [y for _, y in points]},
+        *([{"label": whole.name, "kind": "line",  # type: ignore[union-attr]
+            "values": [ref] * len(points)}] if ref is not None else []),
+    ], f.unit or "")
     return (
-        f'<svg class="ts-chart" viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
+        f'<svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
         f'preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
         f"<title>{esc(f.name)}: {esc(text)}</title>"
-        + "".join(bars) + line
+        + "".join(bars) + line + "".join(ticks)
         + f'</svg><br><small class="ts-summary">{esc(text)}</small>'
     )
 
@@ -1438,14 +1490,18 @@ def _planner_axis_pos(day: str, start, span_days: int) -> float:
 # dark surface (lightness band, chroma, colour-blind and normal-vision
 # separation). Yellow, red and green are left out on purpose: those are the
 # schedule states'. A project past the fifth is drawn neutral grey rather than
-# in a generated hue; its name labels its row either way.
-PLANNER_PROJECT_COLOURS = ("#2a78d6", "#d55181", "#8a63d2", "#199e70", "#b8742a")
-PLANNER_OVERFLOW_COLOUR = "#7a7f87"
+# in a generated hue; its name labels its row either way. The values are the
+# `--plan-*` design tokens in console/static/styles.css (alpha-engine-config-
+# I12783: no colour literal outside the token blocks), set as inline `style`
+# rather than presentation attributes, which do not resolve `var()`.
+PLANNER_PROJECT_COLOURS = tuple(f"var(--plan-{i})" for i in range(1, 6))
+PLANNER_OVERFLOW_COLOUR = "var(--plan-other)"
 # The schedule state's own colour, drawn only on the target diamond and the
 # legend, always beside the state word (§5.7).
 PLANNER_STATE_COLOURS = {
-    "MET": "#4c5563", "ON_TRACK": "#087f23", "THREATENED": "#c99700",
-    "OFF_TRACK": "#b00020", "UNREPORTED": "#8a4b00",
+    "MET": "var(--plan-met)", "ON_TRACK": "var(--plan-on-track)",
+    "THREATENED": "var(--plan-threatened)", "OFF_TRACK": "var(--plan-off-track)",
+    "UNREPORTED": "var(--plan-unreported)",
 }
 
 
@@ -1472,8 +1528,8 @@ def _planner_timeline(projects: list[dict]) -> str:
     headed by its name; each milestone a row with its title on the left, a bar
     from start to target in the project's colour, a diamond at the target in
     its schedule state's colour, and the state word and date beside it.
-    Self-contained (presentation attributes, not the stylesheet), so it draws
-    the same wherever the page is opened."""
+    Geometry is presentation attributes; colours are the `--plan-*` tokens,
+    which every HTML response carries through `/styles.css`."""
     from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
     from ..index import planner
 
@@ -1525,8 +1581,8 @@ def _planner_timeline(projects: list[dict]) -> str:
         band = head_row + row_h * len(p["milestones"])
         out.append(
             f'<rect x="0" y="{y}" width="{width}" height="{band}" '
-            f'fill="{colour}" fill-opacity=".09"/>'
-            f'<rect x="0" y="{y}" width="6" height="{band}" fill="{colour}"/>'
+            f'style="fill:{colour}" fill-opacity=".09"/>'
+            f'<rect x="0" y="{y}" width="6" height="{band}" style="fill:{colour}"/>'
             f'<a href="{esc(p["url"])}"><text x="16" y="{y + 18}" font-weight="700" '
             f'font-size="14">{esc(p["title"])}</text></a>')
         for i, m in enumerate(p["milestones"]):
@@ -1544,9 +1600,9 @@ def _planner_timeline(projects: list[dict]) -> str:
                 f'<a href="{href}"><text x="28" y="{mid + 4.5:.1f}">'
                 f'{esc(clip(m["title"]))}</text></a>'
                 f'<rect x="{x0:.1f}" y="{mid - 7:.1f}" width="{max(x1 - x0, 4):.1f}" '
-                f'height="14" rx="4" fill="{colour}"/>'
+                f'height="14" rx="4" style="fill:{colour}"/>'
                 f'<path d="M{x1:.1f} {mid - 9:.1f} L{x1 + 9:.1f} {mid:.1f} '
-                f'L{x1:.1f} {mid + 9:.1f} L{x1 - 9:.1f} {mid:.1f} Z" fill="{sc}" '
+                f'L{x1:.1f} {mid + 9:.1f} L{x1 - 9:.1f} {mid:.1f} Z" style="fill:{sc}" '
                 f'stroke="currentColor" stroke-width="1.5"{dash}/>'
                 f'<text x="{x1 + 14:.1f}" y="{mid + 4.5:.1f}">'
                 f'<tspan font-weight="700">{esc(state)}</tspan> · '
@@ -1556,9 +1612,9 @@ def _planner_timeline(projects: list[dict]) -> str:
     if start <= today <= end:
         tx = x(today)
         out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="40" y2="{height - 12}" '
-                   f'stroke="#2f80e0" stroke-width="2"/>'
+                   f'style="stroke:var(--plan-today)" stroke-width="2"/>'
                    f'<text x="{tx:.1f}" y="{height - 1}" text-anchor="middle" '
-                   f'font-size="11" font-weight="700" fill="#2f80e0">today</text>')
+                   f'font-size="11" font-weight="700" style="fill:var(--plan-today)">today</text>')
     svg = (f'<svg class="plan-svg" viewBox="0 0 {width} {height}" width="100%" '
            f'role="img" aria-label="delivery calendar: each project\'s milestones '
            f'from start to target date" font-family="system-ui, sans-serif" '
@@ -1889,7 +1945,14 @@ def exception_trend(points, now_total: int | None = None) -> str:
     change = last[1] - first[1]
     text = (f"not healthy, {first[0]} – {last[0]}: {first[1]} → {last[1]} "
             f"({'+' if change > 0 else ''}{change}) · lowest {min(t for _, t, _ in bars)}")
-    return (f'<p class="exception-trend"><svg class="ts-chart" viewBox="0 0 {_CHART_W:g} '
+    data = _chart_data("not-healthy", [label for label, _, _ in bars], [
+        {"label": "published daily", "kind": "bar", "sparse": True,
+         "values": [None if live else t for _, t, live in bars]},
+        *([{"label": "now (live)", "kind": "bar", "sparse": True,
+            "values": [t if live else None for _, t, live in bars]}]
+          if now_total is not None else []),
+    ], "not healthy")
+    return (f'<p class="exception-trend"><svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} '
             f'{_CHART_H:g}" preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
             f"<title>{esc(text)}</title>" + "".join(rects)
             + f'</svg><br><small class="ts-summary">{esc(text)}</small></p>')
@@ -2084,8 +2147,14 @@ def _page_tile(t: dict, empty: str = "") -> str:
         defect = (f'<div class="absent">{esc(t["defect"])}</div>' if t.get("defect") else "")
         whole = (f' <span class="tile-unit">of {esc(t["of"]["text"])}</span>'
                  if t.get("of") else "")
+        also = ""
+        if t.get("also"):
+            also = ('<div class="tile-meta tile-also">' + " · ".join(
+                f'{esc(a["label"])} {esc(a["text"])}'
+                + (f' <span class="tile-unit">{esc(a["unit"])}</span>' if a.get("unit") else "")
+                for a in t["also"]) + "</div>")
         body = (f'<div class="tile-value">{esc(t["text"])}{unit}{whole}</div>'
-                f'<div class="tile-meta">{baseline}</div>{defect}')
+                f'{also}<div class="tile-meta">{baseline}</div>{defect}')
     return (f'<div class="tile state-{esc(t["state"])}">{head}{body}'
             f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')
 
@@ -2121,12 +2190,36 @@ def _page_chart(index: Index, sec: dict) -> str:
     if f is None or not sec["points"]:
         return '<p class="absent">no point inside the selected range</p>'
     shown = dataclasses.replace(f, value=[list(p) for p in sec["points"]])
-    chart = _timeseries_html(shown, by_name.get(f.of or ""))
+    marks = sec.get("annotations") or []
+    chart = _timeseries_html(shown, by_name.get(f.of or ""), tuple(
+        (m["slot"], f'{m["label"]} {m["at"]}: {m["text"]}') for m in marks))
     note = (f'<small> · {sec["outside_range"]} earlier points outside the range</small>'
             if sec.get("outside_range") else "")
-    return (f'<figure class="page-chart">{chart}{note}<figcaption>'
+    return (f'<figure class="page-chart">{chart}{note}{_chart_marks_html(sec)}<figcaption>'
             f'<a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · {as_of_html(sec.get("as_of"))}'
             f'</figcaption></figure>')
+
+
+def _chart_marks_html(sec: dict) -> str:
+    """A chart's event marks as text: every mark the SVG draws, in date order,
+    each linked to its row, plus how many declared events fell outside the
+    chart's dates or carried no date (never dropped silently)."""
+    if "annotations" not in sec:
+        return ""
+    items = "".join(
+        f'<li><time datetime="{esc(m["day"])}">{esc(m["day"])}</time> '
+        f'{esc(m["label"])}: <a href="{esc(m["url"])}">{esc(m["text"])}</a></li>'
+        for m in sec["annotations"])
+    extra = []
+    if sec.get("annotations_outside"):
+        extra.append(f'{sec["annotations_outside"]} outside the chart\'s dates')
+    if sec.get("annotations_undated"):
+        extra.append(f'{sec["annotations_undated"]} without a date')
+    tail = f'<small>Other events: {esc(", ".join(extra))}</small>' if extra else ""
+    body = f'<ul class="chart-marks">{items}</ul>' if items else (
+        "<small>No event inside the chart's dates.</small>")
+    return f'<div class="chart-marks"><strong>Events</strong> {body}{tail}</div>'
+
 
 
 def _page_section(index: Index, sec: dict, links: Citations | None,
@@ -2277,6 +2370,24 @@ def with_site_nav(page: str) -> str:
 #: which renders every view at an unreadable scale.
 HEAD_INJECT = ('<meta name="viewport" content="width=device-width, initial-scale=1">'
                '<link rel="stylesheet" href="/styles.css">')
+
+
+def head_inject(info: BuildInfo | None = None) -> str:
+    """`HEAD_INJECT` plus the live-freshness enhancement (plan §3).
+
+    Two metas carry what `/console.js` needs and nothing it could not read
+    from the JSON representation too (§3.8): the index's build instant
+    (`build_info.built_at`) and its rebuild cadence in seconds. The script is
+    `defer`red and same-origin; every page reads completely without it. No
+    cadence declared means no auto-refresh: the ages still tick, and the
+    status line names the data time only.
+    """
+    built = esc(info.built_at) if info and info.built_at else ""
+    out = HEAD_INJECT + f'<meta name="console-built" content="{built}">'
+    if info and info.refresh_seconds:
+        out += f'<meta name="console-refresh" content="{info.refresh_seconds:g}">'
+    return (out + '<script src="/console.js" defer></script>'
+            '<script src="/charts.js" defer></script>')
 
 
 def with_scrolling_tables(page: str) -> str:

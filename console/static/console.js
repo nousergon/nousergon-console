@@ -142,6 +142,8 @@
           for (var j = 0; j < now.length; j++) now[j].open = open[j];
         }
         window.scrollTo(x, y);
+        // /charts.js re-draws its interactive layer over the new SVGs.
+        document.dispatchEvent(new CustomEvent("console:refreshed"));
         builtAt = stamp;
         failure = null;
       })

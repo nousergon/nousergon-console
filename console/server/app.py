@@ -32,6 +32,14 @@ from .router import UnknownRoute, resolve
 _STATIC = {
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/console.js": ("console.js", "text/javascript; charset=utf-8"),
+    "/charts.js": ("charts.js", "text/javascript; charset=utf-8"),
+    # uPlot 1.6.32 (MIT), vendored verbatim from the npm tarball and pinned by
+    # digest in tests/test_interactive_charts.py: same-origin, no CDN, no build
+    # step (alpha-engine-config-I12783, plan §3). Its licence ships beside it.
+    "/vendor/uplot/uPlot.iife.min.js": ("vendor/uplot/uPlot.iife.min.js",
+                                        "text/javascript; charset=utf-8"),
+    "/vendor/uplot/uPlot.min.css": ("vendor/uplot/uPlot.min.css", "text/css; charset=utf-8"),
+    "/vendor/uplot/LICENSE": ("vendor/uplot/LICENSE", "text/plain; charset=utf-8"),
 }
 
 

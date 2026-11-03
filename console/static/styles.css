@@ -8,6 +8,11 @@
   --bad: #b00020; --bad-bg: #fde7ea; --warn: #8a4b00; --warn-bg: #fdf0dc;
   --good: #087f23; --good-bg: #e3f4e6; --info: #0b5fa5; --info-bg: #e2eefa;
   --off: #4c5563; --off-bg: #eceef1;
+  --chart-1: #2a78d6; --chart-2: #8a63d2; --chart-3: #b8742a; --chart-ref: #59636e;
+  --plan-1: #2a78d6; --plan-2: #d55181; --plan-3: #8a63d2; --plan-4: #199e70; --plan-5: #b8742a;
+  --plan-other: #7a7f87; --plan-today: #2f80e0;
+  --plan-met: #4c5563; --plan-on-track: #087f23; --plan-threatened: #c99700;
+  --plan-off-track: #b00020; --plan-unreported: #8a4b00;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -17,6 +22,7 @@
     --bad: #ff7b8a; --bad-bg: #3d1a20; --warn: #f0b35a; --warn-bg: #3a2a12;
     --good: #5fd37a; --good-bg: #16301d; --info: #6cb6ff; --info-bg: #142a40;
     --off: #9aa5b1; --off-bg: #232a32;
+    --chart-1: #6cb6ff; --chart-2: #b69cf0; --chart-3: #e0a35c; --chart-ref: #9aa5b1;
   }
 }
 body { background: var(--bg); color: var(--text); font-size: 15px; }
@@ -191,3 +197,16 @@ svg.ts-chart rect.ts-live { fill-opacity: .9; }
 .live-status { float: right; font-weight: 400; font-size: .85rem; color: var(--muted); }
 .live-status.live-failed { color: var(--bad); font-weight: 600; }
 @media (max-width: 40rem) { .live-status { float: none; display: block; margin-top: .3rem; } }
+
+/* Interactive charts (`/charts.js` over vendored uPlot, plan §3): the server's
+   SVG is hidden only once the canvas has replaced it, and its summary text
+   stays. Every colour is a token, so the layer follows the scheme. */
+svg.ts-chart.ts-enhanced { display: none; }
+.chart-live { width: 100%; max-width: 100%; }
+.chart-live .uplot { font-family: inherit; max-width: 100%; }
+.chart-live .u-legend { font-size: .85rem; text-align: left; overflow-wrap: anywhere; }
+.chart-live .u-legend .u-series { border-radius: .3rem; }
+.chart-live .u-legend .u-series:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.chart-live .u-hz .u-cursor-x { border-right: 1px dashed var(--muted); }
+.chart-live .u-select { background: var(--info-bg); opacity: .6; }
+.chart-tip { position: absolute; z-index: 2; pointer-events: none; white-space: pre; font-size: .8rem; font-variant-numeric: tabular-nums; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: .35rem; padding: .25rem .5rem; }

@@ -432,6 +432,32 @@ def _num(v: float) -> str:
     return f"{v:.4g}"
 
 
+def _chart_data(key: str, labels: list[str], series: list[dict], unit: str) -> str:
+    """The `data-chart` attribute an inline chart SVG carries for `/charts.js`
+    (alpha-engine-config-I12783, plan §3): the same points the SVG draws, at
+    full precision, so the interactive layer reads exact values from the page
+    itself rather than re-parsing the 4-significant-figure `<title>`s.
+
+    Each series is ``{"label", "kind": "bar" | "line", "values"}`` with one
+    value per label; ``None`` is a gap (not measured), never zero, exactly as
+    the SVG leaves it out. A ``"sparse": true`` series holds only its own
+    points, so its ``None`` means "another series' point", not a gap. A
+    non-finite number is a gap too, because JSON cannot carry it. The page reads completely without this: it is consumed
+    only by script, and the SVG and its summary text stay the fallback.
+    """
+    import math
+
+    from . import json as render_json
+
+    def finite(v):
+        return v if isinstance(v, (int, float)) and math.isfinite(v) else None
+
+    payload = {"key": key, "unit": unit, "labels": labels,
+               "series": [{**s, "values": [finite(v) for v in s["values"]]}
+                          for s in series]}
+    return f' data-chart="{esc(render_json.dumps(payload))}"'
+
+
 def _timeseries_html(f: Field, whole: Field | None,
                      marks: tuple[tuple[int, str], ...] = ()) -> str | None:
     """A `timeseries` field as an inline SVG bar chart, or None for no shape.
@@ -512,8 +538,13 @@ def _timeseries_html(f: Field, whole: Field | None,
     if ticks:
         summary.append(f"{len(ticks)} event mark{'s' if len(ticks) != 1 else ''}")
     text = " · ".join(summary)
+    data = _chart_data(f.name, [label for label, _ in points], [
+        {"label": f.name, "kind": "bar", "values": [y for _, y in points]},
+        *([{"label": whole.name, "kind": "line",  # type: ignore[union-attr]
+            "values": [ref] * len(points)}] if ref is not None else []),
+    ], f.unit or "")
     return (
-        f'<svg class="ts-chart" viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
+        f'<svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
         f'preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
         f"<title>{esc(f.name)}: {esc(text)}</title>"
         + "".join(bars) + line + "".join(ticks)
@@ -1459,14 +1490,18 @@ def _planner_axis_pos(day: str, start, span_days: int) -> float:
 # dark surface (lightness band, chroma, colour-blind and normal-vision
 # separation). Yellow, red and green are left out on purpose: those are the
 # schedule states'. A project past the fifth is drawn neutral grey rather than
-# in a generated hue; its name labels its row either way.
-PLANNER_PROJECT_COLOURS = ("#2a78d6", "#d55181", "#8a63d2", "#199e70", "#b8742a")
-PLANNER_OVERFLOW_COLOUR = "#7a7f87"
+# in a generated hue; its name labels its row either way. The values are the
+# `--plan-*` design tokens in console/static/styles.css (alpha-engine-config-
+# I12783: no colour literal outside the token blocks), set as inline `style`
+# rather than presentation attributes, which do not resolve `var()`.
+PLANNER_PROJECT_COLOURS = tuple(f"var(--plan-{i})" for i in range(1, 6))
+PLANNER_OVERFLOW_COLOUR = "var(--plan-other)"
 # The schedule state's own colour, drawn only on the target diamond and the
 # legend, always beside the state word (§5.7).
 PLANNER_STATE_COLOURS = {
-    "MET": "#4c5563", "ON_TRACK": "#087f23", "THREATENED": "#c99700",
-    "OFF_TRACK": "#b00020", "UNREPORTED": "#8a4b00",
+    "MET": "var(--plan-met)", "ON_TRACK": "var(--plan-on-track)",
+    "THREATENED": "var(--plan-threatened)", "OFF_TRACK": "var(--plan-off-track)",
+    "UNREPORTED": "var(--plan-unreported)",
 }
 
 
@@ -1493,8 +1528,8 @@ def _planner_timeline(projects: list[dict]) -> str:
     headed by its name; each milestone a row with its title on the left, a bar
     from start to target in the project's colour, a diamond at the target in
     its schedule state's colour, and the state word and date beside it.
-    Self-contained (presentation attributes, not the stylesheet), so it draws
-    the same wherever the page is opened."""
+    Geometry is presentation attributes; colours are the `--plan-*` tokens,
+    which every HTML response carries through `/styles.css`."""
     from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
     from ..index import planner
 
@@ -1546,8 +1581,8 @@ def _planner_timeline(projects: list[dict]) -> str:
         band = head_row + row_h * len(p["milestones"])
         out.append(
             f'<rect x="0" y="{y}" width="{width}" height="{band}" '
-            f'fill="{colour}" fill-opacity=".09"/>'
-            f'<rect x="0" y="{y}" width="6" height="{band}" fill="{colour}"/>'
+            f'style="fill:{colour}" fill-opacity=".09"/>'
+            f'<rect x="0" y="{y}" width="6" height="{band}" style="fill:{colour}"/>'
             f'<a href="{esc(p["url"])}"><text x="16" y="{y + 18}" font-weight="700" '
             f'font-size="14">{esc(p["title"])}</text></a>')
         for i, m in enumerate(p["milestones"]):
@@ -1565,9 +1600,9 @@ def _planner_timeline(projects: list[dict]) -> str:
                 f'<a href="{href}"><text x="28" y="{mid + 4.5:.1f}">'
                 f'{esc(clip(m["title"]))}</text></a>'
                 f'<rect x="{x0:.1f}" y="{mid - 7:.1f}" width="{max(x1 - x0, 4):.1f}" '
-                f'height="14" rx="4" fill="{colour}"/>'
+                f'height="14" rx="4" style="fill:{colour}"/>'
                 f'<path d="M{x1:.1f} {mid - 9:.1f} L{x1 + 9:.1f} {mid:.1f} '
-                f'L{x1:.1f} {mid + 9:.1f} L{x1 - 9:.1f} {mid:.1f} Z" fill="{sc}" '
+                f'L{x1:.1f} {mid + 9:.1f} L{x1 - 9:.1f} {mid:.1f} Z" style="fill:{sc}" '
                 f'stroke="currentColor" stroke-width="1.5"{dash}/>'
                 f'<text x="{x1 + 14:.1f}" y="{mid + 4.5:.1f}">'
                 f'<tspan font-weight="700">{esc(state)}</tspan> · '
@@ -1577,9 +1612,9 @@ def _planner_timeline(projects: list[dict]) -> str:
     if start <= today <= end:
         tx = x(today)
         out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="40" y2="{height - 12}" '
-                   f'stroke="#2f80e0" stroke-width="2"/>'
+                   f'style="stroke:var(--plan-today)" stroke-width="2"/>'
                    f'<text x="{tx:.1f}" y="{height - 1}" text-anchor="middle" '
-                   f'font-size="11" font-weight="700" fill="#2f80e0">today</text>')
+                   f'font-size="11" font-weight="700" style="fill:var(--plan-today)">today</text>')
     svg = (f'<svg class="plan-svg" viewBox="0 0 {width} {height}" width="100%" '
            f'role="img" aria-label="delivery calendar: each project\'s milestones '
            f'from start to target date" font-family="system-ui, sans-serif" '
@@ -1910,7 +1945,14 @@ def exception_trend(points, now_total: int | None = None) -> str:
     change = last[1] - first[1]
     text = (f"not healthy, {first[0]} – {last[0]}: {first[1]} → {last[1]} "
             f"({'+' if change > 0 else ''}{change}) · lowest {min(t for _, t, _ in bars)}")
-    return (f'<p class="exception-trend"><svg class="ts-chart" viewBox="0 0 {_CHART_W:g} '
+    data = _chart_data("not-healthy", [label for label, _, _ in bars], [
+        {"label": "published daily", "kind": "bar", "sparse": True,
+         "values": [None if live else t for _, t, live in bars]},
+        *([{"label": "now (live)", "kind": "bar", "sparse": True,
+            "values": [t if live else None for _, t, live in bars]}]
+          if now_total is not None else []),
+    ], "not healthy")
+    return (f'<p class="exception-trend"><svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} '
             f'{_CHART_H:g}" preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
             f"<title>{esc(text)}</title>" + "".join(rects)
             + f'</svg><br><small class="ts-summary">{esc(text)}</small></p>')
@@ -2344,7 +2386,8 @@ def head_inject(info: BuildInfo | None = None) -> str:
     out = HEAD_INJECT + f'<meta name="console-built" content="{built}">'
     if info and info.refresh_seconds:
         out += f'<meta name="console-refresh" content="{info.refresh_seconds:g}">'
-    return out + '<script src="/console.js" defer></script>'
+    return (out + '<script src="/console.js" defer></script>'
+            '<script src="/charts.js" defer></script>')
 
 
 def with_scrolling_tables(page: str) -> str:

@@ -390,3 +390,26 @@ def test_a_numeric_account_id_is_redacted_in_json():
     out = demo._scrub({"account": 210987654321, "count": 4, "ok": True}, d)
     assert out["account"] == "[account id hidden]"
     assert out["count"] == 4 and out["ok"] is True
+
+
+def test_email_redaction_matches_the_regex_it_replaced():
+    # The linear matcher must hide exactly what the old pattern hid,
+    # including a second address that starts right after the first ends.
+    import re
+    old = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+    new = dict(demo.BUILTIN_REDACTIONS)["e-mail"]
+    for text in ("someone@example.org", "a@b.com.x%y@c.org", "x@@y.co", "@a.bc",
+                 "q.@w.er.ty@u.io z", "mail a.b+c@d-e.f.gh, then x@y", "no at sign"):
+        assert new.sub("[e-mail hidden]", text) == old.sub("[e-mail hidden]", text), text
+
+
+def test_redaction_and_link_scan_are_linear_on_hostile_bodies():
+    # CodeQL py/polynomial-redos: a long run of letters with no `@` made the
+    # e-mail regex quadratic (60 KB took ~6 s); repeated unclosed `<a ` made
+    # the anchor scan quadratic. Both are linear now; the bound is generous.
+    import time
+    d = demo.DISABLED
+    for body in ("a" * 300_000, "<a " * 100_000 + ">", "a@" * 150_000):
+        started = time.monotonic()
+        demo.finish(body, d)
+        assert time.monotonic() - started < 3.0

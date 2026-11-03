@@ -65,15 +65,48 @@ _REDACT_KEYS = {"prefixes", "patterns"}
 #: config can add to them and never remove one. Each pattern excludes the HTML
 #: metacharacters `<>"'` (and a backslash) so a redaction can never split a
 #: tag or an attribute.
-BUILTIN_REDACTIONS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (label, re.compile(pattern)) for label, pattern in (
+class _EmailPattern:
+    """The e-mail class, matched exactly as the regex
+    ``[A-Za-z0-9._%+-]+@<domain>`` would be under ``re.sub``, in linear time.
+
+    That regex is unanchored and starts with a ``+`` run, so on a long run of
+    letters with no ``@`` every start position rescans the rest of the run:
+    quadratic (60 KB of letters took 6 s; CodeQL py/polynomial-redos). A match
+    holds exactly one ``@`` and its local part is the class run just left of
+    it, so the leftmost match is found from the ``@`` instead: walk left to
+    the run start (never into the previous match, as ``re.sub`` resumes at its
+    end), then match the domain anchored after the ``@``."""
+
+    _LOCAL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+-")
+    _DOMAIN = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+    def sub(self, repl: str, text: str) -> str:
+        out: list[str] = []
+        last = 0
+        at = text.find("@")
+        while at >= 0:
+            start = at
+            while start > last and text[start - 1] in self._LOCAL:
+                start -= 1
+            domain = self._DOMAIN.match(text, at + 1) if start < at else None
+            if domain:
+                out.append(text[last:start])
+                out.append(repl)
+                last = domain.end()
+            at = text.find("@", max(at + 1, last))
+        out.append(text[last:])
+        return "".join(out)
+
+
+BUILTIN_REDACTIONS: tuple[tuple[str, re.Pattern[str] | _EmailPattern], ...] = tuple(
+    (label, re.compile(pattern) if isinstance(pattern, str) else pattern) for label, pattern in (
         ("private key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----[^<\"']*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
         ("ARN", r"\barn:aws[a-z-]*:[^\s<>\"'\\]+"),
         ("access key", r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{16}\b"),
         ("token", r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
                   r"|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,})"),
         ("credential", r"(?i)\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*[^\s<>\"'\\]+"),
-        ("e-mail", r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"),
+        ("e-mail", _EmailPattern()),
         ("storage path", r"\bs3a?://[^\s<>\"'\\]+"),
         ("instance id", r"\bi-(?:[0-9a-f]{17}|[0-9a-f]{8})\b"),
         ("account id", r"(?<![\w.:/-])(?:\d{12}|\d{4}-\d{4}-\d{4})(?![\w.-])"),
@@ -386,10 +419,11 @@ def _anchors(body: str):
         if tag_end < 0:
             return
         href_at = body.find('href="', start, tag_end)
-        if href_at < 0:
-            continue
-        href_end = body.find('"', href_at + 6, tag_end)
+        href_end = body.find('"', href_at + 6, tag_end) if href_at >= 0 else -1
         if href_end < 0:
+            # Every later `<a ` before tag_end shares this tag_end and finds
+            # no complete href either; skipping them keeps the scan linear.
+            cursor = tag_end
             continue
         close = body.find("</a>", tag_end)
         if close < 0:

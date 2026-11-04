@@ -221,12 +221,10 @@ svg.ts-chart.ts-enhanced { display: none; }
 /* The untriaged share of an exceptions-trend bar: no tracked issue owns it yet. */
 svg.ts-chart rect.ts-untriaged { fill: var(--warn); fill-opacity: .9; }
 
-/* Your actions (`/actions`): one row per action, the tick button first. */
-ul.actions { list-style: none; padding: 0; margin: 0; }
-li.action { display: flex; gap: .75rem; align-items: flex-start; padding: .6rem 0; border-bottom: 1px solid var(--border); }
-li.action p { margin: .25rem 0 0; }
-li.action-done .action-body > a { color: var(--muted); }
-.action-tick { margin: 0; flex: none; }
-.action-tick button { font-size: 1.4rem; line-height: 1; background: none; border: 0; padding: 0 .1rem; cursor: pointer; color: inherit; }
+/* Your actions (`/actions`): a table, the tick button in its own narrow first column. */
+table.actions td.action-cell { width: 2rem; padding-right: 0; }
+table.actions tr.action-done td a { color: var(--muted); }
+.action-tick { margin: 0; }
+.action-tick button { font-size: 1.4rem; line-height: 1; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 .notice { background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; }
 .muted { color: var(--muted); font-size: .85rem; }

@@ -86,6 +86,11 @@ class Action:
     summary: str
     created_at: str | None
     updated_at: str | None
+    #: When it is due (``YYYY-MM-DD``) and where that date came from, or None.
+    due: str | None = None
+    due_source: str | None = None
+    #: Any bound on WHEN it may happen ("after the 16:30 ET close"), or None.
+    when: str | None = None
 
 
 @dataclass
@@ -214,6 +219,43 @@ def summary(body: str | None) -> str:
     return ""
 
 
+#: A body line declaring a due date or a timing bound. Read from the issue the
+#: action lives in, so whoever files the ask writes them once, next to it:
+#:   ``Due: 2026-11-06``                  — the date it should be done by
+#:   ``When: after the 16:30 ET close``   — any bound on when it may happen
+#: The tracker's existing date lines count too: a `default-ok` issue's
+#: ``Default: <option> after YYYY-MM-DD`` (the date it auto-applies) and a
+#: ``Re-exam: YYYY-MM-DD``; failing all of those, the issue's milestone date.
+_DUE_LINE = re.compile(r"^\s*(?:[*_-]\s*)*(?:due|deadline|merge by)\s*[*_]*\s*:\s*[*_]*\s*"
+                       r"(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE | re.MULTILINE)
+_DEFAULT_LINE = re.compile(r"^\s*(?:[*_-]\s*)*default\s*[*_]*\s*:.*?\bafter\s+"
+                           r"(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE | re.MULTILINE)
+_REEXAM_LINE = re.compile(r"^\s*(?:[*_-]\s*)*re-?exam\s*[*_]*\s*:\s*[*_]*\s*"
+                          r"(?P<date>\d{4}-\d{2}-\d{2})", re.IGNORECASE | re.MULTILINE)
+_WHEN_LINE = re.compile(r"^\s*(?:[*_-]\s*)*(?:when|window|merge window|timing)\s*[*_]*\s*:"
+                        r"\s*[*_]*\s*(?P<text>\S.*?)\s*$", re.IGNORECASE | re.MULTILINE)
+WHEN_CHARS = 120
+
+
+def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | None, str | None]:
+    """``(due, due_source, when)`` declared in an issue body, or Nones."""
+    text = str(body or "")
+    due = source = None
+    for pattern, name in ((_DUE_LINE, "due"), (_DEFAULT_LINE, "default applies"),
+                          (_REEXAM_LINE, "re-exam")):
+        m = pattern.search(text)
+        if m:
+            due, source = m.group("date"), name
+            break
+    if due is None and isinstance(milestone, Mapping) and milestone.get("due_on"):
+        due, source = str(milestone["due_on"])[:10], "milestone"
+    when = None
+    m = _WHEN_LINE.search(text)
+    if m:
+        when = " ".join(_MD_NOISE.sub("", m.group("text")).split())[:WHEN_CHARS] or None
+    return due, source, when
+
+
 def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
@@ -224,6 +266,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         labels=labels, done=decl.done_label in labels,
         summary=summary(issue.get("body")),
         created_at=issue.get("created_at"), updated_at=issue.get("updated_at"),
+        **dict(zip(("due", "due_source", "when"),
+                   timing(issue.get("body"), issue.get("milestone")))),
     )
 
 
@@ -252,7 +296,10 @@ def read(decl: Declaration, now: str, request: Request | None = None,
                 AdapterResult(name=SOURCE_NAME, status=AdapterStatus.FAILED,
                               claim_class=ClaimClass.OBSERVATION, fetched_at=now,
                               unavailable=(reason,)))
-    actions = tuple(sorted(seen.values(), key=lambda a: (a.done, a.created_at or "", a.number)))
+    # Not done first; within that, the soonest due date first, undated after,
+    # oldest first among equals.
+    actions = tuple(sorted(seen.values(), key=lambda a: (
+        a.done, a.due is None, a.due or "", a.created_at or "", a.number)))
     return (Listing(declaration=decl, actions=actions, read_at=now),
             AdapterResult(name=SOURCE_NAME, status=AdapterStatus.OK,
                           claim_class=ClaimClass.OBSERVATION, fetched_at=now))
@@ -351,6 +398,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "done": sum(1 for a in found.actions if a.done),
         "actions": [{"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
                      "done": a.done, "summary": a.summary, "labels": list(a.labels),
+                     "due": a.due, "due_source": a.due_source, "when": a.when,
                      "created_at": a.created_at, "updated_at": a.updated_at}
                     for a in found.actions],
     }

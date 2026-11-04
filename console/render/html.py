@@ -18,9 +18,11 @@ Rendering rules honoured here:
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .. import calendar_cadence
@@ -2722,8 +2724,20 @@ def with_site_nav(page: str) -> str:
 #: The viewport line is what lets a phone lay the page out at its own width:
 #: without it a mobile browser assumes a ~980px desktop page and shrinks it,
 #: which renders every view at an unreadable scale.
+def asset_url(name: str) -> str:
+    """`/<name>?v=<digest>`: a static file's URL carries a digest of its bytes.
+
+    Without it a reader's browser, and Cloudflare's edge in front of the
+    console, kept serving a stylesheet from before a fix: measured 2026-11-04,
+    Brian's /page/incidents still rendered at the old 76rem (1216px) body cap
+    an hour after #248 removed it. A new digest is a new URL, so a changed
+    file is fetched on the first page load after the deploy that ships it."""
+    data = (Path(__file__).resolve().parent.parent / "static" / name).read_bytes()
+    return f"/{name}?v={hashlib.sha256(data).hexdigest()[:12]}"
+
+
 HEAD_INJECT = ('<meta name="viewport" content="width=device-width, initial-scale=1">'
-               '<link rel="stylesheet" href="/styles.css">')
+               f'<link rel="stylesheet" href="{asset_url("styles.css")}">')
 
 
 def head_inject(info: BuildInfo | None = None) -> str:
@@ -2740,8 +2754,8 @@ def head_inject(info: BuildInfo | None = None) -> str:
     out = HEAD_INJECT + f'<meta name="console-built" content="{built}">'
     if info and info.refresh_seconds:
         out += f'<meta name="console-refresh" content="{info.refresh_seconds:g}">'
-    return (out + '<script src="/console.js" defer></script>'
-            '<script src="/charts.js" defer></script>')
+    return (out + f'<script src="{asset_url("console.js")}" defer></script>'
+            f'<script src="{asset_url("charts.js")}" defer></script>')
 
 
 def with_scrolling_tables(page: str) -> str:

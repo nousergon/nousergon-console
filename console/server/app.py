@@ -73,8 +73,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path)
         if parts.path in _STATIC:
             name, content_type = _STATIC[parts.path]
+            # `no-cache` = revalidate before reuse: a stylesheet held past a
+            # deploy is how a fixed layout kept rendering broken (2026-11-04).
             self._send(200, (Path(__file__).parent.parent / "static" / name).read_text(),
-                       content_type)
+                       content_type, cache_control="no-cache")
             return
         index = self.server.index
         if parts.path == demo_mode.PREFIX or parts.path.startswith(demo_mode.PREFIX + "/"):
@@ -245,7 +247,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except AttributeError:
             return None
 
-    def _send(self, status: int, body: str, content_type: str) -> None:
+    def _send(self, status: int, body: str, content_type: str,
+              cache_control: str | None = None) -> None:
         if content_type.startswith("text/html"):
             body = body.replace(
                 "<head>", "<head>" + render_html.head_inject(self._build_info()), 1
@@ -255,6 +258,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
+            if cache_control:
+                self.send_header("Cache-Control", cache_control)
             self.end_headers()
             self.wfile.write(payload)
         except (BrokenPipeError, ConnectionResetError) as exc:

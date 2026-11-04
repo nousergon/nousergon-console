@@ -343,6 +343,10 @@ def test_declared_patterns_add_to_the_builtin_classes():
     ({"redact": {"patterns": ["("]}}, "is not a regex"),
     ({"hide": {"facets": {"pane": "cost"}}}, "must be a list"),
     ({"title": ""}, "`title` must be non-empty"),
+    ({"links": {"external": []}}, "must name at least one pattern"),
+    ({"links": {"external": ["("]}}, "is not a regex"),
+    ({"links": {"internal": ["x"]}}, "unknown key(s) internal"),
+    ({"links": "x"}, "`links` must be a mapping"),
 ])
 def test_a_bad_declaration_fails_the_build_by_name(raw, message):
     with pytest.raises(demo.DemoConfigError, match=re.escape(message)):
@@ -427,3 +431,36 @@ def test_a_hidden_field_named_in_a_tiles_also_list_is_removed_by_name():
             {"field": "vs_spy_pct", "label": "vs SPY", "text": "2", "unit": "%"}]}]}]}
     tiles = demo.page_doc(page)["sections"][0]["tiles"]
     assert [a["field"] for a in tiles[0]["also"]] == ["vs_spy_pct"]
+
+
+# ------------------------------------------ links.external (I13023 polish) --
+
+def test_undeclared_external_links_stay_links():
+    d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
+    assert d.external_links is None
+    out = demo.finish('<a href="https://github.com/acme/private/issues/1">x</a>', d)
+    assert 'href="https://github.com/acme/private/issues/1"' in out
+
+
+def test_declared_external_links_keep_only_matches_in_html():
+    d = demo.parse({"pages": ["demo-harness"],
+                    "links": {"external": [r"https://github\.com/acme/public([/#?]|$)"]}},
+                   {"demo-harness"})
+    out = demo.finish('<a href="https://github.com/acme/public#readme">pub</a> '
+                      '<a href="https://github.com/acme/public-ish/x">near</a> '
+                      '<a href="https://github.com/acme/private/issues/1">priv</a> '
+                      '<a href="#top">top</a> <a href="/page/demo-harness">h</a>', d)
+    assert 'href="https://github.com/acme/public#readme"' in out
+    assert 'href="https://github.com/acme/public-ish' not in out
+    assert 'href="https://github.com/acme/private' not in out
+    assert out.count('class="demo-unlinked"') == 2
+    assert 'href="#top"' in out and f'href="{demo.PREFIX}/page/demo-harness"' in out
+
+
+def test_declared_external_links_null_the_json_url():
+    d = demo.parse({"pages": ["demo-harness"],
+                    "links": {"external": [r"https://example\.org/"]}}, {"demo-harness"})
+    out = demo._scrub({"links": [{"title": "a", "url": "https://example.org/x"},
+                                 {"title": "b", "url": "https://elsewhere.example/x"},
+                                 {"title": "c", "url": "#anchor"}]}, d)
+    assert [link["url"] for link in out["links"]] == ["https://example.org/x", None, "#anchor"]

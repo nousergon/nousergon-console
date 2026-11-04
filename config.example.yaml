@@ -1664,10 +1664,14 @@ pages:
 # for account ids, ARNs, key and token shapes, private keys, e-mail and IP
 # addresses, instance ids and storage URIs — always, whatever this block says
 # — plus `redact.prefixes` (e.g. parameter-store paths) and `redact.patterns`.
+# `links.external` (optional) lists regexes, matched from the start of the URL,
+# that an EXTERNAL link must match to stay a link; any other external link
+# renders as plain text (JSON `url` null), so a visitor is never handed a link
+# to a private repository or a cloud console. Undeclared, external links stay.
 #
 # A bad declaration (an unknown key, `enabled` not a boolean, enabled with no
 # pages, a page pattern matching no declared page, a pattern that is not a
-# regex) FAILS THE BUILD naming the key.
+# regex, an empty `links.external`) FAILS THE BUILD naming the key.
 demo:
   enabled: false
   title: Guided tour
@@ -1678,6 +1682,8 @@ demo:
     fields: [budget]
   redact:
     prefixes: [/example-org/]
+  links:
+    external: ['https://example\.org/', 'https://github\.com/example-org/public-repo([/#?]|$)']
 
 # ── Citation links (rendered markdown documents) ───────────────────────────
 # Reports cite work as plain text — `ex#12`, `example-repo-I12`,

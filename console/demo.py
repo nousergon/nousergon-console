@@ -21,7 +21,9 @@ one is not a leak:
    Every other view — home, lists, entity pages, search, reports, planner,
    registries, the doctor — answers "not part of the demo". A link on a demo
    page that points at a route outside the set is rendered as plain text, not
-   as a link, and in JSON its `url` is null.
+   as a link, and in JSON its `url` is null. With ``links.external`` declared,
+   an external link matching none of its patterns is treated the same way, so
+   an audience is never handed a link it cannot open.
 2. *Rows and fields.* The pages are evaluated over a view of the index in which
    rows of a hidden kind or carrying a hidden facet value do not exist, and
    hidden field names are stripped from every remaining row. A selector cannot
@@ -57,9 +59,10 @@ _VIEW_ATTR = "_console_demo_view"
 
 #: The closed key set of a `demo:` block. An unknown key fails the build: a
 #: misspelt `hide` would otherwise hide nothing, silently.
-_KEYS = {"enabled", "title", "intro", "pages", "hide", "redact"}
+_KEYS = {"enabled", "title", "intro", "pages", "hide", "redact", "links"}
 _HIDE_KEYS = {"kinds", "facets", "fields"}
 _REDACT_KEYS = {"prefixes", "patterns"}
+_LINKS_KEYS = {"external"}
 
 #: Built-in redaction classes: (label, pattern). Always applied in demo mode;
 #: config can add to them and never remove one. Each pattern excludes the HTML
@@ -134,6 +137,18 @@ class Demo:
     hide_fields: frozenset[str] = frozenset()
     redact_prefixes: tuple[str, ...] = ()
     redact_patterns: tuple[re.Pattern[str], ...] = ()
+    #: `links.external`: regexes an external URL must match (from its start)
+    #: to stay a link. None (undeclared) keeps every external link, as before;
+    #: declared, an external link matching none renders as plain text and its
+    #: JSON `url` is null, the same way an internal route outside the tour is
+    #: treated. A deployment declares it so a visitor is never handed a link to
+    #: a private repository or a cloud console they cannot open.
+    external_links: tuple[re.Pattern[str], ...] | None = None
+
+    def external_allowed(self, url: str) -> bool:
+        if self.external_links is None:
+            return True
+        return any(p.match(url) for p in self.external_links)
 
     # ---------------------------------------------------------------- rules --
 
@@ -261,6 +276,24 @@ def parse(raw: Any, page_ids: set[str] | None = None) -> Demo:
             patterns.append(re.compile(p))
         except re.error as exc:
             raise DemoConfigError(f"demo: `redact.patterns` entry {p!r} is not a regex: {exc}") from exc
+    links = raw.get("links")
+    external_links = None
+    if links is not None:
+        if not isinstance(links, Mapping):
+            raise DemoConfigError("demo: `links` must be a mapping")
+        _closed(links, _LINKS_KEYS, "demo.links")
+        declared_external = _strings(links.get("external"), "links.external")
+        if not declared_external:
+            raise DemoConfigError("demo: `links.external` must name at least one pattern "
+                                  "(omit `links` to keep every external link)")
+        compiled = []
+        for p in declared_external:
+            try:
+                compiled.append(re.compile(p))
+            except re.error as exc:
+                raise DemoConfigError(
+                    f"demo: `links.external` entry {p!r} is not a regex: {exc}") from exc
+        external_links = tuple(compiled)
     intro = raw.get("intro")
     if intro is not None and (not isinstance(intro, str) or not intro.strip()):
         raise DemoConfigError("demo: `intro` must be non-empty text")
@@ -275,6 +308,7 @@ def parse(raw: Any, page_ids: set[str] | None = None) -> Demo:
         hide_fields=frozenset(_strings(hide.get("fields"), "hide.fields")),
         redact_prefixes=_strings(redact.get("prefixes"), "redact.prefixes"),
         redact_patterns=tuple(patterns),
+        external_links=external_links,
     )
 
 
@@ -372,6 +406,9 @@ def _scrub(value: Any, demo: Demo, key: str | None = None) -> Any:
     if isinstance(value, str):
         if key == "url" and value.startswith("/"):
             return PREFIX + value if internal_allowed(demo, value) else None
+        if key == "url" and _EXTERNAL_HREF.match(value) and not value.startswith("#") \
+                and not demo.external_allowed(value):
+            return None
         return demo.redact(value)
     if isinstance(value, int) and not isinstance(value, bool):
         # A JSON number can carry a hidden class too (a 12-digit account id).
@@ -402,8 +439,9 @@ def internal_allowed(demo: Demo, url: str) -> bool:
 
 
 def _link_kept(demo: Demo, href: str) -> bool:
-    if _EXTERNAL_HREF.match(_html.unescape(href).strip()):
-        return True
+    target = _html.unescape(href).strip()
+    if _EXTERNAL_HREF.match(target):
+        return target.startswith("#") or demo.external_allowed(target)
     return href.startswith("/") and not href.startswith("//") and internal_allowed(demo, href)
 
 

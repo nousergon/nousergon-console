@@ -234,6 +234,56 @@
   setInterval(schedulePlace, 2000);  // catches a body swapped by a refresh
   schedulePlace();
 
+  // One-line rows -----------------------------------------------------
+  // The stylesheet holds every table cell to one line once this runs; a
+  // cell cut short says so on hover with its full text, and a click on its
+  // row (not on a link or control inside it) opens the row in full.
+  document.documentElement.classList.add("js");
+
+  // Each cell's content goes in a `.cell` box the stylesheet can hold to
+  // one line; the server's HTML stays as it was, so without script nothing
+  // is cut.
+  function wrapCells() {
+    var tds = document.querySelectorAll(".table-scroll td");
+    for (var i = 0; i < tds.length; i++) {
+      var td = tds[i];
+      if (td.firstElementChild && td.firstElementChild.classList.contains("cell")
+          && td.childNodes.length === 1) continue;
+      var box = document.createElement("div");
+      box.className = "cell";
+      while (td.firstChild) box.appendChild(td.firstChild);
+      td.appendChild(box);
+    }
+  }
+
+  function markClipped() {
+    wrapCells();
+    var cells = document.querySelectorAll(".table-scroll .cell");
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i];
+      var cut = c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1;
+      if (cut && !c.closest("tr.row-open")) {
+        c.classList.add("clipped");
+        if (!c.hasAttribute("title")) c.setAttribute("title", c.textContent.replace(/\s+/g, " ").trim());
+      } else if (!c.closest("tr.row-open")) {
+        c.classList.remove("clipped");
+      }
+    }
+  }
+
+  document.addEventListener("click", function (ev) {
+    if (ev.target.closest("a, button, input, select, textarea, label, summary")) return;
+    var row = ev.target.closest(".table-scroll tbody tr, .table-scroll tr");
+    if (!row || row.querySelector("th") && !row.querySelector("td")) return;
+    if (window.getSelection && String(window.getSelection())) return;  // selecting text
+    row.classList.toggle("row-open");
+    schedulePlace();
+  });
+  window.addEventListener("load", markClipped);
+  window.addEventListener("resize", markClipped);
+  setInterval(markClipped, 2000);  // a refreshed body brings new cells
+  markClipped();
+
   tickAges();
   setInterval(tickAges, TICK_MS);
   if (refreshing) schedule();

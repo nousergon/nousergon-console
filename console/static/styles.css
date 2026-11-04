@@ -36,7 +36,7 @@ button { cursor: pointer; }
 /* Tables: ruled, padded, tabular figures. The row's state is a bar on its
    first cell (a `<tr>` border does not render), and its word is a chip. */
 table { border-collapse: collapse; font-variant-numeric: tabular-nums; margin: .3rem 0 1rem; }
-th, td { padding: .38rem .7rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+th, td { padding: .24rem .7rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
 thead th { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 2px solid var(--border); }
 tbody tr:nth-child(even) { background: var(--surface); }
 tbody tr:hover { background: var(--info-bg); }
@@ -102,6 +102,24 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 .document.markdown h1 { font-size: 1.4rem; }
 .document.markdown h2 { font-size: 1.2rem; }
 .document.markdown h3, .document.markdown h4, .document.markdown h5, .document.markdown h6 { font-size: 1rem; }
+/* One-line rows (Brian 2026-11-04: "a small and consistent row"). With script
+   on, each table cell holds to one line, cut with an ellipsis; clicking a row
+   (console.js, "One-line rows") opens it to its full text, and again closes
+   it. Charts and bars are never cut. Without script every row shows in full. */
+html.js .table-scroll .cell { max-width: 32rem; max-height: 1.45em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+html.js .table-scroll .cell * { white-space: nowrap; }
+html.js .table-scroll .cell:has(svg, progress, .uplot, form) { max-height: none; overflow: visible; }
+html.js .table-scroll .cell.clipped { cursor: pointer; }
+html.js .table-scroll tr.row-open .cell { max-width: 48rem; max-height: none; white-space: normal; overflow: visible; }
+html.js .table-scroll tr.row-open .cell * { white-space: normal; }
+html.js .table-scroll tr.row-open { background: var(--surface); }
+html.js .table-scroll td :is(ul, ol, p) { display: inline; margin: 0; padding: 0; }
+html.js .table-scroll td li { display: inline; }
+html.js .table-scroll td li + li::before { content: " · "; }
+html.js .table-scroll tr.row-open td :is(ul, ol, p) { display: block; padding-left: 1.2rem; }
+html.js .table-scroll tr.row-open td p { padding-left: 0; }
+html.js .table-scroll tr.row-open td li { display: list-item; }
+html.js .table-scroll tr.row-open td li + li::before { content: none; }
 /* The sideways bar pinned to the window's bottom while a wide table's own bar
    is off screen (console.js, "Pinned sideways scroll bar"). */
 .scroll-dock { display: none; position: fixed; bottom: 0; z-index: 20; overflow-x: auto; overflow-y: hidden; height: 1.1rem; background: var(--off-bg); border-top: 1px solid var(--off); scrollbar-width: auto; scrollbar-color: var(--muted) var(--off-bg); }

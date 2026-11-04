@@ -128,3 +128,19 @@ def test_a_wide_table_has_a_sideways_bar_pinned_to_the_window():
     assert '".table-scroll, .md-table, .plan-scroll"' in js
     rule = re.search(r"\.scroll-dock \{([^}]*)\}", CSS).group(1)
     assert "position: fixed" in rule and "bottom: 0" in rule and "overflow-x: auto" in rule
+
+
+def test_rows_are_one_line_until_opened():
+    """Brian 2026-11-04: small, consistent rows; a row opens in full on click."""
+    assert "html.js .table-scroll .cell {" in CSS and "white-space: nowrap" in CSS
+    assert "tr.row-open .cell" in CSS
+    js = (Path(__file__).resolve().parent.parent / "console/static/console.js").read_text()
+    assert 'row.classList.toggle("row-open")' in js
+    assert 'box.className = "cell"' in js
+
+
+def test_cost_is_in_the_menu_and_the_site_index():
+    """Brian 2026-11-04: the cost page was reachable only by typing its URL."""
+    from console.render import html as h
+    assert f'<a href="{h.COST_URL}">cost</a>' in h.with_site_nav("<body>")
+    assert any(url == h.COST_URL for _, url, _ in h._BUILT_IN_PAGES)

@@ -55,10 +55,28 @@ class TileGroup:
 
 
 @dataclass(frozen=True)
+class Notes:
+    """A short list of rows rendered near the top of home, each with labelled
+    lines (Brian 2026-11-04: a daily "things to know" from the console
+    reviewer, each saying the fix, what he must do, and whether the evening
+    sweep has it). Rows are the newest batch: those sharing the newest as-of."""
+    title: str
+    select: Selector
+    fields: tuple[tuple[str, str], ...] = ()
+    severity_field: str | None = None
+    link_field: str | None = None
+    sort: str | None = None
+    limit: int = 8
+    stale_hours: float = 30.0
+    empty: str = "nothing published yet"
+
+
+@dataclass(frozen=True)
 class Home:
     areas: tuple[Area, ...] = ()
     tiles: tuple[Tile, ...] = ()
     groups: tuple[TileGroup, ...] = ()
+    notes: Notes | None = None
 
 
 EMPTY = Home()
@@ -107,7 +125,40 @@ def parse(raw: Any) -> Home:
                              f"home group {title!r}", None)
         groups.append(TileGroup(title=title, tiles=sec.tiles, link=link))
     return Home(areas=tuple(areas), tiles=section.tiles if section else (),
-                groups=tuple(groups))
+                groups=tuple(groups), notes=_notes(raw.get("notes")))
+
+
+def _notes(raw: Any) -> Notes | None:
+    if raw is None:
+        return None
+    where = "home notes"
+    if not isinstance(raw, Mapping):
+        raise HomeConfigError(f"{where}: must be a mapping")
+    fields = []
+    for n, f in enumerate(raw.get("fields") or [], start=1):
+        if isinstance(f, str) and f.strip():
+            fields.append((f.strip(), f.strip()))
+        elif isinstance(f, Mapping):
+            name = pages._text(f, "field", f"{where} field #{n}")
+            fields.append((name, str(f.get("label") or name).strip()))
+        else:
+            raise HomeConfigError(f"{where} field #{n}: a field name or {{field, label}}")
+    try:
+        limit = int(raw.get("limit", 8))
+        stale = float(raw.get("stale_hours", 30))
+    except (TypeError, ValueError) as exc:
+        raise HomeConfigError(f"{where}: `limit` and `stale_hours` must be numbers") from exc
+    if limit < 1 or stale <= 0:
+        raise HomeConfigError(f"{where}: `limit` and `stale_hours` must be positive")
+    return Notes(
+        title=pages._text(raw, "title", where),
+        select=pages._selector(raw.get("select"), f"{where} select"),
+        fields=tuple(fields),
+        severity_field=(str(raw["severity_field"]) if raw.get("severity_field") else None),
+        link_field=(str(raw["link_field"]) if raw.get("link_field") else None),
+        sort=(str(raw["sort"]) if raw.get("sort") else None),
+        limit=limit, stale_hours=stale,
+        empty=str(raw.get("empty") or "nothing published yet"))
 
 
 def attach(index: Any, home: Home) -> None:
@@ -187,3 +238,29 @@ def headline_groups(index: Any) -> list[dict[str, Any]]:
             for g in declared(index).groups]
 
 
+
+
+def notes(index: Any, now: datetime | None = None) -> dict[str, Any] | None:
+    """The declared notes list: the newest batch of matching rows, sorted and
+    capped, with its as-of and whether it is older than `stale_hours`."""
+    from datetime import timezone
+
+    n = declared(index).notes
+    if n is None:
+        return None
+    rows = pages._select(index, n.select, {})
+    newest = rows[0].provenance.as_of if rows else None
+    batch = [e for e in rows if e.provenance.as_of == newest]
+    names = [f for f, _ in n.fields]
+    extra = [x for x in (n.severity_field, n.link_field, n.sort) if x and x not in names]
+    out = [pages._row(e, names + extra) for e in batch]
+    if n.sort:
+        out.sort(key=lambda r: (r["fields"].get(n.sort) is None, r["fields"].get(n.sort)))
+    when = _instant(newest)
+    now = now or datetime.now(timezone.utc)
+    stale = when is not None and (now - when).total_seconds() > n.stale_hours * 3600
+    return {"title": n.title, "as_of": newest, "stale": stale,
+            "stale_hours": n.stale_hours, "empty": n.empty,
+            "selector": n.select.text, "total": len(out),
+            "labels": dict(n.fields), "severity_field": n.severity_field,
+            "link_field": n.link_field, "rows": out[:n.limit]}

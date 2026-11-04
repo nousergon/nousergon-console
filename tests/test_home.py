@@ -4,6 +4,7 @@ tiles. No row list, and no tile speaks for more than its own area."""
 from __future__ import annotations
 
 import pytest
+from datetime import datetime, timezone
 
 from console.index import home, pages
 from console.index.graph import Index
@@ -175,3 +176,51 @@ def test_home_is_plain_and_the_internals_are_on_health():
     assert '<a href="/health">system health details</a>' in page
     health = _html(idx, resolve("/health"))
     assert "transparency gap" in health and "index reachability" in health
+
+
+def _note(id_, rank, at, sev="warning"):
+    return Entity(kind=Kind.SIGNAL, id=id_, state=State.HEALTHY,
+                  provenance=Provenance("s", at),
+                  facets={"pane": "console-review", "record": "insight"},
+                  detail={"label": f"insight {id_}", "fields": {
+                      "rank": {"value": rank, "render": "count"},
+                      "severity": {"value": sev, "render": "text"},
+                      "fix": {"value": f"fix {id_}", "render": "text"},
+                      "your_action": {"value": "nothing", "render": "text"},
+                      "page": {"value": "/page/incidents", "render": "text"}}})
+
+
+NOTES = dict(DECL, notes={
+    "title": "Things to know", "select": {"facets": {"pane": "console-review"}},
+    "fields": [{"field": "fix", "label": "Fix"}, {"field": "your_action", "label": "You"}],
+    "severity_field": "severity", "link_field": "page", "sort": "rank", "limit": 2})
+
+
+def _notes_index(rows):
+    idx = Index()
+    idx.add_result(AdapterResult(name="f", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=ROWS + tuple(rows)))
+    home.attach(idx, home.parse(NOTES))
+    idx.finalize()
+    return idx
+
+
+def test_notes_show_the_newest_batch_sorted_and_capped_above_health():
+    new, old = "2026-11-04T12:00:00+00:00", "2026-11-03T12:00:00+00:00"
+    idx = _notes_index([_note("b", 2, new, "critical"), _note("a", 1, new),
+                        _note("c", 3, new), _note("old", 0, old)])
+    doc = home.notes(idx, now=datetime(2026, 11, 4, 13, tzinfo=timezone.utc))
+    assert [r["id"] for r in doc["rows"]] == ["a", "b"] and doc["total"] == 3
+    assert doc["stale"] is False
+    page = _html(idx, resolve("/"))
+    assert "Things to know" in page and "insight old" not in page
+    assert '<a href="/page/incidents">insight a</a>' in page
+    assert "<strong>You:</strong> nothing" in page and "1 more not shown" in page
+    assert page.index("Things to know") < page.index("<h2>system health</h2>")
+    assert render_json.payload(idx, resolve("/"))["notes"]["rows"][0]["id"] == "a"
+
+
+def test_old_notes_say_they_are_old_and_no_notes_say_so():
+    idx = _notes_index([_note("a", 1, "2026-11-01T12:00:00+00:00")])
+    assert home.notes(idx, now=datetime(2026, 11, 4, tzinfo=timezone.utc))["stale"] is True
+    assert "nothing published yet" in _html(_notes_index([]), resolve("/"))

@@ -1342,7 +1342,8 @@ def landing_page(index: Index) -> str:
     current home screen is extremely uninformative").
 
     In order (Brian's 2026-10-28 ruling): whether the data is current, in
-    plain words; one health tile per area; the exception counts by priority;
+    plain words; the declared notes ("things to know", Brian 2026-11-04);
+    one health tile per area; the exception counts by priority;
     then the declared headline groups, each a question ("trading today"). Everything else the console
     measures about itself (registries, completeness, the transparency gap,
     every source's read) is on `/health`, linked at the foot.
@@ -1354,6 +1355,7 @@ def landing_page(index: Index) -> str:
 <title>Nous Ergon console</title></head><body>
 <h1>Nous Ergon console</h1>
 {home_status(index)}
+{home_notes(home.notes(index))}
 {health_strip(home.health(index, model.exceptions))}
 {exception_summary(model, index.exceptions_trend(), brief=True)}
 {headline_groups(home.headline_groups(index))}
@@ -1399,6 +1401,40 @@ def home_status(index: Index, now: datetime | None = None) -> str:
              if info.refresh_seconds else "")
     return (f'<p class="index-fresh">Data as of {as_of_html(info.built_at, now)}{every}.'
             f'{failed_txt}</p>')
+
+
+_SEVERITY_CLASS = {"critical": "FAILED", "warning": "DEGRADED", "watch": "STALLED",
+                   "info": "HEALTHY"}
+
+
+def home_notes(doc: dict | None) -> str:
+    """The declared notes list ("things to know"), dated, with its staleness."""
+    if doc is None:
+        return ""
+    when = as_of_html(doc["as_of"]) if doc["as_of"] else ""
+    head = f'<h2>{esc(doc["title"])}</h2>'
+    if not doc["rows"]:
+        return (f'<section class="page-section home-notes">{head}'
+                f'<p class="absent">{esc(doc["empty"])}</p></section>')
+    stale = (f' <span class="state-MISSED">not refreshed in the last '
+             f'{doc["stale_hours"]:g} hours</span>' if doc["stale"] else "")
+    items = []
+    for r in doc["rows"]:
+        f = r["fields"]
+        sev = f.get(doc["severity_field"]) if doc["severity_field"] else None
+        chip = (f'<span class="chip state-{_SEVERITY_CLASS.get(str(sev).lower(), "UNREPORTED")}">'
+                f'{esc(sev)}</span> ' if sev else "")
+        link = f.get(doc["link_field"]) if doc["link_field"] else None
+        href = link if isinstance(link, str) and link.startswith("/") else r["url"]
+        lines = "".join(
+            f'<div class="tile-meta"><strong>{esc(label)}:</strong> {esc(f.get(name))}</div>'
+            for name, label in doc["labels"].items() if f.get(name) not in (None, ""))
+        items.append(f'<li>{chip}<a href="{esc(href)}">{esc(r["label"])}</a>{lines}</li>')
+    more = (f'<p class="list-summary">{doc["total"] - len(doc["rows"])} more not shown</p>'
+            if doc["total"] > len(doc["rows"]) else "")
+    return (f'<section class="page-section home-notes">{head}'
+            f'<p class="list-summary">written {when}{stale}</p>'
+            f'<ol>{"".join(items)}</ol>{more}</section>')
 
 
 def headline_groups(groups: list[dict]) -> str:

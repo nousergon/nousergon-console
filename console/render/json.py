@@ -287,6 +287,7 @@ def _landing(index: Index) -> dict[str, Any]:
         "health": _home.health(index, model.exceptions),
         "headline": _home.headline(index),
         "headline_groups": _home.headline_groups(index),
+        "notes": _home.notes(index),
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
     # renders (`render.html.milestones_section` reads the SAME `model.

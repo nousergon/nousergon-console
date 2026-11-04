@@ -1,6 +1,7 @@
 """The `records` source SHAPE — read once, used at two layers (§2.3).
 
-A body's fan-out grammar — whole-body / list-of-dicts `records_path` /
+A body's fan-out grammar — whole-body / list-of-dicts `records_path` (or a
+top-level array, `records_path: "$"`) /
 grouped `*` fan-out with `group_field` / parallel `array_fields` / CSV rows —
 plus per-record id minting (`id_template`), declared-field extraction
 (`fields`, §5.8) and domain-state resolution (`state_field`/`state_map`,
@@ -43,6 +44,12 @@ def get_path(obj: Any, path: str) -> Any:
         else:
             return None
     return cur
+
+
+#: `records_path` value naming the body itself as the record list: a top-level
+#: JSON array of objects, one record per item. `$` is the JSONPath root; no
+#: dotted key can collide with it (`get_path` would look up a key named `$`).
+ROOT_RECORDS_PATH = "$"
 
 
 class RecordsSelectorError(ValueError):
@@ -140,7 +147,24 @@ def project(body: Any, fmt: str, records_path: str | None,
         return select(rows, limit, order), {}
 
     parsed = json.loads(body) if isinstance(body, (str, bytes)) else body
+    if records_path == ROOT_RECORDS_PATH:
+        # The body itself is the record list (a top-level JSON array, e.g. a
+        # producer's `metrics.json` of MetricRecords). Declared, never
+        # inferred: a whole-body source whose producer starts writing a list
+        # still fails loud below rather than silently fanning out. There is
+        # no enclosing object, so body-level fields resolve against nothing.
+        if not isinstance(parsed, list):
+            raise TypeError(
+                f"records_path {ROOT_RECORDS_PATH!r} needs a top-level JSON array"
+            )
+        return select([r for r in parsed if isinstance(r, dict)],
+                      limit, order), {}
     if not isinstance(parsed, dict):
+        if isinstance(parsed, list):
+            raise TypeError(
+                "records body is a top-level JSON array; declare "
+                f"records_path: {ROOT_RECORDS_PATH!r} to read one record per item"
+            )
         raise TypeError("records body must be a JSON object")
 
     if records_path:

@@ -1480,6 +1480,24 @@ self:
 # A bad declaration (unknown date, target before start, a ref that is not
 # `<repo>-I<N>`) FAILS THE BUILD naming the project and milestone. This example
 # declares no `org`, so its refs render UNREPORTED rather than reaching a host.
+# Your actions (`/actions`, `console/index/actions.py`): every open issue in
+# ONE repository carrying any of `labels`, with a tick box each. A tick adds
+# `done_label` and a one-line comment to the issue (who ticked comes from the
+# edge proxy's identity header); unticking removes the label. The issue is the
+# store: the console keeps nothing. Without `write_token_command` the page is
+# read-only and says so. Both commands print a short-lived token for exactly
+# `{repo}` — the console holds no credential.
+#
+# actions:
+#   org: your-org
+#   repo: your-tracker
+#   labels: ["gate:operator"]
+#   done_label: operator-done
+#   token_command: ["/usr/local/bin/your-token-helper", "--token", "{repo}", "issues"]
+#   write_token_command: ["/usr/local/bin/your-token-helper", "--token", "{repo}", "issues-write"]
+#   title: Your actions
+#   done_text: Done — waiting for a check that it deployed and looks good.
+
 planner:
   # org: your-org
   fetch:

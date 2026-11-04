@@ -26,7 +26,7 @@ from .build import AdapterFetch, BuildInfo
 from .cadence_state import resolve_cadence_state
 from .event_trigger import resolve_event_trigger_state
 from .duty_window import resolve_duty_window_state
-from .merge import Claim, NamespaceCollision, merge
+from .merge import Claim, NamespaceCollision, _declared_facets, is_namesake, merge
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
 
@@ -584,10 +584,25 @@ class Index:
         its OWN — never mind which claim class won the merge (§2.5's
         precedence is irrelevant here; this only asks whether one arrived at
         all, as opposed to just the DECLARATION `yaml-directory` mints for
-        every alias)."""
+        every alias).
+
+        Two claims arrive without being a report ON this entity, and neither
+        counts (alpha-engine-config-I12722): an UNREACHABLE source's, which
+        speaks only about itself (`_state_rank`, 4), and a scoped discovery
+        pass's NAMESAKE (`merge.is_namesake`), which describes a different
+        object sharing the name and contests no field. Counting the namesake
+        kept `alpha-engine-box-power-sensor-{state-change,api-call,selftest}`
+        (declared `substrate: lambda` through the parent row) UNREPORTED while
+        the AWS/Events pass, superseded on them, read their rules HEALTHY and
+        the parent Lambda read HEALTHY: no field came from any report, yet the
+        alias was treated as reported and never inherited."""
+        claims = self._claims.get(entity_id, [])
+        declared = _declared_facets(claims)
         return any(
             c.claim_class in (ClaimClass.OBSERVATION, ClaimClass.DISCOVERY)
-            for c in self._claims.get(entity_id, [])
+            and c.reachable
+            and not is_namesake(c, declared)
+            for c in claims
         )
 
     def _note_discovery_horizon(self, result: AdapterResult) -> None:

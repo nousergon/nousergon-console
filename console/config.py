@@ -505,8 +505,9 @@ def supervised_index(config: dict[str, Any]) -> Supervisor:
     """An index that rebuilds on a cadence and swaps atomically (§5.9).
 
     The whole of "the console renders, it never owns" (§5.6) made operational:
-    nothing is persisted, so keeping the surface current is re-deriving it, and
-    the only state that survives a rebuild is the reference to it.
+    nothing is owned, so keeping the surface current is re-deriving it. The one
+    thing kept across a RESTART is the last good index (`warm_start.py`), served
+    marked stale until the first rebuild replaces it.
     """
     refresh = float(
         (config.get("console") or {}).get("refresh_seconds")
@@ -514,7 +515,10 @@ def supervised_index(config: dict[str, Any]) -> Supervisor:
     )
     # defer_first_build: the caller binds a port right after this returns, and
     # a full pass takes 93.5s on the live box. See Supervisor.__init__.
+    from .index import warm_start
+
     return Supervisor(
         lambda: build_index(config), refresh_seconds=refresh,
         defer_first_build=True,
+        warm_start_path=warm_start.default_path(),
     )

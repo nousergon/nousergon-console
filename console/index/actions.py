@@ -91,6 +91,11 @@ class Action:
     due_source: str | None = None
     #: Any bound on WHEN it may happen ("after the 16:30 ET close"), or None.
     when: str | None = None
+    #: The PR this action is about (merge it), when the issue names one.
+    pr_url: str | None = None
+    pr_ref: str | None = None
+    #: The one command to run, when the issue carries one.
+    command: str | None = None
 
 
 @dataclass
@@ -256,6 +261,27 @@ def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | N
     return due, source, when
 
 
+_PR_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
+_FENCE = re.compile(r"```[\w-]*\n(.+?)\n```", re.DOTALL)
+_CODE_LINE = re.compile(r"^\s*`([^`\n]{4,})`\s*$", re.MULTILINE)
+
+
+def pull_request(body: str | None) -> tuple[str | None, str | None]:
+    """(url, "repo#N") of the first PR the body links, or (None, None).
+    Brian 2026-11-04: the page shows PRs and commands, not the issues behind them."""
+    m = _PR_URL.search(str(body or ""))
+    if not m:
+        return None, None
+    return m.group(0), f"{m.group(2)}#{m.group(3)}"
+
+
+def command(body: str | None) -> str | None:
+    """The first fenced block, else the first line that is wholly `inline code`."""
+    text = str(body or "")
+    m = _FENCE.search(text) or _CODE_LINE.search(text)
+    return m.group(1).strip() if m else None
+
+
 def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
@@ -268,6 +294,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         created_at=issue.get("created_at"), updated_at=issue.get("updated_at"),
         **dict(zip(("due", "due_source", "when"),
                    timing(issue.get("body"), issue.get("milestone")))),
+        **dict(zip(("pr_url", "pr_ref"), pull_request(issue.get("body")))),
+        command=command(issue.get("body")),
     )
 
 
@@ -399,6 +427,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "actions": [{"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
                      "done": a.done, "summary": a.summary, "labels": list(a.labels),
                      "due": a.due, "due_source": a.due_source, "when": a.when,
+                     "pr_url": a.pr_url, "pr_ref": a.pr_ref, "command": a.command,
                      "created_at": a.created_at, "updated_at": a.updated_at}
                     for a in found.actions],
     }

@@ -291,3 +291,25 @@ def test_soonest_due_first_then_undated_and_the_table_shows_both_columns():
     assert 'action="/actions/7"' in row and "Sooner" in row
     doc = render_json.payload(idx, resolve("/actions"))
     assert doc["actions"][0]["due"] == "2099-01-02" and doc["actions"][0]["when"].startswith("outside")
+
+
+# ------------------------------------------------------- PRs and commands ---
+
+def test_the_page_links_prs_and_shows_commands_never_the_issue():
+    """Brian 2026-11-04: "why are issues linked? shouldn't this just be prs and commands?" """
+    pr_body = ("Merge [nous-ergon-ops#2133](https://github.com/nousergon/nous-ergon-ops/pull/2133): "
+               "Staging bucket policy.\n\nYour steps, one command (sign in as ne-admin):\n\n"
+               "`aws s3 cp s3://b/run-x.sh ~/run-x.sh --profile ne-admin && bash ~/run-x.sh`\n\n"
+               "<!-- merge-ask: nousergon/nous-ergon-ops#2133 -->")
+    cmd_body = "Rotate the key.\n\n```\nbash ~/rotate.sh\n```"
+    idx, _ = _index(issues=[_issue(8, "Merge nous-ergon-ops#2133", body=pr_body),
+                            _issue(9, "Rotate the key", body=cmd_body)])
+    html = _html(idx, resolve("/actions"))
+    assert "https://example.test/8" not in html and "https://example.test/9" not in html
+    assert 'href="https://github.com/nousergon/nous-ergon-ops/pull/2133"' in html
+    assert "PR nous-ergon-ops#2133" in html
+    assert "bash ~/run-x.sh</code></pre>" in html and "bash ~/rotate.sh</code></pre>" in html
+    assert "tracker-I8" not in html.split('<table class="actions">')[1]
+    doc = render_json.payload(idx, resolve("/actions"))
+    by_n = {a["number"]: a for a in doc["actions"]}
+    assert by_n[8]["pr_ref"] == "nous-ergon-ops#2133" and by_n[9]["command"] == "bash ~/rotate.sh"

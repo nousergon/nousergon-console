@@ -262,6 +262,7 @@ svg.ts-chart rect.ts-untriaged { fill: var(--warn); fill-opacity: .9; }
 table.actions td.action-cell { width: 2rem; padding-right: 0; }
 table.actions tr.action-done td a { color: var(--muted); }
 .action-tick { margin: 0; }
+.action-cmd { margin: 0.35rem 0 0; padding: 0.4rem 0.5rem; background: var(--surface-2, rgba(127,127,127,0.1)); border-radius: 4px; white-space: pre-wrap; word-break: break-all; font-size: 0.85em; user-select: all; }
 .action-tick button { font-size: 1.4rem; line-height: 1; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 .notice { background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; }
 .muted { color: var(--muted); font-size: .85rem; }

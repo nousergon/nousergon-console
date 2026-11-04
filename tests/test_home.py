@@ -142,3 +142,36 @@ def test_the_first_declared_area_owns_a_row_so_tiles_partition_the_fleet():
     assert by_id["trading"]["rows"] == 2
     assert by_id["all"]["rows"] == 1          # only "stray"; trading's rows stay there
     assert by_id["unassigned"]["rows"] == 1   # the cost run
+
+
+def test_home_groups_answer_one_question_each():
+    """Brian 2026-11-04: home must answer what he asks. A group is a titled
+    row of tiles, linked to its page; it renders after the exception counts."""
+    decl = dict(DECL, groups=[{"title": "Cost this month", "link": "/run?pane=cost",
+                               "tiles": [{"label": "spend", "field": "mtd",
+                                          "select": {"facets": {"pane": "cost"}}}]}])
+    page = _html(_index(decl), resolve("/"))
+    assert '<h2><a href="/run?pane=cost">Cost this month</a></h2>' in page
+    assert page.index("<h2>exceptions</h2>") < page.index("Cost this month")
+    doc = render_json.payload(_index(decl), resolve("/"))
+    assert doc["headline_groups"][0]["title"] == "Cost this month"
+    assert doc["headline_groups"][0]["tiles"][0]["label"] == "spend"
+
+
+@pytest.mark.parametrize("bad, message", [
+    ({"groups": [{"title": "x"}]}, "at least one tile"),
+    ({"groups": [{"title": "x", "link": "http://y", "tiles": [
+        {"label": "a", "field": "b", "select": {"facets": {"p": "q"}}}]}]}, "console path"),
+])
+def test_a_bad_group_fails_by_name(bad, message):
+    with pytest.raises(home.HomeConfigError, match=message):
+        home.parse(bad)
+
+
+def test_home_is_plain_and_the_internals_are_on_health():
+    idx = _index()
+    page = _html(idx, resolve("/"))
+    assert "transparency gap" not in page and "reachability" not in page
+    assert '<a href="/health">system health details</a>' in page
+    health = _html(idx, resolve("/health"))
+    assert "transparency gap" in health and "index reachability" in health

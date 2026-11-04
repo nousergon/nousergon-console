@@ -95,7 +95,7 @@ def aggregate(count: int, denominator: int | None) -> dict[str, int]:
 
 def payload(index: Index, req: Resolved) -> dict[str, Any]:
     """The JSON body for a resolved request — the same query the HTML renders."""
-    if req.view == "landing":
+    if req.view in ("landing", "health"):
         doc = _landing(index)
     elif req.view == "list":
         doc = _list(index, req)
@@ -286,6 +286,7 @@ def _landing(index: Index) -> dict[str, Any]:
         # The same computation the HTML renders (§3.8).
         "health": _home.health(index, model.exceptions),
         "headline": _home.headline(index),
+        "headline_groups": _home.headline_groups(index),
     }
     # console-policy.md §4.4's milestone pane, from the SAME assembly the HTML
     # renders (`render.html.milestones_section` reads the SAME `model.

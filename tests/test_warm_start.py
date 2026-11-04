@@ -50,7 +50,7 @@ def test_a_restart_serves_the_saved_index_marked_stale(tmp_path):
     fresh = render_json.index_freshness(idx, now=T1)
     assert fresh["stale"] is True and fresh["sources"]
     page = landing_page(idx)
-    assert "SURFACE STALE" in page and "from before the restart" in page
+    assert "Restarted" in page and "from before the restart" in page
     assert "Trading" in page  # the rows are there, not an empty surface
 
 

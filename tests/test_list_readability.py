@@ -133,7 +133,7 @@ def test_the_landing_view_counts_exceptions_by_state_worst_first_without_rows():
         _run("older-fail", State.FAILED, "2026-09-01T05:00:00Z"),
         _run("ok", State.HEALTHY, "2026-10-01T05:00:00Z"),
     ]
-    page = _page(_index(rows), "/")
+    page = _page(_index(rows), "/health")
     assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in page
     assert page.index("2 FAILED") < page.index("1 UNREPORTED")
     assert "fresh-fail" not in page and "old-probe" not in page
@@ -162,11 +162,11 @@ def test_the_exception_list_names_a_run_by_its_job_and_folds_its_runs_per_state(
     # A different state is a different fact: job-a DEGRADED still has its own row.
     assert "/run/job-a@2026-10-01T03:00:00Z" in page
     assert "3 not healthy (from 4 rows" in page
-    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in _page(_index(FAILING), "/")
+    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in _page(_index(FAILING), "/health")
 
 
 def test_the_landing_fold_never_changes_the_not_healthy_count():
-    page = _page(_index(FAILING), "/")
+    page = _page(_index(FAILING), "/health")
     assert "· 4 not healthy ·" in page
     doc = render_json.payload(_index(FAILING), resolve("/"))
     assert len(doc["exceptions"]) == 4
@@ -559,7 +559,7 @@ def test_registry_json_carries_the_same_view():
 
 def test_registry_links_say_what_the_registry_page_holds():
     index = _registry_index()
-    for route in ("/", "/dashboards"):
+    for route in ("/health", "/dashboards"):
         page = _page(index, route)
         assert ('<li><a href="/registry/reg">reg</a> · <span class="state-HEALTHY">source ok'
                 '</span> · 5 rows · <span class="state-DEGRADED">3 not healthy</span></li>'
@@ -590,7 +590,7 @@ def test_a_registry_link_names_a_folded_count_and_an_all_healthy_registry():
 
 def test_a_failed_registry_read_shows_on_its_link():
     index = _registry_index(status=AdapterStatus.FAILED)
-    page = _page(index, "/")
+    page = _page(index, "/health")
     assert '<span class="state-FAILED">source failed</span>' in page
 
 

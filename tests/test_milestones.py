@@ -241,7 +241,7 @@ def test_the_json_and_the_html_grade_the_predicate_identically(index):
     and UNMET on the wire is the divergence this policy exists to forbid."""
     M.attach(index, M.parse(DECLARATION))
     payload = render_json.payload(index, resolve("/", ""))
-    page = render_html.landing_page(index)
+    page = render_html.health_page(index)
     [milestone] = payload["milestones"]
 
     assert f'{milestone["met"]} of {milestone["of"]} clauses met' in page
@@ -261,7 +261,7 @@ def test_the_milestone_pane_is_a_collapsed_summary_and_no_row_list_is_on_home():
                provenance=Provenance("fixture", "2026-08-27T00:00:00Z")),
     )
     M.attach(idx, M.parse(DECLARATION))
-    page = render_html.landing_page(idx)
+    page = render_html.health_page(idx)
     assert "milestone: example-exit" in page
     assert '<details class="milestones-summary"><summary>milestones' in page
     assert "comp-broken" not in page  # rows live on /exceptions (CN-4.3 .2)
@@ -272,7 +272,7 @@ def test_no_milestones_declared_renders_nothing_at_all(index):
     declares no milestone is not a deployment whose milestone is unknown."""
     payload = render_json.payload(index, resolve("/", ""))
     assert "milestones" not in payload
-    assert "milestone:" not in render_html.landing_page(index)
+    assert "milestone:" not in render_html.health_page(index)
 
 
 def test_the_pane_is_registered_and_the_orphan_count_is_unchanged():
@@ -853,7 +853,7 @@ def test_the_journal_is_rendered_on_the_pane_and_served_on_the_wire():
     assert any(t["clause"] == "c-met" and t["to"] == M.UNMET
                for t in recorded["recent"])
 
-    page = render_html.landing_page(idx)
+    page = render_html.health_page(idx)
     assert "clause journal" in page
     assert "exit state: <strong>HOLDING</strong>" in page
     assert "field exit_confirmed &gt;= 1" in page
@@ -868,7 +868,7 @@ def test_a_journal_that_could_not_be_recorded_says_so_on_the_page():
     M.attach_journal_report(idx, [{
         "milestone_id": "example-exit", "written": False,
         "error": "AccessDenied: the console cannot write its own journal"}])
-    page = render_html.landing_page(idx)
+    page = render_html.health_page(idx)
     assert "clause journal UNREADABLE" in page
     assert "could regress unannounced" in page
 

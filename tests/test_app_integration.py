@@ -66,7 +66,8 @@ def test_list_view_with_facet_in_url(live_server):
 def test_landing_is_exception_first(live_server):
     body = _get(live_server + "/")
     assert "exceptions" in body
-    assert "index reachability" in body
+    assert "index reachability" not in body  # moved to /health (2026-11-04)
+    assert "index reachability" in _get(live_server + "/health")
 
 
 def test_stylesheet_is_served_with_state_selectors(live_server):
@@ -87,7 +88,7 @@ def test_html_pages_declare_a_device_width_viewport(live_server):
 
 
 def test_every_served_table_scrolls_inside_its_own_box(live_server):
-    body = _get(live_server + "/")
+    body = _get(live_server + "/health")
     assert "<table" in body
     assert body.count("<table") == body.count('<div class="table-scroll"><table')
 

@@ -46,9 +46,19 @@ class Area:
 
 
 @dataclass(frozen=True)
+class TileGroup:
+    """A titled row of headline tiles that answers one question, e.g. "trading
+    today" (Brian 2026-11-04: home must answer what he asks, not list counts)."""
+    title: str
+    tiles: tuple[Tile, ...]
+    link: str | None = None
+
+
+@dataclass(frozen=True)
 class Home:
     areas: tuple[Area, ...] = ()
     tiles: tuple[Tile, ...] = ()
+    groups: tuple[TileGroup, ...] = ()
 
 
 EMPTY = Home()
@@ -82,7 +92,22 @@ def parse(raw: Any) -> Home:
                                         for i, s in enumerate(selects, start=1))))
     section = pages._section({"type": "tiles", "tiles": raw["tiles"]}, "home tiles", None) \
         if raw.get("tiles") else None
-    return Home(areas=tuple(areas), tiles=section.tiles if section else ())
+    groups = []
+    for n, g in enumerate(raw.get("groups") or [], start=1):
+        where = f"home group #{n}"
+        if not isinstance(g, Mapping):
+            raise HomeConfigError(f"{where}: must be a mapping")
+        title = pages._text(g, "title", where)
+        link = g.get("link")
+        if link is not None and not (isinstance(link, str) and link.startswith("/")):
+            raise HomeConfigError(f"home group {title!r}: `link` must be a console path")
+        if not g.get("tiles"):
+            raise HomeConfigError(f"home group {title!r}: `tiles` must list at least one tile")
+        sec = pages._section({"type": "tiles", "tiles": g["tiles"]},
+                             f"home group {title!r}", None)
+        groups.append(TileGroup(title=title, tiles=sec.tiles, link=link))
+    return Home(areas=tuple(areas), tiles=section.tiles if section else (),
+                groups=tuple(groups))
 
 
 def attach(index: Any, home: Home) -> None:
@@ -154,5 +179,11 @@ def health(index: Any, exceptions: list) -> list[dict[str, Any]]:
 
 def headline(index: Any) -> list[dict[str, Any]]:
     return [pages._safe_tile(index, t, {}) for t in declared(index).tiles]
+
+
+def headline_groups(index: Any) -> list[dict[str, Any]]:
+    return [{"title": g.title, "link": g.link,
+             "tiles": [pages._safe_tile(index, t, {}) for t in g.tiles]}
+            for g in declared(index).groups]
 
 

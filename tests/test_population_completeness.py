@@ -285,6 +285,6 @@ def test_the_landing_page_links_the_unregistered_members(tmp_path):
     """§5.1's evidence field on a NUMBER: the count links to the rows."""
     from console.render import html as render_html
 
-    page = render_html.landing_page(_index_with_one_unregistered(tmp_path))
+    page = render_html.health_page(_index_with_one_unregistered(tmp_path))
     assert "/component?state=UNREGISTERED" in page
     assert '<a href="/component/recovery_path_staleness">' in page

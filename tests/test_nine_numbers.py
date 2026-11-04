@@ -179,11 +179,11 @@ class TestSurfaceLiveness:
         assert index.surface_liveness()["watcher"] == "declared-in-config"
 
 
-def test_the_same_numbers_reach_the_html_landing_page():
+def test_the_same_numbers_reach_the_html_health_page():
     """Same URL, same query, two representations (§3.8) — the numbers must
     not exist in JSON only."""
     index = _built_example_index()
-    html = render_html.landing_page(index)
+    html = render_html.health_page(index)
     assert "the nine numbers" in html.lower()
     assert "population completeness" in html.lower()
     assert "onboarding cost" in html.lower()
@@ -194,7 +194,7 @@ def test_json_and_html_numbers_agree_on_the_transparency_gap_count():
     index = _built_example_index()
     doc = render_json.payload(index, resolve("/"))
     gap = doc["numbers"]["transparency_gap"]
-    html = render_html.landing_page(index)
+    html = render_html.health_page(index)
     assert f'{gap["count"]} / {gap["of"]}' in html or f'{gap["count"]}/{gap["of"]}' in html
 
 
@@ -235,7 +235,7 @@ def test_9_6_names_the_rows_it_counted_in_both_representations():
     assert numbers["staleness_honesty"]["violations"] == [
         "silently-stale-component"]
 
-    page = render_html.landing_page(index)
+    page = render_html.health_page(index)
     assert "silently-stale-component" in page
 
 
@@ -323,6 +323,6 @@ def test_the_members_appear_in_the_html_representation_too():
         entities=(Entity(kind=Kind.COMPONENT, id="wild-component",
                          state=State.UNREPORTED, provenance=Provenance("discovery")),),
     ))
-    page = render_html.landing_page(index)
+    page = render_html.health_page(index)
     assert "wild-component" in page
     assert "/component?state=UNREGISTERED" in page

@@ -14,7 +14,7 @@ from console.index.graph import Index
 from console.model.entity import Entity
 from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
-from console.render.html import exceptions_page, landing_page
+from console.render.html import exceptions_page, health_page
 from console.render.json import payload as json_payload
 from console.server.router import resolve
 from tests.fixtures import prov
@@ -78,7 +78,7 @@ def test_landing_page_renders_the_queued_decision_and_not_the_backlog_one():
     ))
     # Home counts the queue (summary-only, CN-4.3 amended 2026-10-28); the
     # rows are on `/exceptions`, one click away.
-    assert "1 waiting on Brian" in landing_page(idx)
+    assert "1 waiting on Brian" in health_page(idx)
     page = exceptions_page(idx)
     assert "repo-I1" in page
     assert "repo-I3" not in page
@@ -88,7 +88,7 @@ def test_landing_page_renders_empty_queue_as_itself_not_blank():
     """§5.5 — absence renders as itself, never as nothing: an empty decision
     queue is a rendered fact (nothing is waiting on Brian), not a missing
     section."""
-    assert "0 waiting on brian" in landing_page(Index()).lower()
+    assert "0 waiting on brian" in health_page(Index()).lower()
     page = exceptions_page(Index())
     assert "waiting on brian" in page.lower()
     assert "no entities" in page.lower()
@@ -148,13 +148,13 @@ def test_population_completeness_empty_index_is_null_not_zero():
 def test_landing_page_renders_the_completeness_ratio():
     idx = Index()
     idx.add_result(_registry_result("comp-alpha", "comp-beta"))
-    page = landing_page(idx)
+    page = health_page(idx)
     assert "2 / 2" in page
     assert "100%" in page
 
 
 def test_landing_page_renders_unknown_completeness_honestly_not_as_100_percent():
-    page = landing_page(Index())
+    page = health_page(Index())
     assert "unknown" in page.lower()
     assert "100%" not in page
 

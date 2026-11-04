@@ -1566,6 +1566,7 @@ _BUILT_IN_PAGES = (
     ("exceptions", "/exceptions", "every row that is not healthy, by priority"),
     ("planner", "/planner", "milestones and projects on a calendar"),
     ("reports", "/reports", "the daily, weekly and other report feeds"),
+    ("cost", "/run?pane=cost", "spend against budget, GitHub Actions minutes and the Claude plan"),
     ("search", "/search", "find any component, run, file or decision by name"),
 )
 
@@ -2702,6 +2703,12 @@ def with_demo_nav(page: str, demo) -> str:
     return page.replace("<body>", "<body>" + nav, 1)
 
 
+#: The cost dashboard: every `pane: cost` row (spend, CI minutes, Claude
+#: plan). In the menu because Brian checks it daily and could not find it
+#: without typing the URL (2026-11-04).
+COST_URL = "/run?pane=cost"
+
+
 def with_site_nav(page: str) -> str:
     """Prepend the one site menu to a rendered page: home · your actions ·
     index · exceptions · planner · reports · search. Applied once, at the server, so
@@ -2715,6 +2722,7 @@ def with_site_nav(page: str) -> str:
            '<a href="/exceptions">exceptions</a> · '
            '<a href="/planner">planner</a> · '
            '<a href="/reports">reports</a> · '
+           f'<a href="{COST_URL}">cost</a> · '
            '<a href="/search">search</a></nav>')
     return page.replace("<body>", "<body>" + nav, 1)
 

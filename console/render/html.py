@@ -2284,8 +2284,8 @@ _ANY_TIME = '<em class="absent">any time</em>'
 
 
 def _action_row(a, decl, writable: bool, today: str) -> str:
-    """One action as a table row: the tick, the ask (title linking its issue,
-    then its first paragraph), when it is due, any bound on when it may
+    """One action as a table row: the tick, the ask (title linking its PR when
+    it has one, then its first paragraph and its command), when it is due, any bound on when it may
     happen, and how long it has waited. The tick is a form POST, so it works
     with no script; the button is the checkbox."""
     box = "☑" if a.done else "☐"
@@ -2293,27 +2293,35 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
         control = (f'<form method="post" action="/actions/{a.number}" class="action-tick">'
                    f'<input type="hidden" name="done" value="{"0" if a.done else "1"}">'
                    f'<button type="submit" aria-pressed="{"true" if a.done else "false"}" '
-                   f'aria-label="{"Untick" if a.done else "Tick"} {esc(a.ref)}" '
+                   f'aria-label="{"Untick" if a.done else "Tick"} {esc(a.title)}" '
                    f'title="{"Untick: not done yet" if a.done else "Tick when you have done this"}">'
                    f'{box}</button></form>')
     else:
         control = f'<span class="action-tick" aria-hidden="true">{box}</span>'
     status = (f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
               if a.done else "")
+    # PRs and commands, never the tracking issue (Brian 2026-11-04): the title
+    # links the PR when there is one, and the command is shown to copy.
+    title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url
+             else f"<strong>{esc(a.title)}</strong>")
+    cmd = (f'<pre class="action-cmd"><code>{esc(a.command)}</code></pre>'
+           if a.command else "")
+    what = (f'<a href="{esc(a.pr_url)}">PR {esc(a.pr_ref)}</a>' if a.pr_url
+            else "command" if a.command else "step")
     return (f'<tr id="a{a.number}" class="action{" action-done" if a.done else ""}">'
             f'<td class="action-cell">{control}</td>'
-            f'<td><a href="{esc(a.url)}">{esc(a.title)}</a>'
+            f"<td>{title}"
             + (f'<div class="muted">{esc(a.summary)}</div>' if a.summary else "")
-            + status + "</td>"
+            + cmd + status + "</td>"
             f"<td>{_action_due(a, today)}</td>"
             f"<td>{esc(a.when) if a.when else _ANY_TIME}</td>"
-            f'<td><a href="{esc(a.url)}">{esc(a.ref)}</a><br>'
+            f'<td>{what}<br>'
             f'<span class="muted">{as_of_html(a.created_at)}</span></td></tr>')
 
 
 def _actions_table(rows, decl, today: str) -> str:
     return ('<table class="actions"><thead><tr><th aria-label="done"></th><th>action</th>'
-            '<th>due</th><th>when it can happen</th><th>issue · opened</th></tr></thead><tbody>'
+            '<th>due</th><th>when it can happen</th><th>what · opened</th></tr></thead><tbody>'
             + "".join(_action_row(a, decl, decl.writable, today) for a in rows)
             + "</tbody></table>")
 

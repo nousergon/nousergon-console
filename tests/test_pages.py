@@ -489,3 +489,66 @@ def test_a_bad_also_fails_the_build_by_name(bad):
                                      "select": {"facets": {"meter": "spend"}}}]}]}}
     with pytest.raises(pages.PagesConfigError, match="also"):
         pages.parse(decl)
+
+
+# ------------------------------------------------------------ reader sort --
+# Brian, 2026-11-04: "make this running list sortable by merge type (ie red
+# line 3), repo, and date".
+
+SORTABLE = {
+    "cost": {**DECL["cost"], "sections": [
+        {"type": "table", "title": "Spend", "fields": ["mtd", "pace"],
+         "sort": "-mtd", "sortable": ["mtd", "pace"], "select": {"facets": {"meter": "spend"}}},
+        {"type": "table", "title": "Unsortable", "fields": ["mtd"],
+         "sort": "-mtd", "select": {"facets": {"meter": "spend"}}},
+    ]},
+}
+
+
+def _mtds(page, n=0):
+    return [r["fields"]["mtd"] for r in page["sections"][n]["rows"]]
+
+
+def test_the_declared_sort_is_the_default_and_the_url_overrides_it():
+    idx = _index(SORTABLE)
+    assert _mtds(_page(idx)) == [120, 40, 10, 0]
+    assert _mtds(_page(idx, "sort=mtd")) == [0, 10, 40, 120]
+    assert _page(idx, "sort=mtd")["sections"][0]["sort"] == {
+        "value": "mtd", "default": "-mtd", "sortable": ["mtd", "pace"]}
+
+
+def test_a_sort_the_table_does_not_list_is_ignored_for_that_table_only():
+    idx = _index(SORTABLE)
+    page = _page(idx, "sort=mtd")
+    # The second table declares no `sortable`, so keeps its own order.
+    assert _mtds(page, 1) == [120, 40, 10, 0] and "sort" not in page["sections"][1]
+    assert _mtds(_page(idx, "sort=-source")) == [120, 40, 10, 0]
+
+
+def test_sortable_headers_link_to_the_other_direction_and_keep_the_page_state():
+    idx = _index(SORTABLE)
+    html = _html(idx, resolve("/page/cost", "sort=mtd&provider=aws&range=7d"))
+    assert 'aria-sort="ascending"' in html
+    assert "/page/cost?range=7d&amp;provider=aws&amp;sort=-mtd" in html
+    assert "/page/cost?range=7d&amp;provider=aws&amp;sort=pace" in html
+    # The controls form carries the sort, so re-filtering keeps it.
+    assert '<input type="hidden" name="sort" value="mtd">' in html
+
+
+@pytest.mark.parametrize("section, message", [
+    ({"type": "chart", "title": "x", "fields": ["s3"], "sortable": ["s3"],
+      "select": {"facets": {"a": "b"}}}, "only a table"),
+    ({"type": "table", "title": "x", "fields": ["a"], "sortable": ["-a"],
+      "select": {"facets": {"a": "b"}}}, "the URL picks"),
+    ({"type": "table", "title": "x", "fields": ["a"], "sortable": ["b"],
+      "select": {"facets": {"a": "b"}}}, "not among"),
+])
+def test_a_bad_sortable_fails_the_build_by_name(section, message):
+    with pytest.raises(pages.PagesConfigError, match=message):
+        pages.parse({"p": {"title": "t", "question": "q", "sections": [section]}})
+
+
+def test_sort_is_not_a_variable_name():
+    with pytest.raises(pages.PagesConfigError, match="not a variable"):
+        pages.parse({"p": {"title": "t", "question": "q", "variables": ["sort"],
+                           "sections": [{"type": "report", "feed": "daily"}]}}, feeds={"daily"})

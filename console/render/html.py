@@ -2132,6 +2132,9 @@ def _page_controls(pg: dict) -> str:
             for o in v["options"])
         parts.append(f'<label>{esc(v["name"])} <select name="{esc(v["name"])}">'
                      f'{choices}</select></label>')
+    if pg.get("sort"):
+        # Re-applying the range or a variable keeps the reader's sort.
+        parts.append(f'<input type="hidden" name="sort" value="{esc(pg["sort"])}">')
     since = (f' <small>since {esc(rng["since"])}</small>' if rng["since"] else "")
     return (f'<form class="page-controls" method="get" action="{esc(pg["url"])}">'
             + " ".join(parts) + ' <button type="submit">apply</button>'
@@ -2182,7 +2185,27 @@ def _page_tile(t: dict, empty: str = "") -> str:
             f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')
 
 
-def _page_rows(index: Index, sec: dict, links: Citations | None) -> str:
+def _sort_header(col: str, sec: dict, pg: dict | None) -> str:
+    """A column header; a link to sort by it when the table lists it sortable.
+
+    Clicking the active column flips its direction; any other sortable column
+    sorts ascending. The link keeps the page's range and variables (§3.2)."""
+    from urllib.parse import urlencode
+
+    sort = sec.get("sort")
+    if not sort or col not in sort["sortable"] or pg is None:
+        return f"<th>{esc(col)}</th>"
+    active = sort.get("value") or ""
+    nxt = f"-{col}" if active == col else col
+    mark = " ▲" if active == col else " ▼" if active == f"-{col}" else ""
+    href = f'{pg["url"]}?{urlencode({**pg.get("query", {}), "sort": nxt})}'
+    aria = (' aria-sort="ascending"' if active == col else
+            ' aria-sort="descending"' if active == f"-{col}" else "")
+    return (f'<th{aria}><a class="sort" href="{esc(href)}" title="sort by {esc(col)}">'
+            f'{esc(col)}{mark}</a></th>')
+
+
+def _page_rows(index: Index, sec: dict, links: Citations | None, pg: dict | None = None) -> str:
     ents = [index.entity(r["id"]) for r in sec["rows"]]
     ents = [e for e in ents if e is not None]
     if not ents:
@@ -2196,7 +2219,7 @@ def _page_rows(index: Index, sec: dict, links: Citations | None) -> str:
     more = (f'<p class="list-window">showing {len(ents)} of {sec["total"]}</p>'
             if sec["total"] > len(ents) else "")
     return ("<table><thead><tr><th>id</th><th>state</th>"
-            + "".join(f"<th>{esc(c)}</th>" for c in cols)
+            + "".join(_sort_header(c, sec, pg) for c in cols)
             + "<th>source</th><th>as-of</th><th>evidence</th></tr></thead>"
             + f"<tbody>{rows}</tbody></table>{more}")
 
@@ -2246,7 +2269,7 @@ def _chart_marks_html(sec: dict) -> str:
 
 
 def _page_section(index: Index, sec: dict, links: Citations | None,
-                  demo: bool = False) -> str:
+                  demo: bool = False, pg: dict | None = None) -> str:
     title = f'<h2>{esc(sec["title"])}</h2>' if sec.get("title") else ""
     if sec["type"] == "text":
         body = document_body({"format": DOCUMENT_MARKDOWN, "text": sec["body"]}, links)
@@ -2271,7 +2294,7 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
     elif sec["type"] == "chart":
         body = _page_chart(index, sec)
     else:
-        body = _page_rows(index, sec, links)
+        body = _page_rows(index, sec, links, pg)
     return f'<section class="page-section page-{esc(sec["type"])}">{title}{body}</section>'
 
 
@@ -2307,7 +2330,7 @@ def page_page(index: Index, page_id: str, params: dict | None = None,
     others = " · ".join(f'<a href="{esc(o.url)}">{esc(o.title)}</a>'
                         for o in listed if o.id != found.id)
     switcher = f'<p class="report-feeds">other pages: {others}</p>' if others else ""
-    sections = "\n".join(_page_section(index, s, links, demo=demo is not None)
+    sections = "\n".join(_page_section(index, s, links, demo=demo is not None, pg=pg)
                          for s in pg["sections"])
     declared_links = (
         '<p class="page-links">' + " · ".join(

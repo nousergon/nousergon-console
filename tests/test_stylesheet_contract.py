@@ -118,3 +118,13 @@ def test_tables_widen_with_the_window_and_keep_a_visible_scroll_bar():
     for box in (".document.markdown {", ".report {"):
         rule = css.split(box, 1)[1].split("}", 1)[0]
         assert "max-width: none" in rule, box
+
+
+def test_a_wide_table_has_a_sideways_bar_pinned_to_the_window():
+    """The box's own bar is at its bottom edge, off screen part way down a
+    long table (Brian 2026-11-04); console.js pins a synced copy instead."""
+    js = (Path(__file__).resolve().parent.parent / "console/static/console.js").read_text()
+    assert 'dock.className = "scroll-dock"' in js
+    assert '".table-scroll, .md-table, .plan-scroll"' in js
+    rule = re.search(r"\.scroll-dock \{([^}]*)\}", CSS).group(1)
+    assert "position: fixed" in rule and "bottom: 0" in rule and "overflow-x: auto" in rule

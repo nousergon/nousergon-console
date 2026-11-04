@@ -281,7 +281,7 @@ def test_every_internal_link_stays_inside_the_demo(live):
     for path in ("/demo/", "/demo/page/demo-harness", "/demo/page/ops-internal"):
         _, _, body = _get(live + path)
         for url in re.findall(r'(?:href|action)="(/[^"]*)"', body):
-            assert url.startswith("/demo/") or url == "/styles.css", (path, url)
+            assert url.startswith("/demo/") or url.startswith("/styles.css?v="), (path, url)
     _, _, body = _get(live + "/demo/page/demo-harness")
     # Row and tile links point at entity pages, which the demo does not serve:
     # they render as text, not as links that dead-end.

@@ -160,6 +160,80 @@
     if (!document.hidden && due) refresh();
   });
 
+  // Pinned sideways scroll bar -----------------------------------------
+  // A wide table scrolls inside its own box, and that box's scroll bar sits
+  // at the box's bottom edge, which is off screen whenever the reader is
+  // part way down a long table (Brian 2026-11-04). While a wide box fills
+  // the view and its own bar is below the window, a copy of the bar is
+  // pinned to the bottom of the window, at the box's left edge and width,
+  // and the two scroll together. Without script the box's own bar remains.
+  var WIDE = ".table-scroll, .md-table, .plan-scroll";
+  var dock = null, dockInner = null, target = null;
+
+  // Copy one scroll position to the other only when they differ, so the
+  // echo of a copy is a no-op and the two can never chase each other.
+  function copyScroll(from, to) {
+    if (Math.abs(to.scrollLeft - from.scrollLeft) > 1) to.scrollLeft = from.scrollLeft;
+  }
+
+  function ensureDock() {
+    if (dock && document.body.contains(dock)) return;
+    dock = document.createElement("div");
+    dock.className = "scroll-dock";
+    dock.setAttribute("aria-hidden", "true");
+    dockInner = document.createElement("div");
+    dock.appendChild(dockInner);
+    dock.addEventListener("scroll", function () {
+      if (target) copyScroll(dock, target);
+    });
+    document.body.appendChild(dock);
+  }
+
+  function pickTarget() {
+    var best = null, bestSeen = 0, vh = window.innerHeight;
+    var boxes = document.querySelectorAll(WIDE);
+    for (var i = 0; i < boxes.length; i++) {
+      var b = boxes[i];
+      if (b.scrollWidth <= b.clientWidth + 1) continue;
+      var r = b.getBoundingClientRect();
+      // Its own bar is on screen: nothing to pin.
+      if (r.bottom <= vh) continue;
+      var seen = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      if (seen > bestSeen && r.top < vh - 48) { best = b; bestSeen = seen; }
+    }
+    return best;
+  }
+
+  function placeDock() {
+    ensureDock();
+    target = pickTarget();
+    if (!target) { dock.style.display = "none"; return; }
+    var r = target.getBoundingClientRect();
+    dock.style.display = "block";
+    dock.style.left = Math.max(r.left, 0) + "px";
+    dock.style.width = target.clientWidth + "px";
+    dockInner.style.width = target.scrollWidth + "px";
+    copyScroll(target, dock);
+  }
+
+  var placing = false;
+  function schedulePlace() {
+    if (placing) return;
+    placing = true;
+    window.requestAnimationFrame(function () { placing = false; placeDock(); });
+  }
+
+  // Scroll does not bubble; capture sees every box's scroll and the page's.
+  document.addEventListener("scroll", function (ev) {
+    if (ev.target === dock) return;
+    if (target && ev.target === target) copyScroll(target, dock);
+    schedulePlace();
+  }, true);
+  window.addEventListener("resize", schedulePlace);
+  window.addEventListener("load", schedulePlace);
+  setInterval(schedulePlace, 2000);  // catches a body swapped by a refresh
+  schedulePlace();
+
   tickAges();
   setInterval(tickAges, TICK_MS);
   if (refreshing) schedule();

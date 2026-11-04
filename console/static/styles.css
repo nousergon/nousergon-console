@@ -102,6 +102,13 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 .document.markdown h1 { font-size: 1.4rem; }
 .document.markdown h2 { font-size: 1.2rem; }
 .document.markdown h3, .document.markdown h4, .document.markdown h5, .document.markdown h6 { font-size: 1rem; }
+/* The sideways bar pinned to the window's bottom while a wide table's own bar
+   is off screen (console.js, "Pinned sideways scroll bar"). */
+.scroll-dock { display: none; position: fixed; bottom: 0; z-index: 20; overflow-x: auto; overflow-y: hidden; height: 1.1rem; background: var(--off-bg); border-top: 1px solid var(--off); scrollbar-width: auto; scrollbar-color: var(--muted) var(--off-bg); }
+.scroll-dock > div { height: 1px; }
+.scroll-dock::-webkit-scrollbar { height: .8rem; }
+.scroll-dock::-webkit-scrollbar-thumb { background: var(--muted); border-radius: .4rem; border: .2rem solid var(--bg); }
+.scroll-dock::-webkit-scrollbar-track { background: var(--off-bg); }
 .document.markdown :is(h1, h2, h3, h4, h5, h6) { margin: 1.1em 0 .4em; }
 .document.markdown code { font-size: .9em; padding: .05em .3em; border-radius: .2rem; background: rgba(127, 127, 127, .15); }
 .document.markdown pre { overflow-x: auto; padding: .6rem .8rem; border-radius: .25rem; background: rgba(127, 127, 127, .12); }

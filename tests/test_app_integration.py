@@ -6,6 +6,7 @@ index → render produces the addressed entity, list, landing and search views.
 """
 from __future__ import annotations
 
+import re
 import threading
 import urllib.request
 import json
@@ -77,7 +78,7 @@ def test_stylesheet_is_served_with_state_selectors(live_server):
 
 
 def test_html_pages_link_the_served_stylesheet(live_server):
-    assert 'href="/styles.css"' in _get(live_server + "/")
+    assert re.search(r'href="/styles\.css\?v=[0-9a-f]{12}"', _get(live_server + "/"))
 
 
 def test_html_pages_declare_a_device_width_viewport(live_server):
@@ -120,3 +121,15 @@ def test_unknown_route_is_404(live_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         _get(f"{live_server}/widgets/abc")
     assert exc.value.code == 404
+
+
+def test_static_files_are_revalidated_and_linked_by_digest(live_server):
+    """A stylesheet a browser or Cloudflare held past a deploy kept Brian's
+    tables at the old 1216px cap after the fix shipped (2026-11-04)."""
+    with urllib.request.urlopen(live_server + "/styles.css") as resp:
+        assert resp.headers["Cache-Control"] == "no-cache"
+    from console.render import html as render_html
+    url = render_html.asset_url("styles.css")
+    assert url in _get(live_server + "/")
+    with urllib.request.urlopen(live_server + url) as resp:
+        assert ".state-HEALTHY" in resp.read().decode("utf-8")

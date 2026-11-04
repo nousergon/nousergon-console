@@ -89,7 +89,7 @@ def test_every_html_page_defers_the_layer(live):
     with urllib.request.urlopen(live + "/") as resp:
         body = resp.read().decode("utf-8")
     head = body[:body.index("</head>")]
-    assert '<script src="/charts.js" defer></script>' in head
+    assert re.search(r'<script src="/charts\.js\?v=[0-9a-f]{12}" defer></script>', head)
 
 
 def test_a_timeseries_svg_carries_the_points_it_draws_at_full_precision():

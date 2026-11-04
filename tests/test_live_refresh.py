@@ -66,7 +66,7 @@ def test_every_html_page_carries_the_script_and_its_two_metas(live):
     for path in ("/", "/component", "/component/comp-producer", "/search?q=comp"):
         _, body = _get(live + path)
         head = body[:body.index("</head>")]
-        assert '<script src="/console.js" defer></script>' in head, path
+        assert re.search(r'<script src="/console\.js\?v=[0-9a-f]{12}" defer></script>', head), path
         assert '<meta name="console-built" content="2026-11-03T06:00:00+00:00">' in head
         assert '<meta name="console-refresh" content="180">' in head
 

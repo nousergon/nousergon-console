@@ -98,7 +98,7 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
 
 /* A markdown document (`body: markdown`), rendered. Kept to the page's own
    measure; a wide table scrolls inside `.md-table`, never the page. */
-.document.markdown { max-width: 100ch; padding: .25rem 1rem; border: 1px solid var(--off); border-radius: .25rem; overflow-wrap: anywhere; }
+.document.markdown { max-width: none; padding: .25rem 1rem; border: 1px solid var(--off); border-radius: .25rem; overflow-wrap: anywhere; }
 .document.markdown h1 { font-size: 1.4rem; }
 .document.markdown h2 { font-size: 1.2rem; }
 .document.markdown h3, .document.markdown h4, .document.markdown h5, .document.markdown h6 { font-size: 1rem; }
@@ -122,6 +122,18 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
    window instead of below the last row; the header row stays in view. */
 .table-scroll { max-width: 100%; overflow-x: auto; max-height: calc(100vh - 4rem); overflow-y: auto; }
 .table-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+/* The sideways scroll bar is always drawn (Brian 2026-11-04: "I need easy
+   access to the left-right scroll bar"). macOS hides overlay scroll bars
+   until you scroll, so a table that runs off the right edge gave no sign of
+   it and no bar to grab; a styled bar is a classic one, always visible.
+   Reports and markdown documents no longer cap their width, so their tables
+   widen with the window too; their running text keeps the 100ch measure from
+   the `p, li` rule above. */
+.table-scroll, .plan-scroll, .md-table { scrollbar-width: auto; scrollbar-color: var(--muted) var(--off-bg); }
+.table-scroll::-webkit-scrollbar, .plan-scroll::-webkit-scrollbar, .md-table::-webkit-scrollbar { width: .8rem; height: .8rem; }
+.table-scroll::-webkit-scrollbar-thumb, .plan-scroll::-webkit-scrollbar-thumb, .md-table::-webkit-scrollbar-thumb { background: var(--muted); border-radius: .4rem; border: .2rem solid var(--bg); }
+.table-scroll::-webkit-scrollbar-track, .plan-scroll::-webkit-scrollbar-track, .md-table::-webkit-scrollbar-track { background: var(--off-bg); border-radius: .4rem; }
+.document.markdown :is(h1, h2, h3, h4, h5, h6, blockquote, pre) { max-width: 100ch; }
 body { overflow-wrap: break-word; }
 input, select, textarea { max-width: 100%; }
 @media (max-width: 40rem) { body { margin: 1rem auto; } }
@@ -137,7 +149,7 @@ input, select, textarea { max-width: 100%; }
 .schedule-OFF_TRACK { border-left: .35rem solid var(--bad); }
 .schedule-UNREPORTED { border-left: .35rem dashed var(--warn); }
 .schedule-word { padding-left: .3rem; font-weight: 600; }
-.plan-scroll { overflow-x: auto; margin: 1rem 0; }
+.plan-scroll { overflow-x: auto; margin: 1rem 0; max-height: calc(100vh - 4rem); overflow-y: auto; }
 .plan-svg { min-width: 56rem; display: block; }
 .plan-legend { margin: .3rem 0; font-size: .9rem; }
 .plan-key { margin-right: .9rem; white-space: nowrap; }
@@ -168,7 +180,7 @@ svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasha
 
 /* A report feed (`/reports`): the newest report open, the recent window
    collapsed below it, and the older ones as a dated list. */
-.report { max-width: 102ch; margin: 0 0 1rem; }
+.report { max-width: none; margin: 0 0 1rem; }
 .report-latest > h2 { margin-bottom: .2rem; }
 .report-meta { color: var(--muted); font-size: .9rem; margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
 details.report { border-top: 1px solid var(--off); padding-top: .2rem; }

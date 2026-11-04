@@ -1586,6 +1586,10 @@ reports:
 # ("trading today", "cost this month"), optionally linked to its page. They
 # render after the exception counts. The console's own measures (registries,
 # completeness, the transparency gap, every source's read) are on `/health`.
+# `notes`: one short list near the top ("things to know"): the newest batch of
+# rows matching `select` (rows sharing the newest as-of), sorted by `sort`,
+# capped at `limit`, each linked to its `link_field` path and showing `fields`
+# as labelled lines. Older than `stale_hours` and it says so.
 # `tiles`: ungrouped headline numbers, the same shape as a page's tiles.
 home:
   areas:
@@ -1593,6 +1597,11 @@ home:
       title: Reports
       link: /reports
       select: {facets: {pane: reports}}
+  notes:
+    title: Things to know
+    select: {facets: {pane: reports}}
+    fields: [{field: status, label: Status}]
+    limit: 8
   groups:
     - title: Reports today
       link: /reports

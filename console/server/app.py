@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+import re
+from urllib.parse import parse_qsl, urlsplit
 
 from .. import demo as demo_mode
 from ..index import pages, planner, reports
@@ -41,6 +42,26 @@ _STATIC = {
     "/vendor/uplot/uPlot.min.css": ("vendor/uplot/uPlot.min.css", "text/css; charset=utf-8"),
     "/vendor/uplot/LICENSE": ("vendor/uplot/LICENSE", "text/plain; charset=utf-8"),
 }
+
+
+#: `/actions/<issue number>` — the only POST route (`ConsoleHandler.do_POST`).
+_ACTION_POST = re.compile(r"^/actions/(?P<n>[1-9][0-9]{0,8})$")
+#: Who ticked, as the edge proxy (Cloudflare Access) asserts it. Absent on a
+#: loopback console with no proxy, where the comment says so instead.
+_ACTOR_HEADER = "Cf-Access-Authenticated-User-Email"
+
+
+def _same_origin(headers) -> bool:
+    """True when the browser says the POST came from a page on this host."""
+    host = (headers.get("Host") or "").strip().lower()
+    source = headers.get("Origin") or headers.get("Referer") or ""
+    if not host or not source or source == "null":
+        return False
+    return urlsplit(source).netloc.lower() == host
+
+
+def _html_page(page: str) -> str:
+    return render_html.with_scrolling_tables(render_html.with_site_nav(page))
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
@@ -109,6 +130,45 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, body, "application/json; charset=utf-8")
             return
         self._send(200, _html(index, req), "text/html; charset=utf-8")
+
+    def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
+        """The console's ONE write: tick or untick an action
+        (`index/actions.py`). Every other path answers 405, so no other view
+        can grow a write by accident.
+
+        Same-origin is required: the browser's ``Origin`` (or, failing that,
+        ``Referer``) must name this request's own ``Host``, so a page on
+        another site cannot post a tick through the reader's signed-in
+        session. The edge proxy's identity header names who ticked."""
+        parts = urlsplit(self.path)
+        m = _ACTION_POST.match(parts.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(min(length, 4096)).decode("utf-8", "replace") if length else ""
+        if m is None:
+            self._send(405, "<h1>405</h1><p>Only an action tick is writable.</p>",
+                       "text/html; charset=utf-8")
+            return
+        if not _same_origin(self.headers):
+            self._send(403, "<h1>403</h1><p>A tick must come from this console's own page.</p>",
+                       "text/html; charset=utf-8")
+            return
+        form = dict(parse_qsl(raw, keep_blank_values=True))
+        done = form.get("done", "1") != "0"
+        actor = (self.headers.get(_ACTOR_HEADER) or "").strip() or None
+        index = self.server.index
+        from ..index import actions
+
+        number = int(m.group("n"))
+        try:
+            act = actions.tick(index, number, done, actor)
+        except actions.TickRefused as exc:
+            self._send(exc.status, _html_page(render_html.actions_page(
+                index, notice=f"Not saved: {exc}")), "text/html; charset=utf-8")
+            return
+        self.send_response(303)
+        self.send_header("Location", f"/actions#a{act.number}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _demo(self, index: Index, path: str, query: str) -> None:
         """A `/demo/...` request (alpha-engine-config-I13023; `console/demo.py`).
@@ -254,6 +314,8 @@ def _page(index: Index, req) -> str:
         return render_html.reports_page(index, req.feed_id)
     if req.view == "exceptions":
         return render_html.exceptions_page(index)
+    if req.view == "actions":
+        return render_html.actions_page(index)
     if req.view == "page":
         return render_html.page_page(index, req.page_id or "", dict(req.params))
     if req.view == "registry":

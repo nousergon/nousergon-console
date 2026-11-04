@@ -6,6 +6,8 @@
 
 **A read-only fleet index that persists nothing and reports what it cannot see.**
 
+(One declared exception to read-only: the optional `/actions` page can tick an action, which writes a label and a comment to that action's own issue. The issue is the store; the console still keeps nothing.)
+
 Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answer to the questions its author had at authoring time — but monitoring is the business of being asked questions nobody anticipated: *why is this stale · what else touched that artifact · what did this cycle cost · which of these has never run · who breaks if this one does.* Each of those is a traversal, not a tile.
 
 This is an **index over a typed entity graph** instead. Point it at the artifacts you already have; it builds a catalog you can search, link to, and walk.

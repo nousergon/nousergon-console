@@ -35,6 +35,7 @@ from . import demo as demo_mode
 from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
+from .index import actions as your_actions
 from .index import planner as delivery_planner
 from .index import citations as citation_links
 from .index import home as declared_home
@@ -226,6 +227,13 @@ def build_index(config: dict[str, Any]) -> Index:
     # Same posture for the delivery planner (alpha-engine-config-I12152): a
     # project or milestone this build cannot evaluate fails the build by name.
     declared_plan = delivery_planner.parse(config.get("planner"))
+    # And for Your actions (`/actions`): a block this build cannot honour is a
+    # FAILED source naming the key, never a page that silently lists nothing.
+    try:
+        declared_actions = your_actions.parse(config.get("actions"))
+        actions_error = None
+    except your_actions.ActionsConfigError as exc:
+        declared_actions, actions_error = None, exc
     # And for report feeds (`/reports`): a feed whose selector this build
     # cannot evaluate fails the build by name, never renders an empty page.
     declared_feeds = report_feeds.parse(config.get("reports"))
@@ -323,6 +331,17 @@ def build_index(config: dict[str, Any]) -> Index:
              "_name": "planner-issues"},
         )
         index.add_result(result, elapsed_seconds=elapsed)
+
+    # Your actions: open issues carrying a declared label, read from the
+    # tracker on every build (`index/actions.py`). Nothing is kept between
+    # builds; a failed read is a FAILED source with its reason.
+    if actions_error is not None:
+        index.add_result(_config_error_result(your_actions.SOURCE_NAME,
+                                              ConfigError(str(actions_error))))
+    elif declared_actions is not None:
+        actions_listing, actions_result = your_actions.read(declared_actions, now_iso())
+        index.add_result(actions_result)
+        your_actions.attach(index, actions_listing)
 
     # §2.6: every component's own descriptor said where its facts live. Walking
     # those bindings is what makes onboarding cost ONE FILE — a component whose

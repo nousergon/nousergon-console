@@ -23,6 +23,10 @@ Routes:
                                 report in full, the recent window below it,
                                 every older report by date.
 - ``/reports/<feed>``         — one declared feed, the same view.
+- ``/actions``                — Your actions: open issues carrying a declared
+                                label, one checkbox each. The page's one
+                                write is a POST that ticks an action on its
+                                issue (`index/actions.py`).
 - ``/exceptions``             — every not-HEALTHY row, P0 first, then
                                 untriaged, then P1-P3 (CN-4.3 `.2`).
 - ``/page/<id>``              — one declared page: tiles, tables, charts,
@@ -132,6 +136,9 @@ def resolve(path: str, query_string: str = "") -> Resolved:
         if len(segments) == 2:
             return Resolved(view="reports", feed_id=segments[1])
         raise UnknownRoute(f"no reports view at {path!r}")
+
+    if segments[0] == "actions" and len(segments) == 1:
+        return Resolved(view="actions")
 
     if segments[0] == "exceptions" and len(segments) == 1:
         return Resolved(view="exceptions")

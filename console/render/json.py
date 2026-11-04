@@ -167,6 +167,12 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = {"schema_version": SCHEMA_VERSION, "view": "planner-project",
                "question": planner.PLANNER_QUESTION,
                "states": list(planner.SCHEDULE_STATES), "project": found}
+    elif req.view == "actions":
+        from ..index import actions
+
+        doc = {"schema_version": SCHEMA_VERSION, "view": "actions",
+               "question": actions.ACTIONS_QUESTION,
+               **actions.as_json(actions.listing(index))}
     elif req.view == "exceptions":
         from ..index import pages
 

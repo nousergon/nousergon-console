@@ -2234,6 +2234,78 @@ def _since_yesterday(delta: dict | None) -> str:
                if cleared else ""))
 
 
+def _action_row(a, decl, writable: bool) -> str:
+    """One action: the tick control, the title linking its issue, the ask's
+    first paragraph, and how long it has waited. The tick is a form POST, so
+    it works with no script; the button is the checkbox."""
+    box = "☑" if a.done else "☐"
+    if writable:
+        control = (f'<form method="post" action="/actions/{a.number}" class="action-tick">'
+                   f'<input type="hidden" name="done" value="{"0" if a.done else "1"}">'
+                   f'<button type="submit" aria-pressed="{"true" if a.done else "false"}" '
+                   f'title="{"Untick: not done yet" if a.done else "Tick when you have done this"}">'
+                   f'{box}</button></form>')
+    else:
+        control = f'<span class="action-tick" aria-hidden="true">{box}</span>'
+    status = (f'<span class="chip state-healthy">{esc(decl.done_text)}</span>' if a.done
+              else "")
+    return (f'<li class="action{" action-done" if a.done else ""}" id="a{a.number}">{control}'
+            f'<div class="action-body"><a href="{esc(a.url)}">{esc(a.title)}</a> '
+            f'<span class="muted">{esc(a.ref)} · opened {as_of_html(a.created_at)}</span>'
+            + (f"<p>{esc(a.summary)}</p>" if a.summary else "")
+            + (f"<p>{status}</p>" if status else "")
+            + "</div></li>")
+
+
+def actions_page(index: Index, notice: str | None = None) -> str:
+    """Your actions (`index/actions.py`): every open issue carrying a declared
+    label, not yet done first, oldest first. A tick writes the done label to
+    the issue; somebody then checks the work and closes it."""
+    from ..index import actions
+
+    found = actions.listing(index)
+    if found is None:
+        body = ('<p class="absent">no actions are declared — the `actions:` '
+                'config block is empty</p>')
+        title = "Your actions"
+    else:
+        decl = found.declaration
+        title = decl.title
+        todo = [a for a in found.actions if not a.done]
+        done = [a for a in found.actions if a.done]
+        if found.error:
+            body = (f'<p class="absent">could not read the actions from '
+                    f'{esc(decl.org)}/{esc(decl.repo)}: {esc(found.error)}</p>')
+        else:
+            where = " or ".join(f"<code>{esc(lab)}</code>" for lab in decl.labels)
+            body = (f'<p>{len(todo)} to do · {len(done)} done, waiting for a check · '
+                    f'open issues labelled {where} in '
+                    f'<a href="https://github.com/{esc(decl.org)}/{esc(decl.repo)}/issues">'
+                    f'{esc(decl.org)}/{esc(decl.repo)}</a></p>')
+            if not decl.writable:
+                body += ('<p class="absent">ticking is off on this console (no '
+                         'write_token_command) — tick on the issue instead</p>')
+            if todo:
+                body += ('<h2>To do</h2><ul class="actions">'
+                         + "".join(_action_row(a, decl, decl.writable) for a in todo) + "</ul>")
+            else:
+                body += '<p class="absent">Nothing to do.</p>'
+            if done:
+                body += ('<h2>Done, waiting for a check</h2><ul class="actions">'
+                         + "".join(_action_row(a, decl, decl.writable) for a in done) + "</ul>")
+    note = f'<p class="notice">{esc(notice)}</p>' if notice else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(title)}</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
+<h1>{esc(title)}</h1>
+<p class="pane-question">{esc(actions.ACTIONS_QUESTION)}</p>
+{note}
+{index_freshness(index)}
+{body}
+</body></html>"""
+
+
 def exceptions_page(index: Index) -> str:
     """Every not-HEALTHY row, one tier per priority: P0, untriaged, P1-P3
     (CN-4.3 `.2`, Brian 2026-10-28 18:13Z). Within a tier, worst state first,
@@ -2573,13 +2645,14 @@ def with_demo_nav(page: str, demo) -> str:
 
 
 def with_site_nav(page: str) -> str:
-    """Prepend the one site menu to a rendered page: home · index ·
-    exceptions · planner · reports · search. Applied once, at the server, so
+    """Prepend the one site menu to a rendered page: home · your actions ·
+    index · exceptions · planner · reports · search. Applied once, at the server, so
     no page can ship without it. The menu stays this short however large the
     console grows: `index` is the table of contents of every page (Brian
     2026-11-04), and `exceptions` is here because the list was reachable only
     from links inside home's exceptions section (Brian 2026-11-03)."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
+           '<a href="/actions">your actions</a> · '
            '<a href="/index">index</a> · '
            '<a href="/exceptions">exceptions</a> · '
            '<a href="/planner">planner</a> · '

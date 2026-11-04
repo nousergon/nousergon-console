@@ -1213,7 +1213,7 @@ def document_body(doc: dict, links: Citations | None = None) -> str:
     return f'{note}<pre class="document">{esc(doc["text"])}</pre>'
 
 
-def index_freshness(index: Index, now: datetime | None = None) -> str:
+def index_freshness(index: Index, now: datetime | None = None, detail: bool = False) -> str:
     """The index's own as-of, rendered (§5.9).
 
     It is one fact about one index, so it renders at surface level rather than
@@ -1226,6 +1226,8 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
     if not info.built_at:
         return ('<p class="absent">index build time unknown — this surface '
                 "cannot say how current it is (§5.9)</p>")
+    if not detail:
+        return _freshness_line(info, now)
     sources = ", ".join(
         f"{a.name} {a.status}" for a in info.adapters
     ) or "no sources"
@@ -1256,6 +1258,35 @@ def index_freshness(index: Index, now: datetime | None = None) -> str:
         f"{esc(cadence)} · {esc(info.staleness_basis())} · "
         f"sources: {esc(sources)}</p>"
     )
+
+
+def _freshness_line(info, now: datetime) -> str:
+    """The one-line form every page carries (Brian 2026-11-04: the full
+    paragraph, every source and its status, was "essentially wasted space").
+    It says how old the data is, why when it is stale, and names only the
+    sources that failed; the full read of every source is on `/health`."""
+    built = as_of_html(info.built_at, now)
+    failed = sorted(a.name for a in info.adapters
+                    if str(a.status).upper().endswith("FAILED"))
+    failed_txt = (f' · {len(failed)} source{"s" if len(failed) != 1 else ""} '
+                  f'failed: {esc(", ".join(failed))}' if failed else "")
+    more = ' · <a href="/health">details</a>'
+    if not info.is_stale(now):
+        # "Not measured" never reads as fresh (principles.md §2.7).
+        unknown = (" · freshness not computable (no source declared a cadence)"
+                   if info.shortest_cadence_seconds is None else "")
+        return f'<p class="index-fresh">index built {built}{unknown}{failed_txt}{more}</p>'
+    if info.warm_start_from:
+        why = (f"the console restarted and is reloading, which takes about "
+               f"{max(1, round((info.build_seconds or 300) / 60))} min")
+    elif info.bootstrap:
+        why = "the console is starting up"
+    elif info.stale_since:
+        why = "the last refresh failed"
+    else:
+        why = "it has not refreshed on time"
+    return (f'<p class="state-MISSED">SURFACE STALE — index built {built}; '
+            f'{why}{failed_txt}{more}</p>')
 
 
 #: The order the landing view's exception groups render in: the states that
@@ -1508,7 +1539,7 @@ def health_page(index: Index) -> str:
 <title>system health</title></head><body>
 <h1>system health</h1>
 <p class="list-summary">The detail behind <a href="/">home</a>: where the console's data comes from, how complete it is, and what it cannot see. Area health, exception counts and the decision queue are on home; every row is on <a href="/exceptions">exceptions</a>; every page is on the <a href="/index">site index</a>.</p>
-{index_freshness(index)}
+{index_freshness(index, detail=True)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>
 {_collapsed_milestones(model)}

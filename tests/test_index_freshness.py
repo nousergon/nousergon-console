@@ -173,7 +173,7 @@ def test_build_seconds_and_overrun_reach_both_representations():
     doc = json_freshness(idx, T0)
     assert doc["build_seconds"] == 93.5
     assert doc["cadence_overrun"] is True
-    html = html_freshness(idx, T0)
+    html = html_freshness(idx, T0, detail=True)
     assert "last build 93.5s" in html
     assert "exceeds cadence" in html
 
@@ -355,7 +355,7 @@ def test_the_refresh_cadence_is_itself_rendered():
     cannot be checked."""
     sup = Supervisor(lambda: _index(cadence=3600), refresh_seconds=45,
                      clock=_clock([0]))
-    assert "rebuilds every 45s" in html_freshness(sup.current, T0)
+    assert "rebuilds every 45s" in html_freshness(sup.current, T0, detail=True)
 
 
 def test_the_default_refresh_is_declared_in_config():
@@ -500,3 +500,21 @@ def test_cadence_overrun_is_true_and_the_loop_skips_forward_when_the_build_is_sl
     assert sup.current.build_info.cadence_overrun is True
     assert sup.current.build_info.build_seconds == pytest.approx(140.0)
     assert sup.current.build_info.refresh_seconds == 60.0
+
+
+def test_every_page_carries_one_short_line_not_every_source():
+    """Brian 2026-11-04: the paragraph listing every source was "essentially
+    wasted space". Pages name only failed sources; /health has the full read."""
+    idx = Index()
+    idx.add_result(AdapterResult(name="ok-one", status=AdapterStatus.OK,
+                                 fetched_at=T0.isoformat()))
+    idx.add_result(AdapterResult(name="dead", status=AdapterStatus.FAILED,
+                                 fetched_at=T0.isoformat(), unavailable=("source",)))
+    idx.build_info = replace(idx.build_info, built_at=T0.isoformat(),
+                             stale_since=T0.isoformat(), bootstrap=True,
+                             warm_start_from=T0.isoformat(), build_seconds=342.0)
+    line = html_freshness(idx, T0)
+    assert "ok-one" not in line and "dead" in line
+    assert "restarted and is reloading" in line and "about 6 min" in line
+    assert '<a href="/health">details</a>' in line
+    assert "ok-one ok" in html_freshness(idx, T0, detail=True)

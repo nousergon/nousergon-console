@@ -255,3 +255,39 @@ def test_an_unlisted_number_is_404_and_says_so(live):
     port, host, _ = live
     status, _, body = _post(port, "/actions/77", headers={"Origin": f"http://127.0.0.1:{port}"})
     assert status == 404 and "not on the actions list" in body and host.calls == []
+
+
+# ----------------------------------------------------------------- timing ---
+
+@pytest.mark.parametrize("body,expected", [
+    ("Do it.\n\nDue: 2026-11-06\nWhen: after the 16:30 ET close", ("2026-11-06", "due", "after the 16:30 ET close")),
+    ("**Due:** 2026-11-07", ("2026-11-07", "due", None)),
+    ("Default: option A after 2026-11-10", ("2026-11-10", "default applies", None)),
+    ("Re-exam: 2026-12-01\n- **Window:** weekend only", ("2026-12-01", "re-exam", "weekend only")),
+    ("nothing declared", (None, None, None)),
+])
+def test_due_and_when_come_from_the_issue_body(body, expected):
+    assert actions.timing(body) == expected
+
+
+def test_a_milestone_date_is_the_fallback():
+    assert actions.timing("x", {"due_on": "2026-11-20T08:00:00Z"}) == ("2026-11-20", "milestone", None)
+
+
+def test_soonest_due_first_then_undated_and_the_table_shows_both_columns():
+    idx, _ = _index(issues=[
+        _issue(5, "Undated", created="2026-10-01T00:00:00Z"),
+        _issue(6, "Later", body="x\n\nDue: 2099-01-09"),
+        _issue(7, "Sooner", body="x\n\nDue: 2099-01-02\nWhen: outside 09:00-16:30 ET"),
+    ])
+    assert [a.number for a in actions.listing(idx).actions] == [7, 6, 5]
+    html = _html(idx, resolve("/actions"))
+    assert "<th>due</th>" in html and "<th>when it can happen</th>" in html
+    assert "outside 09:00-16:30 ET" in html and "2099-01-02" in html
+    assert "any time" in html and "no date" in html
+    # The tick is a cell in the same row as the ask, never a line above it.
+    row = html[html.index('<tr id="a7"'):]
+    row = row[:row.index("</tr>")]
+    assert 'action="/actions/7"' in row and "Sooner" in row
+    doc = render_json.payload(idx, resolve("/actions"))
+    assert doc["actions"][0]["due"] == "2099-01-02" and doc["actions"][0]["when"].startswith("outside")

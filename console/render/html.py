@@ -2234,27 +2234,58 @@ def _since_yesterday(delta: dict | None) -> str:
                if cleared else ""))
 
 
-def _action_row(a, decl, writable: bool) -> str:
-    """One action: the tick control, the title linking its issue, the ask's
-    first paragraph, and how long it has waited. The tick is a form POST, so
-    it works with no script; the button is the checkbox."""
+def _action_due(a, today: str) -> str:
+    """The due cell: the date, how far away it is, and where it came from."""
+    if not a.due:
+        return '<em class="absent">no date</em>'
+    try:
+        days = (datetime.fromisoformat(a.due).date()
+                - datetime.fromisoformat(today).date()).days
+    except ValueError:
+        return esc(a.due)
+    rel = ("today" if days == 0 else "tomorrow" if days == 1
+           else f"in {days}d" if days > 1 else f"{-days}d overdue")
+    cls = "state-failed" if days < 0 else "state-degraded" if days <= 1 else ""
+    src = "" if a.due_source == "due" else f'<br><span class="muted">{esc(a.due_source)}</span>'
+    return (f'<span class="chip {cls}">{esc(rel)}</span> {esc(a.due)}{src}')
+
+
+_ANY_TIME = '<em class="absent">any time</em>'
+
+
+def _action_row(a, decl, writable: bool, today: str) -> str:
+    """One action as a table row: the tick, the ask (title linking its issue,
+    then its first paragraph), when it is due, any bound on when it may
+    happen, and how long it has waited. The tick is a form POST, so it works
+    with no script; the button is the checkbox."""
     box = "☑" if a.done else "☐"
     if writable:
         control = (f'<form method="post" action="/actions/{a.number}" class="action-tick">'
                    f'<input type="hidden" name="done" value="{"0" if a.done else "1"}">'
                    f'<button type="submit" aria-pressed="{"true" if a.done else "false"}" '
+                   f'aria-label="{"Untick" if a.done else "Tick"} {esc(a.ref)}" '
                    f'title="{"Untick: not done yet" if a.done else "Tick when you have done this"}">'
                    f'{box}</button></form>')
     else:
         control = f'<span class="action-tick" aria-hidden="true">{box}</span>'
-    status = (f'<span class="chip state-healthy">{esc(decl.done_text)}</span>' if a.done
-              else "")
-    return (f'<li class="action{" action-done" if a.done else ""}" id="a{a.number}">{control}'
-            f'<div class="action-body"><a href="{esc(a.url)}">{esc(a.title)}</a> '
-            f'<span class="muted">{esc(a.ref)} · opened {as_of_html(a.created_at)}</span>'
-            + (f"<p>{esc(a.summary)}</p>" if a.summary else "")
-            + (f"<p>{status}</p>" if status else "")
-            + "</div></li>")
+    status = (f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
+              if a.done else "")
+    return (f'<tr id="a{a.number}" class="action{" action-done" if a.done else ""}">'
+            f'<td class="action-cell">{control}</td>'
+            f'<td><a href="{esc(a.url)}">{esc(a.title)}</a>'
+            + (f'<div class="muted">{esc(a.summary)}</div>' if a.summary else "")
+            + status + "</td>"
+            f"<td>{_action_due(a, today)}</td>"
+            f"<td>{esc(a.when) if a.when else _ANY_TIME}</td>"
+            f'<td><a href="{esc(a.url)}">{esc(a.ref)}</a><br>'
+            f'<span class="muted">{as_of_html(a.created_at)}</span></td></tr>')
+
+
+def _actions_table(rows, decl, today: str) -> str:
+    return ('<table class="actions"><thead><tr><th aria-label="done"></th><th>action</th>'
+            '<th>due</th><th>when it can happen</th><th>issue · opened</th></tr></thead><tbody>'
+            + "".join(_action_row(a, decl, decl.writable, today) for a in rows)
+            + "</tbody></table>")
 
 
 def actions_page(index: Index, notice: str | None = None) -> str:
@@ -2285,14 +2316,13 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             if not decl.writable:
                 body += ('<p class="absent">ticking is off on this console (no '
                          'write_token_command) — tick on the issue instead</p>')
+            today = render_now().date().isoformat()
             if todo:
-                body += ('<h2>To do</h2><ul class="actions">'
-                         + "".join(_action_row(a, decl, decl.writable) for a in todo) + "</ul>")
+                body += "<h2>To do</h2>" + _actions_table(todo, decl, today)
             else:
                 body += '<p class="absent">Nothing to do.</p>'
             if done:
-                body += ('<h2>Done, waiting for a check</h2><ul class="actions">'
-                         + "".join(_action_row(a, decl, decl.writable) for a in done) + "</ul>")
+                body += "<h2>Done, waiting for a check</h2>" + _actions_table(done, decl, today)
     note = f'<p class="notice">{esc(notice)}</p>' if notice else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2301,7 +2331,6 @@ def actions_page(index: Index, notice: str | None = None) -> str:
 <h1>{esc(title)}</h1>
 <p class="pane-question">{esc(actions.ACTIONS_QUESTION)}</p>
 {note}
-{index_freshness(index)}
 {body}
 </body></html>"""
 

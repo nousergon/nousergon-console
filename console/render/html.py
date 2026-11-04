@@ -1338,6 +1338,81 @@ def registry_link_items(links: list[dict]) -> str:
 
 
 def landing_page(index: Index) -> str:
+    """Home: one screen that answers what Brian asks (Brian 2026-11-04, "the
+    current home screen is extremely uninformative").
+
+    In order (Brian's 2026-10-28 ruling): whether the data is current, in
+    plain words; one health tile per area; the exception counts by priority;
+    then the declared headline groups, each a question ("trading today"). Everything else the console
+    measures about itself (registries, completeness, the transparency gap,
+    every source's read) is on `/health`, linked at the foot.
+    """
+    from ..index import home
+
+    model = index.landing_model()
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Nous Ergon console</title></head><body>
+<h1>Nous Ergon console</h1>
+{home_status(index)}
+{health_strip(home.health(index, model.exceptions))}
+{exception_summary(model, index.exceptions_trend(), brief=True)}
+{headline_groups(home.headline_groups(index))}
+{headline_tiles(home.headline(index))}
+<form action="/search" method="get"><label for="global-search">search</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
+<p class="list-summary"><a href="/index">every page</a> · <a href="/health">system health details</a> (sources, registries, completeness)</p>
+</body></html>"""
+
+
+def _minutes(seconds: float | None) -> str:
+    if not seconds:
+        return "a few minutes"
+    m = max(1, round(seconds / 60))
+    return f"about {m} minute{'s' if m != 1 else ''}"
+
+
+def home_status(index: Index, now: datetime | None = None) -> str:
+    """Whether home's numbers are current, in one plain sentence."""
+    info = index.build_info
+    now = now or datetime.now(timezone.utc)
+    failed = sorted(a.name for a in info.adapters
+                    if str(a.status).upper().endswith("FAILED"))
+    failed_txt = (f' {len(failed)} source{"s" if len(failed) != 1 else ""} did not load: '
+                  f'{esc(", ".join(failed))}.' if failed else "")
+    if info.warm_start_from:
+        return (f'<p class="state-MISSED">Restarted {as_of_html(info.stale_since, now)}. '
+                f'Showing the data from {as_of_html(info.warm_start_from, now)}, from before '
+                f'the restart, while it reloads ({_minutes(info.build_seconds)}).</p>')
+    if info.bootstrap:
+        return ('<p class="state-MISSED">Starting up: the console is loading its data, '
+                'which takes a few minutes. Reload this page shortly.</p>')
+    if not info.built_at:
+        return '<p class="absent">The console cannot say how current this data is.</p>'
+    if info.stale_since:
+        return (f'<p class="state-MISSED">Data from {as_of_html(info.built_at, now)}. '
+                f'The last refresh failed ({esc(info.last_error or "no reason given")}); '
+                f'see <a href="/health">system health</a>.{failed_txt}</p>')
+    if info.is_stale(now):
+        return (f'<p class="state-MISSED">Data from {as_of_html(info.built_at, now)}, '
+                f'older than it should be; see <a href="/health">system health</a>.'
+                f'{failed_txt}</p>')
+    every = (f", refreshed every {_minutes(info.refresh_seconds)[6:]}"
+             if info.refresh_seconds else "")
+    return (f'<p class="index-fresh">Data as of {as_of_html(info.built_at, now)}{every}.'
+            f'{failed_txt}</p>')
+
+
+def headline_groups(groups: list[dict]) -> str:
+    """The declared headline groups, each a titled row of tiles."""
+    out = []
+    for g in groups:
+        title = (f'<a href="{esc(g["link"])}">{esc(g["title"])}</a>' if g.get("link")
+                 else esc(g["title"]))
+        out.append(f'<section class="page-section"><h2>{title}</h2><div class="tiles">'
+                   + "".join(_page_tile(t) for t in g["tiles"]) + "</div></section>")
+    return "".join(out)
+
+
+def health_page(index: Index) -> str:
     """The exception-first default view (§4.3): what is not HEALTHY, with
     state and age · the transparency-gap count · what is waiting on Brian
     (the decision queue) · the completeness ratio. No aggregate green light.
@@ -1394,11 +1469,11 @@ def landing_page(index: Index) -> str:
     )
     n = model.numbers
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>fleet</title></head><body>
-<h1>fleet</h1>
+<title>system health</title></head><body>
+<h1>system health</h1>
+<p class="list-summary">The console's own measures: where its data comes from, how complete it is, and what it cannot see. The one-screen summary is <a href="/">home</a>.</p>
 {health_strip(home.health(index, exceptions))}
 {exception_summary(model, index.exceptions_trend())}
-{headline_tiles(home.headline(index))}
 {dashboard_links(model.dashboards)}
 <form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
 {index_freshness(index)}
@@ -1422,6 +1497,7 @@ _DASHBOARDS_PANE_QUESTION = (
 #: is (title, url, what it answers). Listed first on the site index.
 _BUILT_IN_PAGES = (
     ("home", "/", "is the fleet healthy, in one screen"),
+    ("system health", "/health", "where the console's data comes from, and what it cannot see"),
     ("exceptions", "/exceptions", "every row that is not healthy, by priority"),
     ("planner", "/planner", "milestones and projects on a calendar"),
     ("reports", "/reports", "the daily, weekly and other report feeds"),
@@ -2041,7 +2117,7 @@ def exception_trend(points, now_total: int | None = None,
             + f'</svg><br><small class="ts-summary">{esc(text)}</small></p>')
 
 
-def exception_summary(model, trend=None) -> str:
+def exception_summary(model, trend=None, brief: bool = False) -> str:
     """Home's second element: counts of everything not HEALTHY by state, each
     linked to the full list, plus the decision queue, the transparency gap
     and population completeness. Counts only — the rows are on `/exceptions`."""
@@ -2074,8 +2150,10 @@ def exception_summary(model, trend=None) -> str:
             + (f'<p class="list-summary">by priority: {by_tier}</p>' if view_rows else "")
             + exception_trend(trend, len(view_rows), tiers.get("untriaged", 0))
             + f'<p><a href="/exceptions">{len(view_rows)} not healthy, by priority</a> · '
-            f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a> · '
-            f'{esc(gap_txt)} · population completeness {esc(comp_txt)}</p></section>')
+            f'<a href="/exceptions#decision-queue">{len(model.queue)} waiting on Brian</a>'
+            + ("" if brief else
+               f' · {esc(gap_txt)} · population completeness {esc(comp_txt)}')
+            + '</p></section>')
 
 
 def headline_tiles(tiles: list[dict]) -> str:

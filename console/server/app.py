@@ -233,6 +233,8 @@ def _page(index: Index, req) -> str:
         return render_html.landing_page(index)
     if req.view == "dashboards":
         return render_html.dashboards_page(index, req.query)
+    if req.view == "health":
+        return render_html.health_page(index)
     if req.view == "list":
         return render_html.list_page(index, req.kind, req.facets, req.page,
                                      all_runs=req.all_runs, days=req.days,

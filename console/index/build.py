@@ -94,6 +94,10 @@ class BuildInfo:
     #: in flight" from "this is genuinely the fleet's state" or "something
     #: broke" (alpha-engine-config-I9052 deliverable 2).
     bootstrap: bool = False
+    #: Set when this index was loaded from the last-good cache at a restart
+    #: (`warm_start.py`): the `built_at` of the build it came from. Always
+    #: paired with `bootstrap=True` and `stale_since`, never served as current.
+    warm_start_from: str | None = None
 
     @property
     def cadence_overrun(self) -> bool:
@@ -189,8 +193,13 @@ class Supervisor:
         defer_first_build: bool = False,
         monotonic: Callable[[], float] | None = None,
         wait: Callable[[float], bool] | None = None,
+        warm_start_path: str | None = None,
     ) -> None:
         self._builder = builder
+        # Where the last good index is kept across restarts (warm_start.py);
+        # None keeps the old behaviour (an empty index until the first build).
+        self._warm_start_path = warm_start_path
+        self._digest: str | None = None
         self._refresh_seconds = refresh_seconds
         self._clock = clock or _utc_now
         # Injectable so the fixed-period scheduling in `_loop` is testable
@@ -227,9 +236,12 @@ class Supervisor:
             # "not built yet" rather than refusing connections — the identical
             # argument that comment makes about a FAILED first build, applied to
             # a SLOW one.
-            self._current = self._blank_stale(
-                RuntimeError("first index build has not completed yet"),
-                bootstrap=True,
+            self._current = (
+                self._warm_seed()
+                or self._blank_stale(
+                    RuntimeError("first index build has not completed yet"),
+                    bootstrap=True,
+                )
             )
             return
         started = self._monotonic()
@@ -252,6 +264,38 @@ class Supervisor:
         _stamp(self._current, self._clock, refresh_seconds,
                build_seconds=self._monotonic() - started)
         self._built_once = True
+
+    def _code_digest(self) -> str:
+        if self._digest is None:
+            from . import warm_start
+            self._digest = warm_start.code_digest()
+        return self._digest
+
+    def _warm_seed(self):
+        """The last good index from before the restart, marked, or None."""
+        if not self._warm_start_path:
+            return None
+        from . import warm_start
+
+        index = warm_start.load(self._warm_start_path, self._code_digest())
+        if index is None:
+            return None
+        built = index.build_info.built_at
+        index.build_info = replace(
+            index.build_info,
+            bootstrap=True,
+            warm_start_from=built,
+        )
+        _mark_stale(index, self._clock, RuntimeError(
+            "first index build has not completed yet; showing the index "
+            f"built {built}, from before the restart"))
+        return index
+
+    def _save_warm(self, index) -> None:
+        if not self._warm_start_path:
+            return
+        from . import warm_start
+        warm_start.save(index, self._warm_start_path, self._code_digest())
 
     def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False):
         """An empty index carrying the reason it is empty.
@@ -304,6 +348,7 @@ class Supervisor:
         with self._lock:
             self._current = fresh
             self._built_once = True
+        self._save_warm(fresh)
         return True
 
     def start(self) -> None:
@@ -365,6 +410,8 @@ def _stamp(index, clock, refresh_seconds: float,
         build_seconds=build_seconds,
         stale_since=None,
         last_error=None,
+        bootstrap=False,
+        warm_start_from=None,
     )
 
 

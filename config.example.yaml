@@ -1582,13 +1582,22 @@ reports:
 # many rows are not healthy out of how many, and its stalest as-of. A row no
 # area claims is counted in an `unassigned` tile, never dropped. Nothing rolls
 # several areas into one verdict.
-# `tiles`: headline numbers, the same shape as a page's tiles.
+# `groups`: headline tiles in titled rows, each answering one question
+# ("trading today", "cost this month"), optionally linked to its page. They
+# render after the exception counts. The console's own measures (registries,
+# completeness, the transparency gap, every source's read) are on `/health`.
+# `tiles`: ungrouped headline numbers, the same shape as a page's tiles.
 home:
   areas:
     - id: reports
       title: Reports
       link: /reports
       select: {facets: {pane: reports}}
+  groups:
+    - title: Reports today
+      link: /reports
+      tiles:
+        - {label: Daily report, field: status, select: {facets: {pane: reports}}}
   tiles: []
 
 # ── Declared pages (`/page/<id>`) ──────────────────────────────────────────

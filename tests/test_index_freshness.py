@@ -87,9 +87,12 @@ def test_every_page_carries_it_not_only_the_landing_view():
     idx = _index(cadence=3600)
     idx.build_info = BuildInfo(built_at=T0.isoformat(),
                                adapters=idx.build_info.adapters, refresh_seconds=60)
-    for html in (landing_page(idx), list_page(idx, Kind.COMPONENT, {}),
+    for html in (list_page(idx, Kind.COMPONENT, {}),
                  entity_page(idx, idx.entity("c"))):
         assert "index built" in html
+    # Home says it in plain words (2026-11-04).
+    page = landing_page(idx)
+    assert "Data as of" in page or "Data from" in page
 
 
 def test_an_index_older_than_the_shortest_cadence_renders_the_SURFACE_stale():

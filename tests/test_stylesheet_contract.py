@@ -105,3 +105,16 @@ def test_no_colour_literal_outside_the_token_blocks():
     read at 2.2-2.5:1 on the dark background."""
     rest = re.sub(r":root\s*\{[^}]*\}", "", CSS)
     assert not re.findall(r"#[0-9a-fA-F]{3,8}\b", rest)
+
+
+def test_tables_widen_with_the_window_and_keep_a_visible_scroll_bar():
+    """Brian 2026-11-04: widening the browser shows more columns, and the
+    sideways scroll bar is on screen and always visible, on every page."""
+    import re
+    from pathlib import Path
+    css = (Path(__file__).resolve().parents[1] / "console" / "static" / "styles.css").read_text()
+    assert re.search(r"\.table-scroll \{[^}]*max-height: calc\(100vh", css)
+    assert ".table-scroll::-webkit-scrollbar," in css
+    for box in (".document.markdown {", ".report {"):
+        rule = css.split(box, 1)[1].split("}", 1)[0]
+        assert "max-width: none" in rule, box

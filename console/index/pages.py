@@ -25,6 +25,14 @@ and exception list to rows (and points) inside the window; each declared
 variable is a facet name, and `?<facet>=<value>` narrows every section whose
 rows carry that facet. A pasted URL reproduces the page on a cold load.
 
+**A table may be sorted by its reader** (Brian, 2026-11-04: "make this
+running list sortable by merge type, repo, and date"). A table that declares
+`sortable: [field, ...]` takes `?sort=<field>` or `?sort=-<field>` from the
+URL — still the whole state — for any field it lists, and its column header
+links to the other direction. A `sort` naming a field the table does not list
+is ignored for that table, never an error: one page-wide parameter may suit
+one table and not its neighbour. The declared `sort` stays the default.
+
 **A tile always shows its staleness and its baseline** (`products/console.md`
 § Navigation: a tile without either is forbidden). An undeclared baseline says
 "no baseline", never nothing; a selector matching no row says so, naming it.
@@ -52,6 +60,7 @@ RANGES: dict[str, timedelta | None] = {
     "1y": timedelta(days=365), "all": None,
 }
 RANGE_PARAM = "range"
+SORT_PARAM = "sort"
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
 
@@ -133,6 +142,8 @@ class Section:
     body: str | None = None
     #: chart only: event marks drawn on the chart's dates and listed under it.
     annotations: tuple[Annotation, ...] = ()
+    #: table only: the fields a reader may sort by from the URL (`?sort=`).
+    sortable: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -317,9 +328,18 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
             "declare `sort: <field>` without `-`")
     if len(set(sort_order)) != len(sort_order):
         raise PagesConfigError(f"{where}: `sort_order` names a value twice")
+    sortable = _names(raw.get("sortable"), where, "sortable")
+    if sortable and kind != "table":
+        raise PagesConfigError(f"{where}: only a table takes `sortable`")
+    if any(n.startswith("-") for n in sortable):
+        raise PagesConfigError(f"{where}: `sortable` names fields; the URL picks the direction")
+    unshown = [n for n in sortable if fields and n not in fields]
+    if unshown:
+        raise PagesConfigError(
+            f"{where}: `sortable` field(s) {', '.join(unshown)} are not among the table's `fields`")
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
-                   annotations=annotations)
+                   annotations=annotations, sortable=sortable)
 
 
 def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
@@ -351,6 +371,8 @@ def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
         variables = _names(p.get("variables"), where, "variables")
         if RANGE_PARAM in variables:
             raise PagesConfigError(f"{where}: `{RANGE_PARAM}` is the time range, not a variable")
+        if SORT_PARAM in variables:
+            raise PagesConfigError(f"{where}: `{SORT_PARAM}` is a table's sort, not a variable")
         pages.append(Page(
             id=pid, title=_text(p, "title", where), question=_text(p, "question", where),
             sections=tuple(_section(s, f"{where} section #{n}", feeds)
@@ -654,8 +676,15 @@ def _marks(index: Any, specs: tuple[Annotation, ...], variables: Mapping[str, st
     return marks, outside, undated
 
 
+def _requested_sort(s: Section, requested: str | None) -> str | None:
+    """The URL's `sort` when this table lists its field as sortable, else None."""
+    if not requested or not s.sortable:
+        return None
+    return requested if requested.lstrip("-") in s.sortable else None
+
+
 def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
-                 since: datetime | None) -> dict[str, Any]:
+                 since: datetime | None, requested_sort: str | None = None) -> dict[str, Any]:
     from ..render.html import is_exception, state_rank
 
     doc: dict[str, Any] = {"type": s.type, "title": s.title}
@@ -708,7 +737,14 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
                 seen.setdefault(n, None)
         columns = list(seen)
     table = [_row(e, columns) for e in in_range]
-    if s.sort:
+    chosen = _requested_sort(s, requested_sort)
+    if s.sortable:
+        doc["sort"] = {"value": chosen or s.sort, "default": s.sort,
+                       "sortable": list(s.sortable)}
+    if chosen:
+        # A declared value order applies to its own ascending field only.
+        table.sort(key=_sort_key(chosen, s.sort_order if chosen == s.sort else ()))
+    elif s.sort:
         table.sort(key=_sort_key(s.sort, s.sort_order))
     else:
         table.sort(key=lambda r: state_rank(r["state"]))  # stable: newest within a state
@@ -745,7 +781,10 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
     span = RANGES[rng]
     since = now - span if span is not None else None
     variables = {v: params[v] for v in p.variables if params.get(v)}
+    requested_sort = str(params.get(SORT_PARAM) or "").strip() or None
     options = _variable_options(index, p)
+    # The page's own state minus the sort, for a header's link to carry over.
+    query = {**({RANGE_PARAM: rng} if rng != p.range else {}), **variables}
     return {
         "id": p.id, "title": p.title, "url": p.url, "question": p.question,
         "links": [{"title": link.title, "url": link.url} for link in p.links],
@@ -753,5 +792,7 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
                   "since": since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None},
         "variables": [{"name": v, "value": variables.get(v), "options": options[v]}
                       for v in p.variables],
-        "sections": [_section_doc(index, s, variables, since) for s in p.sections],
+        "query": query,
+        SORT_PARAM: requested_sort,
+        "sections": [_section_doc(index, s, variables, since, requested_sort) for s in p.sections],
     }

@@ -1,0 +1,80 @@
+"""/index: one table of contents of every console page (Brian 2026-11-04)."""
+from __future__ import annotations
+
+import pytest
+
+from console.index import pages
+from console.index.graph import Index
+from console.render import json as render_json
+from console.server.app import _html
+from console.server.router import resolve
+
+SEC = [{"type": "text", "title": "t", "body": "x"}]
+
+
+def _index(decl):
+    idx = Index()
+    idx.finalize()
+    pages.attach(idx, pages.parse(decl))
+    return idx
+
+
+def _decl():
+    return {
+        "perf": {"title": "Performance", "question": "are we beating SPY", "section": "trading",
+                 "sections": SEC},
+        "spend": {"title": "Spend", "question": "what did we spend", "section": "cost",
+                  "sections": SEC},
+        "misc": {"title": "Misc", "question": "anything else", "sections": SEC},
+    }
+
+
+def test_index_and_dashboards_are_the_same_page():
+    idx = _index(_decl())
+    assert _html(idx, resolve("/index")) == _html(idx, resolve("/dashboards"))
+
+
+def test_pages_group_by_section_with_other_last():
+    html = _html(_index(_decl()), resolve("/index"))
+    order = [html.index(f'id="pages-{s}"') for s in ("cost", "trading", "other")]
+    assert order == sorted(order)
+    trading = html.split('id="pages-trading"', 1)[1].split("<h2", 1)[0]
+    assert '<a href="/page/perf">Performance</a>' in trading
+    assert '<a href="/page/misc">Misc</a>' in html.split('id="pages-other"', 1)[1]
+
+
+def test_built_in_pages_are_listed_first():
+    html = _html(_index(_decl()), resolve("/index"))
+    start = html.split('id="start"', 1)[1].split("<h2", 1)[0]
+    for url in ("/", "/exceptions", "/planner", "/reports", "/search"):
+        assert f'<a href="{url}">' in start, url
+
+
+def test_the_filter_keeps_matching_entries_and_drops_empty_groups():
+    html = _html(_index(_decl()), resolve("/index", "q=spy"))
+    assert '<a href="/page/perf">Performance</a>' in html
+    assert "/page/spend" not in html and 'id="pages-cost"' not in html
+    assert "1 of " in html and 'value="spy"' in html
+
+
+def test_a_filter_matching_nothing_says_so():
+    html = _html(_index(_decl()), resolve("/index", "q=zzzz"))
+    assert "no page matches" in html
+
+
+def test_the_menu_names_the_index():
+    html = _html(_index(_decl()), resolve("/"))
+    nav = html[html.index('<nav class="site-nav">'):]
+    assert '<a href="/index">index</a>' in nav[:nav.index("</nav>")]
+
+
+def test_json_carries_each_pages_section():
+    doc = render_json.payload(_index(_decl()), resolve("/index"))
+    assert {p["id"]: p["section"] for p in doc["pages"]} == {
+        "perf": "trading", "spend": "cost", "misc": "other"}
+
+
+@pytest.mark.parametrize("bad", ["Trading!", "x" * 41, "<b>"])
+def test_a_bad_section_is_refused(bad):
+    with pytest.raises(pages.PagesConfigError):
+        pages.parse({"p": {"title": "t", "question": "q", "section": bad, "sections": SEC}})

@@ -112,8 +112,10 @@ def resolve(path: str, query_string: str = "") -> Resolved:
     if not segments:
         return Resolved(view="landing")
 
-    if segments[0] == "dashboards" and len(segments) == 1:
-        return Resolved(view="dashboards")
+    # `/index` is the site index's name in the menu; `/dashboards` is its
+    # older URL, kept so every link already written to it still lands.
+    if segments[0] in ("index", "dashboards") and len(segments) == 1:
+        return Resolved(view="dashboards", query=params.get("q") or None)
 
     if segments[0] == "planner":
         if len(segments) == 1:

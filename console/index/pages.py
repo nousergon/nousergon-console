@@ -49,6 +49,8 @@ from ..model.fields import Render, format_value, parse as parse_fields, series_p
 
 _ATTR = "_console_pages"
 _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+#: A site-index group name: shown as a heading, so plain words only.
+_SECTION = re.compile(r"^[a-z0-9][a-z0-9 -]{0,39}$")
 
 #: The closed section vocabulary. Adding one is a PR here, never config.
 SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions", "text")
@@ -163,6 +165,10 @@ class Page:
     #: Declared links shown under the question (the source of truth a page's
     #: numbers come from, the definitions behind them).
     links: tuple[Link, ...] = ()
+    #: Which group of the site index (`/index`) lists this page, e.g.
+    #: `trading`, `models`, `cost`, `archives`. Optional: an undeclared
+    #: section lists the page under `other`, never hides it.
+    section: str = "other"
 
     @property
     def url(self) -> str:
@@ -373,8 +379,13 @@ def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
             raise PagesConfigError(f"{where}: `{RANGE_PARAM}` is the time range, not a variable")
         if SORT_PARAM in variables:
             raise PagesConfigError(f"{where}: `{SORT_PARAM}` is a table's sort, not a variable")
+        section = str(p.get("section") or "other").strip().lower()
+        if not _SECTION.match(section):
+            raise PagesConfigError(f"{where}: `section` must be a short lowercase name "
+                                   "(letters, digits, spaces, dashes)")
         pages.append(Page(
             id=pid, title=_text(p, "title", where), question=_text(p, "question", where),
+            section=section,
             sections=tuple(_section(s, f"{where} section #{n}", feeds)
                            for n, s in enumerate(sections, start=1)),
             range=rng, variables=variables, links=_links(p.get("links"), where)))

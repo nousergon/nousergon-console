@@ -605,7 +605,7 @@ def test_a_registry_with_no_read_this_pass_says_so_on_its_link():
 
 def test_no_registries_reads_none_declared():
     page = _page(Index(), "/dashboards")
-    assert '<h2>registries</h2><ul><li class="absent">none declared</li></ul>' in page
+    assert '<h2 id="registries">registries</h2><ul><li class="absent">none declared</li></ul>' in page
 
 
 def test_registry_links_are_in_both_json_representations():

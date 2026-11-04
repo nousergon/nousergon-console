@@ -1418,58 +1418,118 @@ _DASHBOARDS_PANE_QUESTION = (
 )
 
 
-def dashboards_page(index: Index) -> str:
-    """The navigation index: every dashboard, milestone, registry and list.
+#: The console's own pages, which exist whatever the config declares. Each
+#: is (title, url, what it answers). Listed first on the site index.
+_BUILT_IN_PAGES = (
+    ("home", "/", "is the fleet healthy, in one screen"),
+    ("exceptions", "/exceptions", "every row that is not healthy, by priority"),
+    ("planner", "/planner", "milestones and projects on a calendar"),
+    ("reports", "/reports", "the daily, weekly and other report feeds"),
+    ("search", "/search", "find any component, run, file or decision by name"),
+)
+
+
+def _index_entry(title: str, url: str, about: str, extra: str = "") -> tuple[str, str]:
+    """One site-index line, and the text a filter matches against."""
+    html = (f'<li><a href="{esc(url)}">{esc(title)}</a>'
+            + (f' · {esc(about)}' if about else "") + extra + "</li>")
+    return html, f"{title} {about} {url}".lower()
+
+
+def dashboards_page(index: Index, query: str | None = None) -> str:
+    """The site index (`/index`, formerly `/dashboards`): a table of contents
+    of every page in the console, grouped, with a filter.
 
     console-policy.md §3.1 requires a navigation path to every entity; a
-    dashboard reachable only by typing its filtered URL is §3.1's hidden URL.
-    Everything here is derived from the index on each build (§3.5) — a
-    dashboard is a `pane` facet value on its rows, so a new one appears here
-    with no edit to the console. The landing view stays the exception list
-    (§4.3); this page is one click from every page via `with_site_nav`.
+    page reachable only by typing its URL is §3.1's hidden URL. Brian
+    2026-11-04: the console will hold every persistent dashboard and archive,
+    so one place must link them all and stay usable as it grows. Nothing here
+    is hand-listed except the console's own routes (`_BUILT_IN_PAGES`):
+    declared pages group by their `section:`, report feeds, panes,
+    milestones, registries and kinds are all derived from the index on each
+    build (§3.5), so a new one appears here with no edit to the console.
+    `?q=` narrows every group to entries whose title, question or URL
+    contain the words; the URL carries it, so a filtered index is a link.
     """
     from ..index import pages as declared_pages
+    from ..index import reports as declared_reports
 
     model = index.landing_model()
-    # Declared pages first: they are laid out for reading, where a pane is a
-    # filtered list (alpha-engine-config-I12783).
-    page_items = "".join(
-        f'<li><a href="{esc(p.url)}">{esc(p.title)}</a> · {esc(p.question)}</li>'
-        for p in declared_pages.declared(index)
-    ) or '<li class="absent">none declared — the `pages:` config block is empty</li>'
-    dashboards = "".join(
-        f'<li><a href="{esc(d["url"])}">{esc(d["pane"])}</a> · '
-        f'{d["rows"]} {esc(d["kind"])} rows · '
-        + (f'<span class="state-DEGRADED">{d["not_healthy"]} not healthy</span>'
-           if d["not_healthy"] else "all healthy")
-        + "</li>"
-        for d in model.dashboards
-    ) or '<li class="absent">none declared — no row carries a pane facet</li>'
-    milestones = "".join(
-        f'<li><a href="/#milestone-{esc(m["id"])}">{esc(m["id"])}</a> · '
-        f'{m["met"]} of {m["of"]} clauses met'
-        + (f' · <span class="state-UNREPORTED">{m["unreported"]} UNREPORTED</span>'
-           if m.get("unreported") else "")
-        + "</li>"
-        for m in model.milestones
-    ) or '<li class="absent">none declared</li>'
+    groups: list[tuple[str, str, list[tuple[str, str]], str]] = []
+
+    def group(gid: str, title: str, entries: list[tuple[str, str]], empty: str) -> None:
+        groups.append((gid, title, entries, empty))
+
+    group("start", "start here",
+          [_index_entry(t, u, a) for t, u, a in _BUILT_IN_PAGES], "")
+    by_section: dict[str, list] = {}
+    for p in declared_pages.declared(index):
+        by_section.setdefault(p.section, []).append(p)
+    for section in sorted(by_section, key=lambda x: (x == "other", x)):
+        group(f"pages-{section}", f"pages · {section}",
+              [_index_entry(p.title, p.url, p.question) for p in by_section[section]], "")
+    if not by_section:
+        group("pages", "pages", [],
+              "none declared — the `pages:` config block is empty")
+    group("reports", "reports & archives",
+          [_index_entry(f.title, f.url, f"report feed · {f.archive}" if f.archive
+                        else "report feed")
+           for f in declared_reports.declared(index)],
+          "none declared — the `reports:` config block is empty")
+    group("dashboards", "dashboards",
+          [_index_entry(d["pane"], d["url"], f'{d["rows"]} {d["kind"]} rows',
+                        " · " + (f'<span class="state-DEGRADED">{d["not_healthy"]} '
+                                 "not healthy</span>" if d["not_healthy"]
+                                 else "all healthy"))
+           for d in model.dashboards],
+          "none declared — no row carries a pane facet")
+    group("milestones", "milestones",
+          [_index_entry(m["id"], f'/#milestone-{m["id"]}',
+                        f'{m["met"]} of {m["of"]} clauses met',
+                        (f' · <span class="state-UNREPORTED">{m["unreported"]} '
+                         "UNREPORTED</span>") if m.get("unreported") else "")
+           for m in model.milestones], "none declared")
     registries = registry_link_items(model.registry_links)
-    lists = "".join(
-        f'<li><a href="/{esc(k.route)}">{esc(k.value)}s</a> · '
-        f'{len(index.of_kind(k))} rows</li>'
-        for k in Kind
-    )
+    group("lists", "all lists",
+          [_index_entry(f"{k.value}s", f"/{k.route}", f"{len(index.of_kind(k))} rows")
+           for k in Kind], "")
+
+    words = [w for w in (query or "").lower().split() if w]
+    total = sum(len(g[2]) for g in groups)
+    shown = 0
+    body = []
+    for gid, title, entries, empty in groups:
+        kept = [h for h, text in entries if all(w in text for w in words)]
+        shown += len(kept)
+        if words and not kept:
+            continue
+        items = "".join(kept) or (f'<li class="absent">{esc(empty)}</li>' if empty else "")
+        body.append(f'<h2 id="{esc(gid)}">{esc(title)}</h2><ul>{items}</ul>')
+        if gid == "milestones" and not words:
+            # Registries render their own status lines; listed unfiltered.
+            body.append(f'<h2 id="registries">registries</h2><ul>{registries}</ul>')
+    toc_items = [(g[0], g[1]) for g in groups
+                 if not words or any(all(w in t for w in words) for _, t in g[2])]
+    if not words:
+        at = next(i for i, (gid, _) in enumerate(toc_items) if gid == "milestones") + 1
+        toc_items.insert(at, ("registries", "registries"))
+    toc = " · ".join(f'<a href="#{esc(gid)}">{esc(title)}</a>' for gid, title in toc_items)
+    count = (f"{shown} of {total} entries match “{esc(query or '')}” · "
+             '<a href="/index">clear</a>' if words else f"{total} entries")
+    form = ('<form action="/index" method="get" class="index-filter">'
+            '<label for="index-q">filter pages</label> '
+            f'<input id="index-q" name="q" value="{esc(query or "")}" autocomplete="off">'
+            '<button type="submit">filter</button></form>')
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<title>dashboards</title></head><body>
-<nav><a href="/">fleet</a> &rsaquo; dashboards</nav>
-<h1>dashboards</h1>
+<title>index</title></head><body>
+<nav><a href="/">fleet</a> &rsaquo; index</nav>
+<h1>index — every page in the console</h1>
 <p class="pane-question">{esc(_DASHBOARDS_PANE_QUESTION)}</p>
 {index_freshness(index)}
-<h2>pages</h2><ul>{page_items}</ul>
-<h2>dashboards</h2><ul>{dashboards}</ul>
-<h2>milestones</h2><ul>{milestones}</ul>
-<h2>registries</h2><ul>{registries}</ul>
-<h2>all lists</h2><ul>{lists}</ul>
+{form}
+<p class="list-summary">{count}</p>
+<p class="index-toc">{toc}</p>
+{"".join(body) or '<p class="absent">no page matches</p>'}
 </body></html>"""
 
 
@@ -2399,14 +2459,15 @@ def with_demo_nav(page: str, demo) -> str:
 
 
 def with_site_nav(page: str) -> str:
-    """Prepend the one site menu to a rendered page: home · exceptions ·
-    dashboards · planner · reports · search. Applied once, at the server, so
-    no page can ship without it. `exceptions` is here because the list was
-    reachable only from links inside home's exceptions section (Brian
-    2026-11-03 asked how to get there)."""
+    """Prepend the one site menu to a rendered page: home · index ·
+    exceptions · planner · reports · search. Applied once, at the server, so
+    no page can ship without it. The menu stays this short however large the
+    console grows: `index` is the table of contents of every page (Brian
+    2026-11-04), and `exceptions` is here because the list was reachable only
+    from links inside home's exceptions section (Brian 2026-11-03)."""
     nav = ('<nav class="site-nav"><a href="/">home</a> · '
+           '<a href="/index">index</a> · '
            '<a href="/exceptions">exceptions</a> · '
-           '<a href="/dashboards">dashboards</a> · '
            '<a href="/planner">planner</a> · '
            '<a href="/reports">reports</a> · '
            '<a href="/search">search</a></nav>')

@@ -56,7 +56,12 @@ a[class*="state-"], .list-summary span[class*="state-"] { display: inline-block;
 [class*="state-"]:not(tr):not(a):not(summary):not(span) { border-left: .3rem solid var(--row-state, var(--off)); padding-left: .5rem; }
 summary[class*="state-"] { border-left: .3rem solid var(--row-state, var(--off)); padding-left: .5rem; }
 .absent { border-left: .2rem dashed var(--off); padding-left: .5rem; color: var(--muted); }
-body { max-width: 76rem; margin: 1.5rem auto; padding: 0 1rem; line-height: 1.45; }
+/* The page uses the window's width, so a wide table grows with it (Brian
+   2026-11-04: "even though I expand the window the table doesn't expand").
+   Running text keeps a readable measure on its own instead. */
+body { max-width: none; margin: 1.5rem auto; padding: 0 1.5rem; line-height: 1.45; }
+p, li, dd, .pane-question { max-width: 100ch; }
+td li, td p { max-width: none; }
 a:focus-visible, input:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .state-open, .state-stale, .state-unreadable, .state-no-freshness-stamp, .state-no-cadence-declared { border-left: .35rem solid var(--warn); }
 /* A source's own run vocabulary, verbatim (alpha-engine-config-I12983): a
@@ -113,7 +118,10 @@ pre.document { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100ch;
    scrolls inside its own `.table-scroll` box (`with_scrolling_tables`), never
    the page, and a long unbroken identifier or object key wraps rather than
    pushing the page sideways. */
-.table-scroll { max-width: 100%; overflow-x: auto; }
+/* Height-capped too, so a long table's sideways scroll bar sits inside the
+   window instead of below the last row; the header row stays in view. */
+.table-scroll { max-width: 100%; overflow-x: auto; max-height: calc(100vh - 4rem); overflow-y: auto; }
+.table-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); }
 body { overflow-wrap: break-word; }
 input, select, textarea { max-width: 100%; }
 @media (max-width: 40rem) { body { margin: 1rem auto; } }

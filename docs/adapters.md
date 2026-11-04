@@ -710,6 +710,11 @@ csv` ignores both — the whole file is the record list):
 - **`records_path`** (a dotted path to a JSON array of objects): fan out one
   entity per list item — one Decision per ticker in an artifact's `tickers`
   array.
+- **`records_path: "$"`**: the body itself is a top-level JSON array of
+  objects — one entity per item (a producer's `drift/{day}/metrics.json` list
+  of MetricRecords). Declared, never inferred: a whole-body source whose body
+  turns out to be a list is still a per-key finding, whose message names this
+  declaration. There is no enclosing object, so only per-item paths resolve.
 - **`records_path` with a `*` segment, plus `group_field`**
   (`nousergon-console#57`): `*` iterates a DICT at that point in the path
   rather than indexing a named key, injecting its key under `group_field`

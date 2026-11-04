@@ -1065,3 +1065,82 @@ def test_window_days_must_be_a_positive_integer():
                                reader=_never_read, now=NOW)
         assert res.status is AdapterStatus.FAILED
         assert res.unavailable == ("window_days",)
+
+
+# ---------------------------------------------------------------------------
+# Top-level list (`records_path: "$"`): the body itself is the record list —
+# a producer's `drift/{day}/metrics.json` of MetricRecords.
+# ---------------------------------------------------------------------------
+
+DRIFT_METRICS = [
+    {"name": "feature_psi_max_ratio", "status": "BREACH", "value": 0.81,
+     "baseline": {"watch": 0.1, "breach": 0.25}},
+    {"name": "prediction_psi_ratio", "status": "OK", "value": 0.088,
+     "baseline": {"watch": 0.1, "breach": 0.25}},
+    "not-a-record",
+]
+
+
+def _top_list_cfg(**extra):
+    return {
+        "bucket": BUCKET,
+        "prefix": "crucible/drift/",
+        "kind": "signal",
+        "key_pattern": r"crucible/drift/(?P<day>\d{4}-\d{2}-\d{2})/metrics\.json$",
+        "records_path": "$",
+        "id_template": "{day}:{name}",
+        "state_field": "status",
+        "state_map": {"OK": "healthy", "WATCH": "degraded", "BREACH": "failed"},
+        "fields": {
+            "value": {"path": "value", "unit": "psi"},
+            "watch": {"path": "baseline.watch", "unit": "psi"},
+        },
+        **extra,
+    }
+
+
+def _top_list_lister(bucket, prefix):
+    return [("crucible/drift/2026-10-30/metrics.json", "2026-10-31T11:56:31+00:00")]
+
+
+def test_top_level_list_fans_out_one_entity_per_object_item():
+    result = s3_records.fetch(_top_list_cfg(), lister=_top_list_lister,
+                              reader=lambda b, k: list(DRIFT_METRICS), now=NOW)
+    assert result.status is AdapterStatus.OK
+    by_id = _by_id(result)
+    assert set(by_id) == {"2026-10-30:feature_psi_max_ratio",
+                          "2026-10-30:prediction_psi_ratio"}
+    breach = by_id["2026-10-30:feature_psi_max_ratio"]
+    assert breach.detail["fields"]["value"]["value"] == 0.81
+    assert breach.detail["fields"]["watch"]["value"] == 0.1
+
+
+def test_top_level_list_reads_a_raw_json_body():
+    result = s3_records.fetch(_top_list_cfg(), lister=_top_list_lister,
+                              reader=lambda b, k: json.dumps(DRIFT_METRICS).encode(),
+                              now=NOW)
+    assert result.status is AdapterStatus.OK
+    assert len(result.entities) == 2
+
+
+def test_top_level_list_declared_on_an_object_body_is_partial_not_a_crash():
+    result = s3_records.fetch(_top_list_cfg(), lister=_top_list_lister,
+                              reader=lambda b, k: {"rows": DRIFT_METRICS}, now=NOW)
+    # Same contract as a malformed dotted `records_path`: a per-key finding.
+    assert result.entities == ()
+    assert "body" in result.unavailable
+
+
+def test_undeclared_top_level_list_still_fails_loud_naming_the_declaration():
+    from console.records_shape import project
+    import pytest
+    with pytest.raises(TypeError, match=r"records_path: '\$'"):
+        project(list(DRIFT_METRICS), "json", None, None, None)
+
+
+def test_top_level_list_honours_limit_and_order():
+    from console.records_shape import project
+    records, root = project(list(DRIFT_METRICS), "json", "$", None, None,
+                            limit=1, order="last")
+    assert [r["name"] for r in records] == ["prediction_psi_ratio"]
+    assert root == {}

@@ -16,6 +16,8 @@ different ways a body expresses that:
 - **List-of-dicts** (``records_path``, a dotted path to a JSON array of
   objects): fan out one entity per list item (`order_book_rationale`'s
   ``tickers`` array → one Decision per ticker).
+- **Top-level list** (``records_path: "$"``): the body itself is a JSON array
+  of objects, one entity per item (a ``metrics.json`` of MetricRecords).
 - **Grouped** (``records_path`` containing a ``*`` segment, plus
   ``group_field``): a ``*`` iterates a DICT at that point in the path rather
   than indexing a named key, injecting its key under ``group_field`` into

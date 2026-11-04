@@ -391,6 +391,95 @@ def _alias_index(parent_state: State, alias_reports: bool = False) -> Index:
     return idx
 
 
+def _namesake_alias_index(events_status=AdapterStatus.OK) -> Index:
+    """The live I12722 shape: a Lambda row whose `alias_ids` name the three
+    EventBridge rules that trigger it. The aliases carry the parent row's
+    facets (`substrate: lambda`); the AWS/Events pass is scoped to
+    `substrate: eventbridge`, so its claim on each rule name is a namesake."""
+    idx = Index()
+    facets = {"substrate": "lambda"}
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="sensor", state=State.UNREPORTED,
+                   provenance=prov("registry"), facets=facets),
+            Entity(kind=Kind.COMPONENT, id="sensor-state-change",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   facets=facets, detail={"alias_of": "sensor"}),
+        ),
+        edges=(Edge(source="sensor-state-change", rel="alias-of", target="sensor"),),
+    ))
+    idx.add_result(AdapterResult(
+        name="lambda-metrics", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DISCOVERY,
+        discovery_scope=(("substrate", "lambda"),),
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="sensor", state=State.HEALTHY,
+                   provenance=prov("cloudwatch:AWS/Lambda", as_of="2026-11-03T20:00:00Z")),
+        ),
+    ))
+    idx.add_result(AdapterResult(
+        name="events-metrics", status=events_status,
+        claim_class=ClaimClass.DISCOVERY,
+        discovery_scope=(("substrate", "eventbridge"),),
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="sensor-state-change",
+                   state=State.HEALTHY,
+                   provenance=prov("cloudwatch:AWS/Events", as_of="2026-11-03T20:00:00Z"),
+                   detail={"invocations": 2.0}),
+        ),
+    ))
+    idx.finalize()
+    return idx
+
+
+def test_a_namesake_claim_is_not_the_alias_s_own_report():
+    """alpha-engine-config-I12722: the AWS/Events namesake contests no field
+    on the alias, so the alias received no report of its own and must inherit
+    the parent Lambda's state, not sit UNREPORTED beside a HEALTHY parent."""
+    idx = _namesake_alias_index()
+    alias = idx.entity("sensor-state-change")
+    assert alias.state is State.HEALTHY
+    assert alias.detail["alias_state"] == "inherited"
+    assert alias.provenance.as_of == "2026-11-03T20:00:00Z"
+    assert idx.transparency_gap()["count"] == 0
+
+
+def test_an_unreachable_claim_is_not_the_alias_s_own_report():
+    """An unreachable source speaks only about itself, so it cannot be the
+    report that stops an alias inheriting."""
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK,
+        claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="comp-parent",
+                   state=State.UNREPORTED, provenance=prov("registry")),
+            Entity(kind=Kind.COMPONENT, id="comp-alias",
+                   state=State.UNREPORTED, provenance=prov("registry"),
+                   detail={"alias_of": "comp-parent"}),
+        ),
+        edges=(Edge(source="comp-alias", rel="alias-of", target="comp-parent"),),
+    ))
+    idx.add_result(AdapterResult(
+        name="checks_envelope", status=AdapterStatus.OK,
+        claim_class=ClaimClass.OBSERVATION,
+        entities=(Entity(kind=Kind.COMPONENT, id="comp-parent", state=State.DEGRADED,
+                         provenance=prov("checks_envelope", as_of="2026-11-03T20:00:00Z")),),
+    ))
+    idx.add_result(AdapterResult(
+        name="down", status=AdapterStatus.FAILED,
+        claim_class=ClaimClass.DISCOVERY,
+        entities=(Entity(kind=Kind.COMPONENT, id="comp-alias", state=State.UNREPORTED,
+                         provenance=prov("down")),),
+    ))
+    idx.finalize()
+    alias = idx.entity("comp-alias")
+    assert alias.state is State.DEGRADED
+    assert alias.detail["alias_state"] == "inherited"
+
+
 def test_an_inherited_alias_does_not_list_beside_its_parent():
     """One problem, one row: the alias only repeats the parent's verdict.
     It stays in the index, still an exception on its own page."""

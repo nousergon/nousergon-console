@@ -133,7 +133,7 @@ def test_the_landing_view_counts_exceptions_by_state_worst_first_without_rows():
         _run("older-fail", State.FAILED, "2026-09-01T05:00:00Z"),
         _run("ok", State.HEALTHY, "2026-10-01T05:00:00Z"),
     ]
-    page = _page(_index(rows), "/health")
+    page = _page(_index(rows), "/")
     assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in page
     assert page.index("2 FAILED") < page.index("1 UNREPORTED")
     assert "fresh-fail" not in page and "old-probe" not in page
@@ -162,7 +162,7 @@ def test_the_exception_list_names_a_run_by_its_job_and_folds_its_runs_per_state(
     # A different state is a different fact: job-a DEGRADED still has its own row.
     assert "/run/job-a@2026-10-01T03:00:00Z" in page
     assert "3 not healthy (from 4 rows" in page
-    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in _page(_index(FAILING), "/health")
+    assert '<a class="state-FAILED" href="/exceptions">2 FAILED</a>' in _page(_index(FAILING), "/")
 
 
 def test_the_landing_fold_never_changes_the_not_healthy_count():

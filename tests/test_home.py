@@ -224,3 +224,13 @@ def test_old_notes_say_they_are_old_and_no_notes_say_so():
     idx = _notes_index([_note("a", 1, "2026-11-01T12:00:00+00:00")])
     assert home.notes(idx, now=datetime(2026, 11, 4, tzinfo=timezone.utc))["stale"] is True
     assert "nothing published yet" in _html(_notes_index([]), resolve("/"))
+
+
+def test_health_does_not_repeat_what_home_shows():
+    """Brian 2026-11-04: home is the summary, /health only the detail."""
+    from console.render.html import health_page, landing_page
+    idx = _index()
+    home, health = landing_page(idx), health_page(idx)
+    for marker in ('<h2>exceptions</h2>', 'waiting on Brian', 'global-search'):
+        assert marker in home and marker not in health
+    assert "registries" in health and "registries" not in home.split("system health details")[0]

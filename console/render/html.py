@@ -1507,11 +1507,7 @@ def health_page(index: Index) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>system health</title></head><body>
 <h1>system health</h1>
-<p class="list-summary">The console's own measures: where its data comes from, how complete it is, and what it cannot see. The one-screen summary is <a href="/">home</a>.</p>
-{health_strip(home.health(index, exceptions))}
-{exception_summary(model, index.exceptions_trend())}
-{dashboard_links(model.dashboards)}
-<form action="/search" method="get"><label for="global-search">search fleet</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
+<p class="list-summary">The detail behind <a href="/">home</a>: where the console's data comes from, how complete it is, and what it cannot see. Area health, exception counts and the decision queue are on home; every row is on <a href="/exceptions">exceptions</a>; every page is on the <a href="/index">site index</a>.</p>
 {index_freshness(index)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>

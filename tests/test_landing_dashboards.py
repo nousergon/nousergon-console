@@ -68,7 +68,7 @@ def test_the_dashboards_page_links_every_dashboard():
 def test_no_dashboards_renders_as_itself_not_a_blank_region():
     index = _index(_run("plain-run", State.HEALTHY))
     page = render_html.dashboards_page(index)
-    assert "none declared" in page.split("<h2>dashboards</h2>", 1)[1]
+    assert "none declared" in page.split('<h2 id="dashboards">dashboards</h2>', 1)[1]
 
 
 def test_the_json_dashboards_view_carries_the_same_index():
@@ -93,7 +93,7 @@ def test_every_page_carries_the_site_menu():
                   "/search?q=cost"):
         path, _, query = route.partition("?")
         page = _html(index, resolve(path, query))
-        assert '<a href="/dashboards">dashboards</a>' in page, route
+        assert '<a href="/index">index</a>' in page, route
 
 
 def test_a_filtered_list_shows_each_rows_declared_fields():

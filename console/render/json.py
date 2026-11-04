@@ -105,7 +105,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
 
         doc = {"schema_version": SCHEMA_VERSION, "view": "dashboards",
                "pages": [{"id": p.id, "title": p.title, "url": p.url,
-                          "question": p.question}
+                          "question": p.question, "section": p.section}
                          for p in declared_pages.declared(index)],
                "dashboards": model.dashboards,
                "milestones": [{"id": m["id"], "met": m["met"], "of": m["of"],

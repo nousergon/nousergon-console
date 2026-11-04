@@ -1639,10 +1639,17 @@ home:
 # not http(s) or a /path, `annotations` on a section that is not a chart or an
 # annotation without `label`, `at` or a faceted `select`) FAILS THE BUILD
 # naming the page and section.
+#
+# `section` (optional) is the group the site index (`/index`) lists the page
+# under — e.g. trading, models, pipelines, data, cost, ops, archives. Plain
+# lowercase words; an undeclared section lists the page under `other`. Every
+# declared page appears on /index with no other edit, so adding a dashboard
+# is one fragment.
 pages:
   reliability:
     title: Reliability
     question: Is anything in the fleet failing, and what did the latest report say?
+    section: ops
     range: 7d
     variables: [owner]
     links:

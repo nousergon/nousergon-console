@@ -125,16 +125,20 @@ def test_kind_and_every_facet_must_match():
 
 # --------------------------------------------------------------- the page --
 
-def test_page_renders_latest_open_recent_collapsed_and_archive_links():
+def test_page_renders_one_collapsed_row_per_report_and_archive_links():
     from console.server.app import _html
 
     html = _html(_index(), resolve("/reports"))
     assert html.startswith("<!doctype html>")
     assert reports.REPORTS_QUESTION in html
-    latest = html.split('<article class="report report-latest">', 1)[1].split("</article>", 1)[0]
+    # Brian 2026-11-05: every report is one small row, closed until clicked,
+    # the newest first; the full text sits inside the row.
+    latest = html.split('<details class="report report-row report-latest">', 1)[1]
+    latest = latest.split("</details>", 1)[0]
     assert "<h1>Report 2026-10-15</h1>" in latest and "<strong>green</strong>" in latest
-    assert html.count('<details class="report">') == 12
-    assert html.index("report-latest") < html.index('<details class="report">')
+    assert html.count('<details class="report report-row') == 13
+    assert "<details open" not in html and "<article" not in html.split("report-rows", 1)[1]
+    assert html.index("report-latest") < html.index('<details class="report report-row">')
     assert 'href="/run/report:2026-09-27:daily"' in html
     assert "s3://b/ops/daily/YYYY-MM-DD.md" in html and "Nothing is deleted" in html
     assert 'href="/reports">reports</a>' in html  # site nav
@@ -335,15 +339,15 @@ def test_lead_block_renders_above_the_latest_report_with_citations_safe():
     from console.server.app import _html
 
     html = _html(_lead_index(), resolve("/reports"))
-    block = html.split('<section class="report-lead">', 1)[1].split("</section>", 1)[0]
+    block = html.split('<details class="report-lead">', 1)[1].split("</details>", 1)[0]
     assert html.index('class="report-lead"') < html.index("report-latest")
-    assert "<h2>Merged by topic</h2>" in block
+    assert "<summary><h2>Merged by topic</h2>" in block
     assert block.count('<article class="report report-lead-item">') == 2
     assert 'from <a href="/run/report:2026-10-15:plan">Thu 10/15 plan</a>' in block
     assert "ops#1718 five red lines" in block and "Plan vs done" not in block
     # The report itself is not edited: the section still reads in place.
-    latest = html.split('<article class="report report-latest">', 1)[1]
-    assert "Merged by topic (2026-10-15)" in latest.split("</article>", 1)[0]
+    latest = html.split('<details class="report report-row report-latest">', 1)[1]
+    assert "Merged by topic (2026-10-15)" in latest.split("</details>", 1)[0]
 
 
 def test_lead_without_sources_reads_the_feeds_own_newest_report():
@@ -394,3 +398,14 @@ def test_json_carries_the_lead_block():
 def test_bad_lead_declarations_fail_by_name(lead, needle):
     with pytest.raises(reports.ReportsConfigError, match=needle):
         reports.parse({"feeds": [{"id": "a", "title": "t", "facets": {"a": "b"}, "lead": lead}]})
+
+
+def test_row_gist_is_the_first_prose_line_without_markdown():
+    from console.render.html import _report_gist
+
+    text = ("# Director morning report\n\n```\nfenced\n```\n| a | b |\n---\n"
+            "- **Two** fills, see [the PR](https://x/1) and `code`\n\nmore")
+    assert _report_gist({"document": {"text": text}}) == "Two fills, see the PR and code"
+    assert _report_gist({"document": {"text": "x" * 400}}).endswith("…")
+    assert len(_report_gist({"document": {"text": "x" * 400}})) == 160
+    assert _report_gist({}) == ""

@@ -2127,14 +2127,58 @@ def _report_lead(lead: dict | None, links: Citations | None = None) -> str:
             text = (f'<p class="absent">{esc(lead["title"])}: '
                     f'{esc(item.get("section_unavailable") or "not found")}</p>')
         items.append(f'<article class="report report-lead-item">{meta}{text}</article>')
-    return (f'<section class="report-lead"><h2>{esc(lead["title"])}</h2>'
-            + "".join(items) + "</section>")
+    # One row like every report below it, collapsed: it opens on a click
+    # (Brian 2026-11-05: a page of fully expanded reports does not read).
+    return (f'<details class="report-lead"><summary><h2>{esc(lead["title"])}</h2> '
+            f'<span class="report-gist">{len(items)} '
+            f'source{"" if len(items) == 1 else "s"}, newest first</span></summary>'
+            + "".join(items) + "</details>")
+
+
+_GIST_MAX = 160
+
+
+def _report_gist(row: dict) -> str:
+    """The first line of prose in a report, shortened: what the collapsed row
+    says before it is opened. Headings, rules, tables and fences are skipped;
+    markdown emphasis and link syntax are dropped."""
+    doc = row.get("document")
+    if not isinstance(doc, dict):
+        return ""
+    fenced = False
+    for line in str(doc.get("text") or "").splitlines():
+        line = line.strip()
+        if line.startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced or not line or line.startswith(("#", "|", "---", "***", "___", "<")):
+            continue
+        line = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", line)
+        line = re.sub(r"^([-*+]|\d+[.)])\s+", "", line)
+        line = re.sub(r"^>\s*", "", line)
+        line = re.sub(r"[*_`]+", "", line).strip()
+        if line:
+            return line if len(line) <= _GIST_MAX else line[:_GIST_MAX - 1].rstrip() + "…"
+    return ""
+
+
+def _report_row(row: dict, links: Citations | None, extra: str = "") -> str:
+    """One report as a collapsed row: its label, when it was published and
+    its first line; the full text opens on a click."""
+    when = f'<span class="report-when">{esc(row["at"][:16].replace("T", " "))}</span>' \
+        if row.get("at") else ""
+    gist = _report_gist(row)
+    gist_html = f'<span class="report-gist">{esc(gist)}</span>' if gist else ""
+    cls = f"report report-row {extra}".strip()
+    return (f'<details class="{cls}"><summary><span class="report-label">'
+            f'{esc(row["label"])}</span>{when}{gist_html}</summary>'
+            f'{_report_meta(row)}{_report_text(row, links)}</details>')
 
 
 def reports_page(index: Index, feed_id: str | None = None) -> str:
     """A report feed: the declared lead block (one section of each source's
-    newest report), the newest report rendered in full, the rest of the
-    recent window below it (collapsed, newest first), then every older report
+    newest report), then every report in the recent window as one collapsed
+    row (newest first, full text on a click), then every older report
     as a dated link to its own page. Declared in config, evaluated per
     request over the built index, nothing stored (§5.6)."""
     from ..index import reports
@@ -2171,12 +2215,13 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
         body = (f'<p class="absent">no report yet — no row matches '
                 f'<code>{esc(f["selector"])}</code></p>')
     else:
-        body = (f'<article class="report report-latest"><h2>{esc(latest["label"])}</h2>'
-                f'{_report_meta(latest)}{_report_text(latest, links)}</article>')
-        if f["recent"]:
-            body += (f'<h2>earlier in the last {f["recent_days"]} days</h2>' + "".join(
-                f'<details class="report"><summary>{esc(r["label"])}</summary>'
-                f'{_report_meta(r)}{_report_text(r, links)}</details>' for r in f["recent"]))
+        # Brian 2026-11-05: one small row per report, newest first, each
+        # opening to the full text on a click. Nothing is open by default.
+        body = (f'<h2>last {f["recent_days"]} days ({1 + len(f["recent"])})</h2>'
+                f'<div class="report-rows">'
+                + _report_row(latest, links, "report-latest")
+                + "".join(_report_row(r, links) for r in f["recent"])
+                + "</div>")
         if f["older"]:
             body += (f'<h2>older reports ({len(f["older"])})</h2><ul class="report-archive">'
                      + "".join(

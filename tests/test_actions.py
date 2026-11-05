@@ -38,13 +38,22 @@ def _issue(n, title="Rotate the key", labels=("gate:operator",), body="Run the s
 
 
 class FakeHost:
-    def __init__(self, issues):
+    def __init__(self, issues, closed=(), prs=None):
         self.issues = issues
+        self.closed = list(closed)
+        self.prs = prs or {}
         self.calls: list[tuple[str, str, str, object]] = []
 
     def __call__(self, method, url, token, body):
         self.calls.append((method, url, token, body))
         if method == "GET":
+            if "state=closed" in url:
+                return self.closed
+            for key, pr in self.prs.items():
+                if url.endswith(key):
+                    if isinstance(pr, Exception):
+                        raise pr
+                    return pr
             return self.issues
         return {}
 
@@ -189,7 +198,7 @@ def test_both_representations():
     html = _html(idx, resolve("/actions"))
     assert 'action="/actions/1"' in html and 'name="done" value="1"' in html
     assert 'action="/actions/2"' in html and 'name="done" value="0"' in html
-    assert "Done, waiting for a check" in html
+    assert "<h2>Done · 1</h2>" in html
 
 
 def test_the_menu_links_your_actions():
@@ -313,3 +322,66 @@ def test_the_page_links_prs_and_shows_commands_never_the_issue():
     doc = render_json.payload(idx, resolve("/actions"))
     by_n = {a["number"]: a for a in doc["actions"]}
     assert by_n[8]["pr_ref"] == "nous-ergon-ops#2133" and by_n[9]["command"] == "bash ~/rotate.sh"
+
+
+# --- actionable only; everything else is the done archive (Brian 2026-11-05) --
+
+def _read(issues, closed=(), prs=None):
+    host = FakeHost(issues, closed, prs)
+    found, _ = actions.read(actions.parse(DECL), "2026-11-05T12:00:00Z", request=host)
+    return found, host
+
+
+def test_an_action_whose_pr_has_merged_is_done_not_to_do():
+    body = "Merge https://github.com/acme/atlas/pull/7 after review."
+    found, host = _read(
+        [_issue(1, "Merge atlas", body=body), _issue(2, "Run the key script")],
+        prs={"/repos/acme/atlas/issues/7": {"state": "closed",
+                                            "pull_request": {"merged_at": "2026-11-05T09:00:00Z"}}})
+    assert [a.number for a in found.todo] == [2]
+    assert [a.number for a in found.done] == [1]
+    assert found.done[0].pr_state == "merged"
+    # The PR's own repository is read with a token minted for that repository.
+    assert any(url.endswith("/repos/acme/atlas/issues/7") for _, url, _, _ in host.calls)
+
+
+def test_an_open_pr_stays_to_do_and_an_unreadable_one_is_not_archived_on_a_guess():
+    found, _ = _read(
+        [_issue(1, body="https://github.com/acme/a/pull/1"),
+         _issue(2, body="https://github.com/acme/b/pull/2"),
+         _issue(3, body="https://github.com/other/c/pull/3")],
+        prs={"/repos/acme/a/issues/1": {"state": "open", "pull_request": {"merged_at": None}},
+             "/repos/acme/b/issues/2": RuntimeError("HTTP 404: Not Found")})
+    assert [a.number for a in found.todo] == [1, 2, 3]
+    assert [a.pr_state for a in found.todo] == ["open", None, None]
+
+
+def test_closed_actions_are_the_archive_newest_first_and_ticked_read_only():
+    closed = [dict(_issue(8, "Old ask"), state="closed", closed_at="2026-11-01T00:00:00Z"),
+              dict(_issue(9, "New ask"), state="closed", closed_at="2026-11-04T00:00:00Z")]
+    found, _ = _read([_issue(1)], closed=closed)
+    assert [a.number for a in found.archive] == [9, 8]
+    assert [a.number for a in found.done] == [9, 8]
+    idx = Index()
+    actions.attach(idx, found)
+    idx.finalize()
+    html = _html(idx, resolve("/actions"))
+    done = html.split("<h2>Done · 2</h2>", 1)[1]
+    assert "New ask" in done and "closed 2026-11-04" in done
+    # Closed: ticked, but not a form a reader could untick.
+    assert 'action="/actions/9"' not in html and "☑" in done
+    with pytest.raises(actions.TickRefused):
+        actions.tick(idx, 9, False, "brian")
+
+
+def test_a_failed_archive_read_never_fails_the_list():
+    class Flaky(FakeHost):
+        def __call__(self, method, url, token, body):
+            if "state=closed" in url:
+                raise RuntimeError("HTTP 502: Bad Gateway")
+            return super().__call__(method, url, token, body)
+
+    found, _ = actions.read(actions.parse(DECL), "2026-11-05T12:00:00Z",
+                            request=Flaky([_issue(1)]))
+    assert found.error is None and [a.number for a in found.todo] == [1]
+    assert found.archive_error == "HTTP 502: Bad Gateway"

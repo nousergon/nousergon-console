@@ -96,6 +96,18 @@ class Action:
     pr_ref: str | None = None
     #: The one command to run, when the issue carries one.
     command: str | None = None
+    #: The linked PR's state as the tracker reports it: ``open``, ``merged``
+    #: or ``closed``; None when there is no PR or it could not be read.
+    pr_state: str | None = None
+    #: The issue itself is closed (the archive), and when.
+    closed: bool = False
+    closed_at: str | None = None
+
+    @property
+    def actionable(self) -> bool:
+        """Waiting on the reader: open, not ticked, and not about a PR that
+        has already merged or closed (Brian 2026-11-05: "actionable only")."""
+        return not (self.done or self.closed or self.pr_state in ("merged", "closed"))
 
 
 @dataclass
@@ -107,6 +119,20 @@ class Listing:
     actions: tuple[Action, ...] = ()
     read_at: str | None = None
     error: str | None = None
+    #: Recently closed actions, newest first: the done archive. A failed read
+    #: of it says so (``archive_error``) and never fails the open list.
+    archive: tuple[Action, ...] = ()
+    archive_error: str | None = None
+
+    @property
+    def todo(self) -> tuple[Action, ...]:
+        return tuple(a for a in self.actions if a.actionable)
+
+    @property
+    def done(self) -> tuple[Action, ...]:
+        """Everything not actionable: ticked or PR merged/closed (still open
+        issues, waiting for a check), then the closed archive."""
+        return tuple(a for a in self.actions if not a.actionable) + self.archive
 
 
 # ------------------------------------------------------------------ parse ---
@@ -189,10 +215,10 @@ def _http(method: str, url: str, token: str, body: Any) -> Any:
     return json.loads(text) if text.strip() else None
 
 
-def _mint(command: tuple[str, ...], decl: Declaration) -> str:
+def _mint(command: tuple[str, ...], decl: Declaration, repo: str | None = None) -> str:
     """The first stdout line of the configured token command. Its stdout is a
     credential, so a failure is described from stderr and the exit code only."""
-    argv = [a.replace("{org}", decl.org).replace("{repo}", decl.repo) for a in command]
+    argv = [a.replace("{org}", decl.org).replace("{repo}", repo or decl.repo) for a in command]
     try:
         out = subprocess.run(argv, capture_output=True, text=True, check=True,
                              timeout=_TOKEN_TIMEOUT_SECONDS)
@@ -286,6 +312,7 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
     number = int(issue["number"])
+    closed = str(issue.get("state") or "open") == "closed"
     return Action(
         number=number, ref=f"{decl.repo}-I{number}",
         title=str(issue.get("title", "")), url=str(issue.get("html_url", "")),
@@ -296,7 +323,50 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
                    timing(issue.get("body"), issue.get("milestone")))),
         **dict(zip(("pr_url", "pr_ref"), pull_request(issue.get("body")))),
         command=command(issue.get("body")),
+        closed=closed, closed_at=issue.get("closed_at") if closed else None,
     )
+
+
+#: The most closed actions the archive shows.
+ARCHIVE_SIZE = 30
+
+
+def _pr_states(decl: Declaration, actions: list[Action], call: Request,
+               token: str | None) -> dict[str, str]:
+    """``{pr_url: open|merged|closed}`` for every linked PR in the declared
+    org the tracker answers for. A PR is an issue to the tracker's API, so the
+    issues-read token the page already mints (one per repository) is enough.
+    A PR that cannot be read is simply absent: its action stays on the to-do
+    list rather than being archived on a guess."""
+    base = decl.api_url.rstrip("/")
+    tokens: dict[str, str | None] = {}
+    out: dict[str, str] = {}
+    for a in actions:
+        if not a.pr_url or a.pr_url in out:
+            continue
+        m = _PR_URL.match(a.pr_url)
+        if not m or m.group(1) != decl.org:
+            continue
+        repo, number = m.group(2), m.group(3)
+        if repo not in tokens:
+            try:
+                tokens[repo] = (token if token and repo == decl.repo
+                                else _mint(decl.token_command, decl, repo))
+            except Exception:  # noqa: BLE001 - unreadable: stays to do
+                tokens[repo] = None
+        if not tokens[repo]:
+            continue
+        try:
+            issue = call("GET", f"{base}/repos/{decl.org}/{repo}/issues/{number}",
+                         tokens[repo], None)
+        except Exception:  # noqa: BLE001 - unreadable: stays to do
+            continue
+        if not isinstance(issue, Mapping):
+            continue
+        merged = (issue.get("pull_request") or {}).get("merged_at")
+        out[a.pr_url] = ("merged" if merged else
+                         "closed" if issue.get("state") == "closed" else "open")
+    return out
 
 
 def read(decl: Declaration, now: str, request: Request | None = None,
@@ -324,13 +394,38 @@ def read(decl: Declaration, now: str, request: Request | None = None,
                 AdapterResult(name=SOURCE_NAME, status=AdapterStatus.FAILED,
                               claim_class=ClaimClass.OBSERVATION, fetched_at=now,
                               unavailable=(reason,)))
-    # Not done first; within that, the soonest due date first, undated after,
-    # oldest first among equals.
+    states = _pr_states(decl, list(seen.values()), call, tok)
+    seen = {n: replace(a, pr_state=states.get(a.pr_url or "")) for n, a in seen.items()}
+    # Actionable first; within that, the soonest due date first, undated
+    # after, oldest first among equals.
     actions = tuple(sorted(seen.values(), key=lambda a: (
-        a.done, a.due is None, a.due or "", a.created_at or "", a.number)))
-    return (Listing(declaration=decl, actions=actions, read_at=now),
+        not a.actionable, a.due is None, a.due or "", a.created_at or "", a.number)))
+    archive, archive_error = _archive(decl, call, tok, base)
+    return (Listing(declaration=decl, actions=actions, read_at=now,
+                    archive=archive, archive_error=archive_error),
             AdapterResult(name=SOURCE_NAME, status=AdapterStatus.OK,
                           claim_class=ClaimClass.OBSERVATION, fetched_at=now))
+
+
+def _archive(decl: Declaration, call: Request, tok: str,
+             base: str) -> tuple[tuple[Action, ...], str | None]:
+    """The most recently closed actions, newest first."""
+    seen: dict[int, Action] = {}
+    try:
+        for label in decl.labels:
+            q = urllib.parse.urlencode({"state": "closed", "labels": label, "sort": "updated",
+                                        "direction": "desc", "per_page": ARCHIVE_SIZE})
+            for issue in call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}",
+                              tok, None) or []:
+                if "pull_request" in issue:
+                    continue
+                act = _action(decl, issue)
+                if act.closed:
+                    seen.setdefault(act.number, act)
+    except Exception as exc:  # noqa: BLE001 - the archive's own reason
+        return (), str(exc)[:240] or type(exc).__name__
+    ordered = sorted(seen.values(), key=lambda a: a.closed_at or "", reverse=True)
+    return tuple(ordered[:ARCHIVE_SIZE]), None
 
 
 def attach(index: Any, listing: Listing | None) -> None:
@@ -422,12 +517,19 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "declared": True, "title": decl.title, "repo": f"{decl.org}/{decl.repo}",
         "labels": list(decl.labels), "done_label": decl.done_label,
         "writable": decl.writable, "read_at": found.read_at, "error": found.error,
-        "open": sum(1 for a in found.actions if not a.done),
-        "done": sum(1 for a in found.actions if a.done),
-        "actions": [{"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
-                     "done": a.done, "summary": a.summary, "labels": list(a.labels),
-                     "due": a.due, "due_source": a.due_source, "when": a.when,
-                     "pr_url": a.pr_url, "pr_ref": a.pr_ref, "command": a.command,
-                     "created_at": a.created_at, "updated_at": a.updated_at}
-                    for a in found.actions],
+        "open": len(found.todo),
+        "done": len(found.done),
+        "actions": [_action_json(a) for a in found.actions],
+        "archive": [_action_json(a) for a in found.archive],
+        "archive_error": found.archive_error,
     }
+
+
+def _action_json(a: Action) -> dict[str, Any]:
+    return {"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
+            "done": a.done, "actionable": a.actionable, "summary": a.summary,
+            "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
+            "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,
+            "pr_state": a.pr_state, "command": a.command, "closed": a.closed,
+            "closed_at": a.closed_at, "created_at": a.created_at,
+            "updated_at": a.updated_at}

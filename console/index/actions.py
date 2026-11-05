@@ -102,12 +102,17 @@ class Action:
     #: The issue itself is closed (the archive), and when.
     closed: bool = False
     closed_at: str | None = None
+    #: The ask IS merging its PR (a merge-ask issue), so the PR merging or
+    #: closing ends it. Any other PR an issue names is context: its ask (a
+    #: command, a decision) is still owed after that PR merges.
+    merge_ask: bool = False
 
     @property
     def actionable(self) -> bool:
         """Waiting on the reader: open, not ticked, and not about a PR that
         has already merged or closed (Brian 2026-11-05: "actionable only")."""
-        return not (self.done or self.closed or self.pr_state in ("merged", "closed"))
+        return not (self.done or self.closed
+                    or (self.merge_ask and self.pr_state in ("merged", "closed")))
 
 
 @dataclass
@@ -324,7 +329,17 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         **dict(zip(("pr_url", "pr_ref"), pull_request(issue.get("body")))),
         command=command(issue.get("body")),
         closed=closed, closed_at=issue.get("closed_at") if closed else None,
+        merge_ask=_is_merge_ask(issue),
     )
+
+
+_MERGE_ASK = re.compile(r"<!--\s*merge-ask:", re.IGNORECASE)
+
+
+def _is_merge_ask(issue: Mapping[str, Any]) -> bool:
+    """A merge ask: the hourly filer's marker, or a title that says so."""
+    return bool(_MERGE_ASK.search(str(issue.get("body") or ""))
+                or re.match(r"\s*merge\b", str(issue.get("title") or ""), re.IGNORECASE))
 
 
 #: The most closed actions the archive shows.
@@ -530,6 +545,7 @@ def _action_json(a: Action) -> dict[str, Any]:
             "done": a.done, "actionable": a.actionable, "summary": a.summary,
             "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
             "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,
-            "pr_state": a.pr_state, "command": a.command, "closed": a.closed,
+            "pr_state": a.pr_state, "merge_ask": a.merge_ask,
+            "command": a.command, "closed": a.closed,
             "closed_at": a.closed_at, "created_at": a.created_at,
             "updated_at": a.updated_at}

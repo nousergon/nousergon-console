@@ -2414,7 +2414,7 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
     if a.closed:
         status = ('<div><span class="chip state-healthy">closed'
                   + (f' {esc(str(a.closed_at)[:10])}' if a.closed_at else "") + "</span></div>")
-    elif a.pr_state in ("merged", "closed"):
+    elif a.merge_ask and a.pr_state in ("merged", "closed"):
         status = (f'<div><span class="chip state-healthy">PR {esc(a.pr_state)} — '
                   "nothing left for you; the issue closes on the next check</span></div>")
     elif a.done:
@@ -2423,12 +2423,20 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
         status = ""
     # PRs and commands, never the tracking issue (Brian 2026-11-04): the title
     # links the PR when there is one, and the command is shown to copy.
-    title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url
+    # The title links the PR only when merging it IS the ask; a PR named as
+    # context is linked beside it, so it never reads as the thing to do
+    # (Brian 2026-11-05: atlas#656, merged long ago, headed the list).
+    title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url and a.merge_ask
              else f"<strong>{esc(a.title)}</strong>")
     cmd = (f'<pre class="action-cmd"><code>{esc(a.command)}</code></pre>'
            if a.command else "")
-    what = (f'<a href="{esc(a.pr_url)}">PR {esc(a.pr_ref)}</a>' if a.pr_url
-            else "command" if a.command else "step")
+    if a.pr_url and a.merge_ask:
+        what = f'<a href="{esc(a.pr_url)}">PR {esc(a.pr_ref)}</a>'
+    else:
+        what = "command" if a.command else "step"
+        if a.pr_url:
+            what += (f' · related <a href="{esc(a.pr_url)}">{esc(a.pr_ref)}</a>'
+                     + (f" ({esc(a.pr_state)})" if a.pr_state else ""))
     return (f'<tr id="a{a.number}" class="action{" action-done" if checked else ""}">'
             f'<td class="action-cell">{control}</td>'
             f"<td>{title}"

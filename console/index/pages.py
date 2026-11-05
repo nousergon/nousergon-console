@@ -513,10 +513,13 @@ def _tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str, Any
         by_name = _fields(ent)
         out["also"] = [
             {"field": name, "label": label, "value": by_name[name].value,
-             "text": format_value(by_name[name]), "unit": by_name[name].unit}
+             "text": format_value(by_name[name]), "unit": by_name[name].unit,
+             # Carried like the tile's own value's: a declaration defect
+             # (e.g. a count with no unit) is shown, not dropped (codex c142d47c).
+             "defect": by_name[name].defect}
             if name in by_name else
             {"field": name, "label": label, "value": None, "text": "not carried",
-             "unit": None}
+             "unit": None, "defect": None}
             for name, label in tile.also]
     if f.comparable and _number(f.value) and _number(f.baseline):
         out["versus_baseline"] = ("above" if f.value > f.baseline else
@@ -673,10 +676,12 @@ def _marks(index: Any, specs: tuple[Annotation, ...], variables: Mapping[str, st
             if day is None:
                 undated += 1
                 continue
-            if not known or day < known[0] or day > known[-1]:
+            # By day, never by position: a series is not assumed to arrive in
+            # chronological order (codex 25e8f237f4fba4b3).
+            if not known or day < min(known) or day > max(known):
                 outside += 1
                 continue
-            slot = max(i for i, d in enumerate(days) if d is not None and d <= day)
+            slot = max((d, i) for i, d in enumerate(days) if d is not None and d <= day)[1]
             named = by_name.get(spec.text) if spec.text else None
             text = (str(named.value) if named is not None and named.value is not None
                     else str(ent.detail.get(LABEL_DETAIL) or ent.id))

@@ -4,6 +4,8 @@ variables, tiles always show staleness and baseline, and HTML and JSON render
 one evaluation (§3.8)."""
 from __future__ import annotations
 
+import sys
+
 from datetime import datetime, timezone
 
 import pytest
@@ -475,6 +477,27 @@ def test_a_tile_shows_its_rows_other_fields_and_says_when_one_is_not_carried():
     html = _html(_index(ALSO), resolve("/page/cost"))
     assert 'class="tile-meta tile-also">pace 1.2 <span class="tile-unit">ratio</span>' in html
     assert "missing not carried" in html
+
+
+def test_an_also_fields_declaration_defect_is_carried_and_shown(monkeypatch):
+    # codex c142d47c1a4e94da: a unitless also-field rendered as a bare number,
+    # its defect dropped, while the tile's own value carried its defect.
+    row = Entity(
+        kind=Kind.RUN, id="spend:aws", state=State.DEGRADED,
+        provenance=Provenance("s3://b/spend.json", "2026-10-28T11:00:00+00:00"),
+        facets={"pane": "cost", "meter": "spend", "provider": "aws"},
+        detail={"fields": {
+            "mtd": {"value": 120, "unit": "USD", "render": "value"},
+            "pace": {"value": 7, "render": "value"},  # no unit: a defect
+        }})
+    monkeypatch.setattr(sys.modules[__name__], "ROWS", (row,))
+    decl = {"cost": {"title": "Cost", "question": "q", "sections": [
+        {"type": "tiles", "title": "t", "tiles": [
+            {"label": "AWS", "field": "mtd", "also": ["pace"],
+             "select": {"facets": {"meter": "spend", "provider": "aws"}}}]}]}}
+    (also,) = _page(_index(decl))["sections"][0]["tiles"][0]["also"]
+    assert also["defect"] and "no unit" in also["defect"]
+    assert "no unit declared" in _html(_index(decl), resolve("/page/cost"))
 
 
 def test_a_tile_without_also_carries_no_also_key():

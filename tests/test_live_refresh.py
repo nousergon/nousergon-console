@@ -111,3 +111,20 @@ def test_the_scripts_age_wording_is_the_servers():
     for stamp, age in zip(stamps, json.loads(out)):
         server = render_html.as_of_html(stamp, now)
         assert f'<span class="age">{age}</span>' in server, (stamp, age, server)
+
+
+def test_freshness_metas_describe_the_index_the_response_rendered():
+    """codex f22b3364478ac5da: `_build_info` re-read `server.index`, so a
+    refresh swapping the index mid-render stamped old data with the new
+    build's time. It must read the index the request captured."""
+    from types import SimpleNamespace
+
+    from console.server.app import ConsoleHandler
+
+    handler = ConsoleHandler.__new__(ConsoleHandler)
+    rendered = SimpleNamespace(build_info="old-build")
+    handler.server = SimpleNamespace(index=SimpleNamespace(build_info="new-build"))
+    handler._served_index = rendered
+    assert handler._build_info() == "old-build"
+    del handler._served_index
+    assert handler._build_info() == "new-build"

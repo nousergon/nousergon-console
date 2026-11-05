@@ -302,3 +302,16 @@ class TestItDoesNotDisturbWhatTheAdapterAlreadyDid:
         assert result.status is AdapterStatus.OK, (
             "entities were read; a partial failure must not discard them"
         )
+
+
+def test_a_minted_token_is_never_truncated(monkeypatch):
+    """codex 9959441e28fccc24: the token went through the 240-char reason
+    bound, so a longer credential was sent cut short."""
+    import subprocess
+
+    long_token = "ghs_" + "x" * 400
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=f"\n{long_token}\nextra\n", stderr=""),
+    )
+    assert git_host._mint_token(["helper"], "org", "repo") == long_token

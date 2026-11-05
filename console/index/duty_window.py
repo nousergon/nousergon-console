@@ -27,7 +27,14 @@ A `MISSED` row moves to `OFF_DUTY` only when ALL of these hold:
    ``row_last_run + row_cadence * staleness_factor >= anchor_last_run``. A job
    that had already missed while the substrate was demonstrably up stays
    `MISSED` — going to sleep afterwards does not launder it;
-4. every timestamp and cadence involved parses. An input this cannot read
+4. the row did **not** run after the anchor's last proof of life
+   (``row_last_run <= anchor_last_run``): its own later run proves the
+   substrate was up past the anchor's silence, so the anchor's miss is not
+   the substrate's;
+5. the anchor chain from the row does not loop back on itself: mutual
+   (A↔B) or longer cycles would let every member fold and hide the
+   substrate entirely, so a row in or under a cycle stays `MISSED`;
+6. every timestamp and cadence involved parses. An input this cannot read
    leaves the row `MISSED`: the fold only ever moves a row on evidence.
 
 The anchor itself never folds — it is the one row that keeps the substrate
@@ -92,6 +99,8 @@ def _off_duty_replacement(
     anchor_id = str(ent.detail.get(DUTY_ANCHOR_KEY) or "").strip()
     if not anchor_id or anchor_id == ent.id:
         return None
+    if _anchor_chain_cycles(ent.id, entities):
+        return None
     anchor = entities.get(anchor_id)
     if anchor is None or anchor.state is not State.MISSED:
         # The substrate's proof of life is current (or unreadable): the row's
@@ -101,6 +110,10 @@ def _off_duty_replacement(
     row_last = _parse(_as_of(ent))
     cadence = _positive(ent.detail.get(_CADENCE))
     if anchor_last is None or row_last is None or cadence is None:
+        return None
+    if row_last > anchor_last:
+        # The row ran after the anchor's last beat: its own run proves the
+        # substrate was up then, so the anchor's silence explains nothing.
         return None
     due_by = row_last.timestamp() + cadence * 60.0 * float(staleness_factor)
     if due_by < anchor_last.timestamp():
@@ -116,6 +129,21 @@ def _off_duty_replacement(
             "off_duty_since": _as_of(anchor),
         },
     )
+
+
+def _anchor_chain_cycles(start_id: str, entities: dict[str, Entity]) -> bool:
+    """Whether following ``duty_anchor`` from ``start_id`` revisits an id."""
+    seen = {start_id}
+    current = entities.get(start_id)
+    while current is not None:
+        nxt = str(current.detail.get(DUTY_ANCHOR_KEY) or "").strip()
+        if not nxt:
+            return False
+        if nxt in seen:
+            return True
+        seen.add(nxt)
+        current = entities.get(nxt)
+    return False
 
 
 def _as_of(ent: Entity) -> str | None:

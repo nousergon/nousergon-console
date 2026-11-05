@@ -121,6 +121,35 @@ def test_child_already_overdue_before_the_laptop_slept_stays_missed(tmp_path):
     assert idx.entity(_key(CHILD)).state == "stale"
 
 
+def test_child_that_ran_after_the_anchor_stopped_stays_missed(tmp_path):
+    """codex c459c0e1c652533d: the heartbeat's last beat was 03:35, but the
+    child itself ran at 05:00 - the laptop was up then, so the child's later
+    miss is on duty and must not fold."""
+    idx = _build(tmp_path, {
+        ANCHOR: (SLEPT_AT, 15),
+        CHILD: (SLEPT_AT + timedelta(minutes=85), 15),
+    })
+    assert idx.entity(ANCHOR).state is State.MISSED
+    assert idx.entity(CHILD).state is State.MISSED
+    assert idx.entity(_key(CHILD)).state == "stale"
+
+
+def test_mutual_duty_anchors_never_fold_each_other(tmp_path):
+    """codex dc30eb7847b7559f: A and B anchored on each other, both MISSED,
+    must both stay MISSED - otherwise every substrate finding disappears."""
+    idx = _build(tmp_path, {CHILD: (SLEPT_AT, 15), OTHER: (SLEPT_AT, 15)},
+                 anchors={CHILD: OTHER, OTHER: CHILD})
+    assert idx.entity(CHILD).state is State.MISSED
+    assert idx.entity(OTHER).state is State.MISSED
+
+
+def test_a_row_under_an_anchor_cycle_does_not_fold(tmp_path):
+    idx = _build(tmp_path, {ANCHOR: (SLEPT_AT, 15), CHILD: (SLEPT_AT, 15),
+                            OTHER: (SLEPT_AT, 15)},
+                 anchors={ANCHOR: OTHER, OTHER: ANCHOR, CHILD: ANCHOR})
+    assert idx.entity(CHILD).state is State.MISSED
+
+
 def test_no_duty_anchor_declared_stays_missed(tmp_path):
     idx = _build(tmp_path, {ANCHOR: (SLEPT_AT, 15), CHILD: (SLEPT_AT, 15)},
                  anchors={CHILD: None, ANCHOR: None})

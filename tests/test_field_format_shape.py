@@ -31,6 +31,12 @@ def test_counts_with_nothing_nonzero_is_total_zero():
     assert format_shape({"Alpha": 0}, {"format": "counts"}) == "total 0"
 
 
+def test_counts_above_six_digits_are_exact():
+    # codex 0637e1cc9ce88ab9: ':g' rendered {'A': 1000001} as '1e+06'.
+    assert format_shape({"A": 1000001}, {"format": "counts"}) == "A: 1000001 · total 1000001"
+    assert format_shape({"A": 2.5, "B": 1234567.0}, {"format": "counts"}) == "A: 2.5, B: 1234567 · total 1234569.5"
+
+
 def test_grouped_follows_group_order_and_falls_back_to_the_next_item_key():
     out = format_shape(ITEMS, SPEC["items"])
     assert out == ("Alpha: https://example.com/b/pull/2, org/c#3; "

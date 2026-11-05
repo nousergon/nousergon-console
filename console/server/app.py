@@ -78,7 +78,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, (Path(__file__).parent.parent / "static" / name).read_text(),
                        content_type, cache_control="no-cache")
             return
-        index = self.server.index
+        # Captured once: the freshness metas (`_build_info`) must describe the
+        # index this response renders, not one a refresh swapped in mid-render.
+        index = self._served_index = self.server.index
         if parts.path == demo_mode.PREFIX or parts.path.startswith(demo_mode.PREFIX + "/"):
             self._demo(index, parts.path[len(demo_mode.PREFIX):] or "/", parts.query)
             return
@@ -157,7 +159,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         form = dict(parse_qsl(raw, keep_blank_values=True))
         done = form.get("done", "1") != "0"
         actor = (self.headers.get(_ACTOR_HEADER) or "").strip() or None
-        index = self.server.index
+        index = self._served_index = self.server.index
         from ..index import actions
 
         number = int(m.group("n"))
@@ -243,7 +245,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         build, or a handler built without a server): the metas then say the
         data time is unknown rather than failing the response."""
         try:
-            return self.server.index.build_info
+            served = getattr(self, "_served_index", None)
+            return (served if served is not None else self.server.index).build_info
         except AttributeError:
             return None
 

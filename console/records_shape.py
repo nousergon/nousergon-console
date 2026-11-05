@@ -346,6 +346,14 @@ def _is_count(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _count_text(v: float) -> str:
+    """A count as written: a whole number exactly (``:g`` keeps six significant
+    digits, so 1000001 read ``1e+06``), anything else to 15 significant."""
+    if isinstance(v, int) or (isinstance(v, float) and v.is_integer()):
+        return str(int(v))
+    return f"{v:.15g}"
+
+
 def format_shape(value: Any, spec: dict[str, Any]) -> Any:
     """A structured value folded into ONE line of text, from its shape alone.
 
@@ -376,9 +384,9 @@ def format_shape(value: Any, spec: dict[str, Any]) -> Any:
     if fmt == "length" and isinstance(value, (list, dict)):
         return len(value)
     if fmt == "counts" and isinstance(value, dict):
-        parts = [f"{k}: {v:g}" for k, v in value.items() if _is_count(v) and v != 0]
+        parts = [f"{k}: {_count_text(v)}" for k, v in value.items() if _is_count(v) and v != 0]
         total = sum(v for v in value.values() if _is_count(v))
-        return " · ".join(p for p in (", ".join(parts), f"total {total:g}") if p)
+        return " · ".join(p for p in (", ".join(parts), f"total {_count_text(total)}") if p)
     if fmt == "grouped" and isinstance(value, list):
         if not value:
             return "none"

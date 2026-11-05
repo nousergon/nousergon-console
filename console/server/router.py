@@ -27,6 +27,8 @@ Routes:
                                 label, one checkbox each. The page's one
                                 write is a POST that ticks an action on its
                                 issue (`index/actions.py`).
+- ``POST /ticks/<list>``      — mark a row of a table that declares a tick
+                                list (`index/ticks.py`); returns to the page.
 - ``/exceptions``             — every not-HEALTHY row, P0 first, then
                                 untriaged, then P1-P3 (CN-4.3 `.2`).
 - ``/page/<id>``              — one declared page: tiles, tables, charts,

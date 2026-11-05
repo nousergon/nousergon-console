@@ -36,6 +36,7 @@ from .drivers import KNOWN_DRIVERS, resolve_bindings
 from .drivers.context import defaults as driver_defaults
 from .index import milestones as milestone_predicates
 from .index import actions as your_actions
+from .index import ticks as tick_lists
 from .index import planner as delivery_planner
 from .index import citations as citation_links
 from .index import home as declared_home
@@ -241,8 +242,13 @@ def build_index(config: dict[str, Any]) -> Index:
     # And for declared pages (`/page/<id>`, alpha-engine-config-I12783): a
     # section this build cannot evaluate, or a `report` section naming no
     # declared feed, fails the build by name.
+    # And for tick lists (`ticks:`, a checkbox per row of an opted-in table):
+    # a list this build cannot honour, or a table naming an undeclared list,
+    # fails the build by name.
+    declared_ticks = tick_lists.parse(config.get("ticks"))
     declared_layouts = declared_pages.parse(
-        config.get("pages"), feeds={f.id for f in declared_feeds})
+        config.get("pages"), feeds={f.id for f in declared_feeds},
+        ticks=set(declared_ticks))
     # And for products (`/index` groups pages and dashboards by product, Brian
     # 2026-11-05): a page naming an undeclared product fails by name.
     declared_products = products_config.parse(config.get("products"))
@@ -347,6 +353,13 @@ def build_index(config: dict[str, Any]) -> Index:
         actions_listing, actions_result = your_actions.read(declared_actions, now_iso())
         index.add_result(actions_result)
         your_actions.attach(index, actions_listing)
+
+    # Tick lists: each declared list's marks, read from its store on every
+    # build (`index/ticks.py`). A store that cannot be read is a FAILED source.
+    tick_stores, tick_results = tick_lists.read(declared_ticks, now_iso())
+    for result in tick_results:
+        index.add_result(result)
+    tick_lists.attach(index, tick_stores)
 
     # §2.6: every component's own descriptor said where its facts live. Walking
     # those bindings is what makes onboarding cost ONE FILE — a component whose

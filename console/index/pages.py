@@ -151,6 +151,9 @@ class Section:
     annotations: tuple[Annotation, ...] = ()
     #: table only: the fields a reader may sort by from the URL (`?sort=`).
     sortable: tuple[str, ...] = ()
+    #: table only: a declared `ticks:` list and the row field keying it, so each
+    #: row carries a checkbox (`index/ticks.py`), e.g. ("reading-list", "item_id").
+    tick: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -280,7 +283,23 @@ def _empty(raw: Mapping[str, Any], where: str) -> str | None:
     return text
 
 
-def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
+def _tick(raw: Any, where: str, kind: str, ticks: set[str] | None) -> tuple[str, str] | None:
+    if raw is None:
+        return None
+    if kind != "table":
+        raise PagesConfigError(f"{where}: only a table takes `tick`")
+    if not isinstance(raw, Mapping) or set(raw) != {"list", "key"}:
+        raise PagesConfigError(f"{where}: `tick` must be {{list: <ticks name>, key: <field>}}")
+    name, key = str(raw["list"]).strip(), str(raw["key"]).strip()
+    if ticks is not None and name not in ticks:
+        raise PagesConfigError(f"{where}: no `ticks:` list {name!r} is declared")
+    if not key:
+        raise PagesConfigError(f"{where}: `tick.key` must name a field")
+    return name, key
+
+
+def _section(raw: Any, where: str, feeds: set[str] | None,
+             ticks: set[str] | None = None) -> Section:
     if not isinstance(raw, Mapping):
         raise PagesConfigError(f"{where}: must be a mapping")
     kind = str(raw.get("type") or "").strip()
@@ -355,12 +374,14 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
     if unshown:
         raise PagesConfigError(
             f"{where}: `sortable` field(s) {', '.join(unshown)} are not among the table's `fields`")
+    tick = _tick(raw.get("tick"), where, kind, ticks)
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
-                   annotations=annotations, sortable=sortable)
+                   annotations=annotations, sortable=sortable, tick=tick)
 
 
-def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
+def parse(raw: Any, feeds: set[str] | None = None,
+          ticks: set[str] | None = None) -> tuple[Page, ...]:
     """Validate and freeze the `pages:` block — a mapping of page id to page.
 
     ``feeds`` is the set of declared report-feed ids; a `report` section naming
@@ -401,7 +422,7 @@ def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
         pages.append(Page(
             id=pid, title=_text(p, "title", where), question=_text(p, "question", where),
             section=section, product=product,
-            sections=tuple(_section(s, f"{where} section #{n}", feeds)
+            sections=tuple(_section(s, f"{where} section #{n}", feeds, ticks)
                            for n, s in enumerate(sections, start=1)),
             range=rng, variables=variables, links=_links(p.get("links"), where)))
     return tuple(pages)
@@ -848,6 +869,20 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         table.sort(key=lambda r: state_rank(r["state"]))  # stable: newest within a state
     doc.update(columns=columns, matched=len(rows), total=len(table),
                rows=table[:s.limit], outside_range=len(rows) - len(in_range))
+    if s.tick is not None:
+        from . import ticks
+
+        name, key = s.tick
+        found = ticks.store(index, name)
+        doc["tick"] = {"list": name, "key": key,
+                       "label": found.declaration.label if found else "done",
+                       "writable": found is not None and found.error is None,
+                       "error": found.error if found else "not read"}
+        by_id = {e.id: e for e in in_range}
+        for r in doc["rows"]:
+            value = _fields(by_id[r["id"]]).get(key) if r["id"] in by_id else None
+            k = str(value.value) if value is not None and value.value not in (None, "") else None
+            r["tick"] = {"key": k, "done": bool(found and k and found.done(k))}
     return doc
 
 
@@ -894,3 +929,18 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
         SORT_PARAM: requested_sort,
         "sections": [_section_doc(index, s, variables, since, requested_sort) for s in p.sections],
     }
+
+
+def tick_keys(index: Any, name: str) -> set[str]:
+    """Every key a table declaring tick list ``name`` can show: the bound on
+    what a POST may tick (`index/ticks.py`)."""
+    out: set[str] = set()
+    for p in declared(index):
+        for s in p.sections:
+            if s.tick is None or s.tick[0] != name or s.select is None:
+                continue
+            for ent in _select(index, s.select, {}):
+                f = _fields(ent).get(s.tick[1])
+                if f is not None and f.value not in (None, ""):
+                    out.add(str(f.value))
+    return out

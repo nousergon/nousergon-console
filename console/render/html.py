@@ -440,8 +440,9 @@ def _chart_data(key: str, labels: list[str], series: list[dict], unit: str) -> s
     full precision, so the interactive layer reads exact values from the page
     itself rather than re-parsing the 4-significant-figure `<title>`s.
 
-    Each series is ``{"label", "kind": "bar" | "line" | "trace", "values"}``
-    (a trace is one line of an overlay, in its own colour token) with one
+    Each series is ``{"label", "kind": "bar" | "line" | "trace" | "inset",
+    "values"}`` (a trace is one line of an overlay, in its own colour token;
+    an inset is a part of the bars before it, drawn inside them) with one
     value per label; ``None`` is a gap (not measured), never zero, exactly as
     the SVG leaves it out. A ``"sparse": true`` series holds only its own
     points, so its ``None`` means "another series' point", not a gap. A
@@ -2259,7 +2260,9 @@ def exception_trend(points, now_total: int | None = None,
         *([{"label": "now (live)", "kind": "bar", "sparse": True,
             "values": [t if live else None for _, t, _, live in bars]}]
           if now_total is not None else []),
-        *([{"label": "untriaged", "kind": "line",
+        # An inset, not a line: the live layer draws it inside each bar, as
+        # the SVG above does (codex 5ac08eca053d7630).
+        *([{"label": "untriaged", "kind": "inset",
             "values": [u for _, _, u, _ in bars]}] if known else []),
     ], "not healthy")
     return (f'<p class="exception-trend"><svg class="ts-chart"{data} viewBox="0 0 {_CHART_W:g} '
@@ -2476,7 +2479,8 @@ def exceptions_page(index: Index) -> str:
 
     delta = _baseline.compare(
         index.exceptions_baseline(), [e.id for e in rows],
-        {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value) for e in rows})
+        {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value, view.jobs.get(e.id))
+         for e in rows})
     new_ids = set(delta["new"]) if delta else set()
     counts = " · ".join(
         f'<a href="#tier-{esc(t)}">{len(tiers[t])} {esc(t)}</a>'

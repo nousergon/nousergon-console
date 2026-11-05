@@ -183,7 +183,8 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
 
         delta = _baseline.compare(
             index.exceptions_baseline(), [e.id for e in rows],
-            {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value) for e in rows})
+            {e.id: _baseline.row_key(e.id, e.kind.value, e.state_value, view.jobs.get(e.id))
+             for e in rows})
         new_ids = set(delta["new"]) if delta else set()
         doc = {"schema_version": SCHEMA_VERSION, "view": "exceptions",
                "since_baseline": (None if delta is None else {
@@ -199,7 +200,10 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                          "priority": pages.PRIORITY_TIERS[pages.priority_rank(e)],
                          "tracked_by": (e.facets or {}).get("tracked_by"),
                          "new": (e.id in new_ids) if delta is not None else None,
-                         "runs": view.runs.get(e.id)} for e in rows]}
+                         "runs": view.runs.get(e.id),
+                         # The job a folded run stands for: tomorrow's
+                         # baseline matches on it (baseline.row_key).
+                         "job": view.jobs.get(e.id)} for e in rows]}
     elif req.view == "page":
         from ..index import pages
 
@@ -533,6 +537,9 @@ class JobView:
     rows: list[Entity]
     labels: dict[str, str]
     runs: dict[str, int]
+    #: folded run id -> the job it stands for (`belongs-to` target, else the
+    #: id before `@`), so a baseline matches runs by the same identity.
+    jobs: dict[str, str] = dc_field(default_factory=dict)
 
 
 def latest_per_job(index: Index, entities: list[Entity],
@@ -567,6 +574,7 @@ def latest_per_job(index: Index, entities: list[Entity],
     rows = [newest[k] for k in order]
     labels: dict[str, str] = {}
     runs: dict[str, int] = {}
+    job_ids: dict[str, str] = {}
     for key in order:
         ent = newest[key]
         job = jobs.get(key)
@@ -581,7 +589,8 @@ def latest_per_job(index: Index, entities: list[Entity],
         name = job_label(ent) or job
         labels[ent.id] = declared.get(ent.id, name) if job == ent.id else name
         runs[ent.id] = counts[key]
-    return JobView(rows=rows, labels=labels, runs=runs)
+        job_ids[ent.id] = job
+    return JobView(rows=rows, labels=labels, runs=runs, jobs=job_ids)
 
 
 def _as_of_time(ent: Entity) -> datetime | None:

@@ -505,7 +505,14 @@ class Index:
         if ent.kind is Kind.COMPONENT:
             classes = {c.claim_class for c in claims}
             declared = ClaimClass.DECLARATION in classes
-            discovered = ClaimClass.DISCOVERY in classes
+            # A scoped pass's NAMESAKE (`merge.is_namesake`) found a different
+            # object sharing the name — an EventBridge rule, not the Lambda it
+            # triggers — so it does not count as finding this one (codex
+            # d00bf9ff6f07b1ce). The same exclusion `merge()` and
+            # `_has_own_report` already apply.
+            facets = _declared_facets(claims)
+            discovered = any(c.claim_class is ClaimClass.DISCOVERY
+                             and not is_namesake(c, facets) for c in claims)
             if not declared and self._saw_ok_declaration:
                 return _unregistered(ent)
             if declared and not discovered and self._saw_ok_discovery:

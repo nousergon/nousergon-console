@@ -49,10 +49,43 @@
     return el ? el.getAttribute("content") : null;
   }
 
+  // Open <details> survive a refresh by identity, never by position (codex
+  // e051f22ff1737637: one new report collapsed every open one, and a shifted
+  // list opened the wrong ones). Each element is described as {id, cls,
+  // text, open}. A refreshed element takes the state of the old one with the
+  // same id, else the same summary text (the nth of that text, so repeated
+  // summaries pair in order). A section that is the only one of its class on
+  // both pages is the same section even when a count in its summary moved.
+  // Anything else is new and keeps the server's state. Returns, per new
+  // element, true / false, or null for "leave it as served".
+  function carryOpen(before, after) {
+    function keyed(list) {
+      var seen = Object.create(null), perClass = Object.create(null);
+      list.forEach(function (d) { perClass[d.cls || ""] = (perClass[d.cls || ""] || 0) + 1; });
+      return list.map(function (d) {
+        var key = d.id ? "id " + d.id : "text " + (d.text || "");
+        seen[key] = (seen[key] || 0) + 1;
+        var only = !d.id && d.cls && perClass[d.cls] === 1 ? d.cls : null;
+        return {key: key + " #" + seen[key], only: only, open: !!d.open};
+      });
+    }
+    var byKey = Object.create(null), byClass = Object.create(null);
+    keyed(before).forEach(function (o) {
+      byKey[o.key] = o;
+      if (o.only) byClass[o.only] = o;
+    });
+    return keyed(after).map(function (d) {
+      var hit = byKey[d.key] || (d.only && byClass[d.only]);
+      return hit ? hit.open : null;
+    });
+  }
+
   // Outside a browser (the console's own tests run this file under node)
   // only the pure functions above are exported; nothing below runs.
   if (typeof document === "undefined") {
-    if (typeof module !== "undefined") module.exports = {ageText: ageText, ageFrom: ageFrom};
+    if (typeof module !== "undefined") {
+      module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen};
+    }
     return;
   }
 
@@ -113,6 +146,16 @@
     timer = setTimeout(refresh, period * 1000);
   }
 
+  function describe(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i], s = d.querySelector("summary");
+      out.push({id: d.id || "", cls: d.className || "", open: d.open,
+                text: s ? s.textContent.replace(/\s+/g, " ").trim() : ""});
+    }
+    return out;
+  }
+
   function editing() {
     var a = document.activeElement;
     return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
@@ -132,14 +175,13 @@
         var stamp = meta(doc, "console-built");
         if (stamp === null) throw new Error("not a console page");
         if (editing()) return;  // the reader started typing while we fetched
-        var open = [];
-        var was = document.querySelectorAll("details");
-        for (var i = 0; i < was.length; i++) open.push(was[i].open);
+        var was = describe(document.querySelectorAll("details"));
         var x = window.scrollX, y = window.scrollY;
         document.body.replaceWith(document.adoptNode(doc.body));
         var now = document.querySelectorAll("details");
-        if (now.length === open.length) {
-          for (var j = 0; j < now.length; j++) now[j].open = open[j];
+        var keep = carryOpen(was, describe(now));
+        for (var j = 0; j < now.length; j++) {
+          if (keep[j] !== null) now[j].open = keep[j];
         }
         window.scrollTo(x, y);
         // /charts.js re-draws its interactive layer over the new SVGs.

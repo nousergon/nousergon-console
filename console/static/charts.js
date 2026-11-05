@@ -111,10 +111,24 @@
     return [lo < 0 ? lo - pad : 0, hi > 0 ? hi + pad : 0];
   }
 
+  // The x range for a requested [lo, hi] over `n` slots (slot i is centred
+  // on i): widened to whole slots, so a bar is never cut in half, and held
+  // inside the series. It honours the request, so a drag selection zooms;
+  // the full view (lo 0, hi n-1, or no request) is every slot. Idempotent,
+  // because uPlot runs it again over a range it already returned.
+  function xRange(lo, hi, n) {
+    var first = -0.5, last = n - 0.5;
+    if (lo === null || lo === undefined || isNaN(lo)) lo = 0;
+    if (hi === null || hi === undefined || isNaN(hi)) hi = n - 1;
+    var a = Math.max(Math.floor(lo + 0.5) - 0.5, first);
+    var b = Math.min(Math.ceil(hi - 0.5) + 0.5, last);
+    return b > a ? [a, b] : [first, last];
+  }
+
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
       module.exports = {formatValue: formatValue, hiddenFrom: hiddenFrom, hashFor: hashFor, bag: bag,
-                        withAlpha: withAlpha, yRange: yRange};
+                        withAlpha: withAlpha, yRange: yRange, xRange: xRange};
     }
     return;
   }
@@ -229,8 +243,13 @@
       // A trace is a series in its own right drawn as a solid line, never
       // bridged across a gap (uPlot's default `spanGaps: false`).
       var trace = s.kind === "trace";
+      // An inset is a part of the bars before it, drawn inside them from the
+      // baseline in `--warn`, as the server's SVG draws `rect.ts-untriaged`
+      // (codex 5ac08eca053d7630: as a dashed line it hid the overlay).
+      var inset = s.kind === "inset";
       var colour = trace ? token(TRACE_TOKENS[traceNo++ % TRACE_TOKENS.length])
-        : line ? token("chart-ref") : token(BAR_TOKENS[barNo++ % BAR_TOKENS.length]);
+        : line ? token("chart-ref") : inset ? token("warn")
+        : token(BAR_TOKENS[barNo++ % BAR_TOKENS.length]);
       plotted.push(s.values);
       seriesOpts.push({
         label: s.label,
@@ -238,7 +257,7 @@
         stroke: colour,
         width: trace ? 2 : line ? 1.5 : 1,
         dash: line ? [4, 3] : undefined,
-        fill: line || trace ? undefined : withAlpha(colour, 0.55),
+        fill: line || trace ? undefined : withAlpha(colour, inset ? 0.9 : 0.55),
         fillTo: 0,
         paths: line || trace ? undefined : bars,
         points: {show: false},
@@ -264,9 +283,9 @@
       height: height,
       series: seriesOpts,
       scales: {
-        x: {time: false, range: function (u, lo, hi) {
-          return [Math.min(lo, 0) - 0.5, Math.max(hi, n - 1) + 0.5];
-        }},
+        // Not widened back to the full series: that undid every drag zoom
+        // (codex 93a91fb419cd7d42).
+        x: {time: false, range: function (u, lo, hi) { return xRange(lo, hi, n); }},
         y: {range: function () { return yRange(data.series); }},
       },
       axes: [
@@ -366,7 +385,10 @@
     var scheme = window.matchMedia("(prefers-color-scheme: dark)");
     if (scheme.addEventListener) scheme.addEventListener("change", function () { teardown(); enhanceAll(); });
   }
-  document.addEventListener("console:refreshed", function () { live = []; enhanceAll(); });
+  // Torn down, not forgotten: `live = []` alone left every replaced chart's
+  // uPlot instance and its window listeners alive, one more set per refresh
+  // (codex f52d2f933e5eddb7).
+  document.addEventListener("console:refreshed", function () { teardown(); enhanceAll(); });
 
   enhanceAll();
 })();

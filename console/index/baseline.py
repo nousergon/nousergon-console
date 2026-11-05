@@ -64,13 +64,22 @@ class Baseline:
     keys: dict[str, str] = field(default_factory=dict)
 
 
-def row_key(row_id: str, kind: str | None, state: str | None) -> str:
+def row_key(row_id: str, kind: str | None, state: str | None,
+            job: str | None = None) -> str:
     """What a row stands for across days. A run row is folded to one row per
     job and state whose representative id is its NEWEST run, so a job still
     failing under a newer run must not read as cleared-and-new: runs compare
-    by job (the id before ``@``) and state; every other row by its id."""
-    if kind == "run" and "@" in row_id:
-        return f"run|{row_id.split('@', 1)[0]}|{state}"
+    by job and state; every other row by its id.
+
+    The job is the folding logic's (`render.json.latest_per_job`): the run's
+    `belongs-to` target when the caller knows it, else the id before ``@``. A
+    systemd run's id is its bare InvocationID, linked to its unit only by
+    `belongs-to`, so keying on ``@`` alone read a unit still failing under a
+    newer invocation as cleared-and-new (codex 10fe7de16b3c53ab)."""
+    if kind == "run":
+        job = job or (row_id.split("@", 1)[0] if "@" in row_id else None)
+        if job:
+            return f"run|{job}|{state}"
     return row_id
 
 
@@ -99,7 +108,9 @@ def from_snapshot(doc: Any) -> Baseline:
         if isinstance(row, dict) and row.get("id"):
             rid = str(row["id"])
             ids.add(rid)
-            keys[rid] = row_key(rid, row.get("kind"), row.get("state"))
+            job = row.get("job")
+            keys[rid] = row_key(rid, row.get("kind"), row.get("state"),
+                                str(job) if job else None)
             if row.get("label"):
                 labels[rid] = str(row["label"])
     return Baseline(ids=frozenset(ids), labels=labels,

@@ -3030,6 +3030,47 @@ _TABLE_OPEN = re.compile(r"<table\b[^>]*>")
 _TABLE_CLOSE = re.compile(r"</table>")
 
 
+def with_new_tab_links(page: str) -> str:
+    """Give every navigating `<a href>` `target="_blank" rel="noopener noreferrer"`,
+    so clicking a link on the console opens a new tab or window and never
+    replaces the page the reader was on (Brian's ruling, 2026-11-05: "all links
+    in the console").
+
+    Applied once, at the server, to every HTML response — like
+    `with_scrolling_tables` — so a link added to any view later is covered
+    without remembering to. Left alone: an in-page anchor (`#...`), a
+    `javascript:`, `mailto:` or `tel:` link, an `<a>` with no `href`, and one
+    that already declares its own `target`. Forms and buttons are not anchors
+    and are never touched. An existing `rel` keeps its tokens and gains
+    `noopener noreferrer`.
+    """
+    return _ANCHOR_OPEN.sub(_new_tab_anchor, page)
+
+
+_ANCHOR_OPEN = re.compile(r"<a\b([^>]*)>", re.IGNORECASE)
+_ANCHOR_HREF = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+_ANCHOR_TARGET = re.compile(r"\btarget\s*=", re.IGNORECASE)
+_ANCHOR_REL = re.compile(r"""\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+_SAME_PAGE_SCHEMES = ("#", "javascript:", "mailto:", "tel:")
+
+
+def _new_tab_anchor(m: re.Match) -> str:
+    attrs = m.group(1)
+    href = _ANCHOR_HREF.search(attrs)
+    if not href or _ANCHOR_TARGET.search(attrs):
+        return m.group(0)
+    value = next(g for g in href.groups() if g is not None).strip().lower()
+    if value.startswith(_SAME_PAGE_SCHEMES):
+        return m.group(0)
+    rel = _ANCHOR_REL.search(attrs)
+    if rel:
+        tokens = next(g for g in rel.groups() if g is not None).split()
+        tokens += [t for t in ("noopener", "noreferrer") if t not in tokens]
+        attrs = attrs[:rel.start()] + f'rel="{" ".join(tokens)}"' + attrs[rel.end():]
+        return f'<a{attrs} target="_blank">'
+    return f'<a{attrs} target="_blank" rel="noopener noreferrer">'
+
+
 def _member_links(kind: Kind, state: str, member_ids) -> str:
     """The rows behind a §9 count, as links — the count's evidence field (§5.1).
 

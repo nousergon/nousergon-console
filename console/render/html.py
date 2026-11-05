@@ -1678,6 +1678,7 @@ def dashboards_page(index: Index, query: str | None = None) -> str:
     contain the words; the URL carries it, so a filtered index is a link.
     """
     from ..index import pages as declared_pages
+    from ..index import products as declared_products
     from ..index import reports as declared_reports
 
     model = index.landing_model()
@@ -1688,13 +1689,37 @@ def dashboards_page(index: Index, query: str | None = None) -> str:
 
     group("start", "start here",
           [_index_entry(t, u, a) for t, u, a in _BUILT_IN_PAGES], "")
+
+    def dashboard_entry(d: dict) -> tuple[str, str]:
+        return _index_entry(d["pane"], d["url"], f'{d["rows"]} {d["kind"]} rows',
+                            " · " + (f'<span class="state-DEGRADED">{d["not_healthy"]} '
+                                     "not healthy</span>" if d["not_healthy"]
+                                     else "all healthy"))
+
+    # Brian 2026-11-05: each product's pages and dashboards together, then
+    # the org-wide ones. A product lists its outside links, its pages (by
+    # section) and its dashboards, in that order.
+    products = declared_products.declared(index)
+    owner = declared_products.pane_owner(products)
+    all_pages = declared_pages.declared(index)
+    for prod in products:
+        mine = sorted((p for p in all_pages if p.product == prod.id),
+                      key=lambda p: (p.section == "other", p.section))
+        entries = [_index_entry(t, u, "outside the console") for t, u in prod.links]
+        entries += [_index_entry(p.title, p.url, f"{p.section} · {p.question}") for p in mine]
+        entries += [dashboard_entry(d) for d in model.dashboards
+                    if owner.get(d["pane"]) == prod.id]
+        group(f"product-{prod.id}", prod.title + (f" — {prod.about}" if prod.about else ""),
+              entries, "nothing declared yet for this product")
+    org = declared_products.ORG_WIDE_TITLE if products else "pages"
     by_section: dict[str, list] = {}
-    for p in declared_pages.declared(index):
-        by_section.setdefault(p.section, []).append(p)
+    for p in all_pages:
+        if not (products and p.product):
+            by_section.setdefault(p.section, []).append(p)
     for section in sorted(by_section, key=lambda x: (x == "other", x)):
-        group(f"pages-{section}", f"pages · {section}",
+        group(f"pages-{section}", f"{org} · {section}",
               [_index_entry(p.title, p.url, p.question) for p in by_section[section]], "")
-    if not by_section:
+    if not all_pages:
         group("pages", "pages", [],
               "none declared — the `pages:` config block is empty")
     group("reports", "reports & archives",
@@ -1702,13 +1727,10 @@ def dashboards_page(index: Index, query: str | None = None) -> str:
                         else "report feed")
            for f in declared_reports.declared(index)],
           "none declared — the `reports:` config block is empty")
-    group("dashboards", "dashboards",
-          [_index_entry(d["pane"], d["url"], f'{d["rows"]} {d["kind"]} rows',
-                        " · " + (f'<span class="state-DEGRADED">{d["not_healthy"]} '
-                                 "not healthy</span>" if d["not_healthy"]
-                                 else "all healthy"))
-           for d in model.dashboards],
-          "none declared — no row carries a pane facet")
+    group("dashboards", f"{org} · dashboards" if products else "dashboards",
+          [dashboard_entry(d) for d in model.dashboards if d["pane"] not in owner],
+          "every dashboard belongs to a product above" if model.dashboards
+          else "none declared — no row carries a pane facet")
     group("milestones", "milestones",
           [_index_entry(m["id"], f'/#milestone-{m["id"]}',
                         f'{m["met"]} of {m["of"]} clauses met',

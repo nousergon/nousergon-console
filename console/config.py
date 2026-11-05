@@ -40,6 +40,7 @@ from .index import planner as delivery_planner
 from .index import citations as citation_links
 from .index import home as declared_home
 from .index import pages as declared_pages
+from .index import products as products_config
 from .index import reports as report_feeds
 from .index import triage as triage_overlay
 from .index import baseline as exceptions_baseline
@@ -242,6 +243,10 @@ def build_index(config: dict[str, Any]) -> Index:
     # declared feed, fails the build by name.
     declared_layouts = declared_pages.parse(
         config.get("pages"), feeds={f.id for f in declared_feeds})
+    # And for products (`/index` groups pages and dashboards by product, Brian
+    # 2026-11-05): a page naming an undeclared product fails by name.
+    declared_products = products_config.parse(config.get("products"))
+    products_config.check_pages(declared_products, declared_layouts)
     # And for demo mode (`/demo/...`, alpha-engine-config-I13023): a `demo:`
     # block that would hide less than it says — an unknown key, a bad regex, a
     # page pattern matching no declared page — fails the build by name.
@@ -407,6 +412,7 @@ def build_index(config: dict[str, Any]) -> Index:
     delivery_planner.attach(index, declared_plan)
     report_feeds.attach(index, declared_feeds)
     declared_pages.attach(index, declared_layouts)
+    products_config.attach(index, declared_products)
     demo_mode.attach(index, declared_demo)
     declared_home.attach(index, declared_front)
     citation_links.attach(index, declared_citations)

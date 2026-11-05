@@ -44,8 +44,12 @@ _STATIC = {
 }
 
 
-#: `/actions/<issue number>` — the only POST route (`ConsoleHandler.do_POST`).
+#: `/actions/<issue number>` and `/ticks/<list>` — the only POST routes
+#: (`ConsoleHandler.do_POST`).
 _ACTION_POST = re.compile(r"^/actions/(?P<n>[1-9][0-9]{0,8})$")
+_TICK_POST = re.compile(r"^/ticks/(?P<name>[a-z0-9][a-z0-9-]{0,39})$")
+#: Where a tick returns the reader: a declared page, never another host.
+_TICK_BACK = re.compile(r"^/page/[a-z0-9-]+(?:\?[^\s]*)?$")
 #: Who ticked, as the edge proxy (Cloudflare Access) asserts it. Absent on a
 #: loopback console with no proxy, where the comment says so instead.
 _ACTOR_HEADER = "Cf-Access-Authenticated-User-Email"
@@ -136,9 +140,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self._send(200, _html(index, req), "text/html; charset=utf-8")
 
     def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
-        """The console's ONE write: tick or untick an action
-        (`index/actions.py`). Every other path answers 405, so no other view
-        can grow a write by accident.
+        """The console's two writes: tick or untick an action
+        (`index/actions.py`), or mark a row on a declared tick list
+        (`index/ticks.py`, saved to that list's own S3 object). Every other
+        path answers 405, so no other view can grow a write by accident.
 
         Same-origin is required: the browser's ``Origin`` (or, failing that,
         ``Referer``) must name this request's own ``Host``, so a page on
@@ -148,8 +153,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         m = _ACTION_POST.match(parts.path)
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(min(length, 4096)).decode("utf-8", "replace") if length else ""
-        if m is None:
-            self._send(405, "<h1>405</h1><p>Only an action tick is writable.</p>",
+        tm = _TICK_POST.match(parts.path)
+        if m is None and tm is None:
+            self._send(405, "<h1>405</h1><p>Only an action tick or a list tick is writable.</p>",
                        "text/html; charset=utf-8")
             return
         if not _same_origin(self.headers):
@@ -160,6 +166,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         done = form.get("done", "1") != "0"
         actor = (self.headers.get(_ACTOR_HEADER) or "").strip() or None
         index = self._served_index = self.server.index
+        if tm is not None:
+            return self._tick(index, tm.group("name"), form, done, actor)
         from ..index import actions
 
         number = int(m.group("n"))
@@ -171,6 +179,27 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         self.send_response(303)
         self.send_header("Location", f"/actions#a{act.number}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _tick(self, index: Index, name: str, form: dict, done: bool,
+              actor: str | None) -> None:
+        """A list tick (`index/ticks.py`): mark one shown row, then return the
+        reader to the page it came from."""
+        from ..index import ticks
+        from ..index.build import now_iso
+
+        back = form.get("back") or ""
+        back = back if _TICK_BACK.match(back) else "/"
+        try:
+            ticks.tick(index, name, form.get("key") or "", done, actor, now_iso(),
+                       allowed=pages.tick_keys(index, name))
+        except ticks.TickRefused as exc:
+            self._send(exc.status, f"<h1>{exc.status}</h1><p>Not saved: {render_html.esc(str(exc))}</p>"
+                       f'<p><a href="{render_html.esc(back)}">back</a></p>', "text/html; charset=utf-8")
+            return
+        self.send_response(303)
+        self.send_header("Location", back)
         self.send_header("Content-Length", "0")
         self.end_headers()
 

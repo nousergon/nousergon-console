@@ -2640,13 +2640,53 @@ def _page_rows(index: Index, sec: dict, links: Citations | None, pg: dict | None
         return f'<p class="absent">{what}</p>'
     cols = sec["columns"]
     labels = {r["id"]: r["label"] for r in sec["rows"]}
-    rows = "".join(row(e, cols, labels.get(e.id), links) for e in ents)
+    tick = sec.get("tick")
+    if tick:
+        marks = {r["id"]: r.get("tick") or {} for r in sec["rows"]}
+        rows = "".join(_with_tick(row(e, cols, labels.get(e.id), links),
+                                  _tick_cell(tick, marks.get(e.id, {}), e, pg)) for e in ents)
+    else:
+        rows = "".join(row(e, cols, labels.get(e.id), links) for e in ents)
     more = (f'<p class="list-window">showing {len(ents)} of {sec["total"]}</p>'
             if sec["total"] > len(ents) else "")
-    return ("<table><thead><tr><th>id</th><th>state</th>"
+    tick_head = f'<th aria-label="{esc(tick["label"])}">{esc(tick["label"])}</th>' if tick else ""
+    return (f"<table><thead><tr>{tick_head}<th>id</th><th>state</th>"
             + "".join(_sort_header(c, sec, pg) for c in cols)
             + "<th>source</th><th>as-of</th><th>evidence</th></tr></thead>"
             + f"<tbody>{rows}</tbody></table>{more}")
+
+
+def _with_tick(row_html: str, cell: str) -> str:
+    """``row_html`` with ``cell`` as its first cell."""
+    head, rest = row_html.split(">", 1)
+    return f"{head}>{cell}{rest}"
+
+
+def _tick_cell(tick: dict, mark: dict, ent: Entity, pg: dict | None) -> str:
+    """A row's list tick (`index/ticks.py`): a form POST, so it works with no
+    script; the button is the checkbox."""
+    from urllib.parse import urlencode
+
+    key, done = mark.get("key"), bool(mark.get("done"))
+    box = "☑" if done else "☐"
+    label = tick["label"]
+    if not key or not tick.get("writable"):
+        why = "no key on this row" if not key else f"the {tick['list']} list could not be read"
+        cell = f'<span class="action-tick" title="{esc(why)}" aria-hidden="true">{box}</span>'
+    else:
+        back = ""
+        if pg is not None:
+            q = pg.get("query") or {}
+            back = pg["url"] + (f"?{urlencode(q)}" if q else "")
+        cell = (f'<form method="post" action="/ticks/{esc(tick["list"])}" class="action-tick">'
+                f'<input type="hidden" name="key" value="{esc(key)}">'
+                f'<input type="hidden" name="done" value="{"0" if done else "1"}">'
+                f'<input type="hidden" name="back" value="{esc(back)}">'
+                f'<button type="submit" aria-pressed="{"true" if done else "false"}" '
+                f'aria-label="{"Unmark" if done else "Mark"} {esc(ent.id)} {esc(label)}" '
+                f'title="{"Unmark: not " + esc(label) + " yet" if done else "Mark " + esc(label)}">'
+                f'{box}</button></form>')
+    return f'<td class="action-cell">{cell}</td>'
 
 
 def _page_chart(index: Index, sec: dict) -> str:

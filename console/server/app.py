@@ -64,6 +64,12 @@ def _same_origin(headers) -> bool:
     return urlsplit(source).netloc.lower() == host
 
 
+def _wants_json(headers) -> bool:
+    """A script-side tick (`console.js`) asks for JSON; a plain form post,
+    with no script, gets the redirect it always got."""
+    return "application/json" in (headers.get("Accept") or "")
+
+
 def _html_page(page: str) -> str:
     return render_html.with_scrolling_tables(render_html.with_site_nav(page))
 
@@ -148,42 +154,67 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         Same-origin is required: the browser's ``Origin`` (or, failing that,
         ``Referer``) must name this request's own ``Host``, so a page on
         another site cannot post a tick through the reader's signed-in
-        session. The edge proxy's identity header names who ticked."""
+        session. The edge proxy's identity header names who ticked.
+
+        A post asking for JSON (`_wants_json`, the page's own script) is
+        answered with the outcome instead of a redirect, so the reader's page
+        never reloads: ``{"ok": true, ...}`` once the write is accepted, or
+        ``{"ok": false, "error": ...}`` with the refusal's status."""
         parts = urlsplit(self.path)
         m = _ACTION_POST.match(parts.path)
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(min(length, 4096)).decode("utf-8", "replace") if length else ""
         tm = _TICK_POST.match(parts.path)
+        as_json = _wants_json(self.headers)
         if m is None and tm is None:
-            self._send(405, "<h1>405</h1><p>Only an action tick or a list tick is writable.</p>",
-                       "text/html; charset=utf-8")
+            self._refuse(405, "Only an action tick or a list tick is writable.", as_json)
             return
         if not _same_origin(self.headers):
-            self._send(403, "<h1>403</h1><p>A tick must come from this console's own page.</p>",
-                       "text/html; charset=utf-8")
+            self._refuse(403, "A tick must come from this console's own page.", as_json)
             return
         form = dict(parse_qsl(raw, keep_blank_values=True))
         done = form.get("done", "1") != "0"
         actor = (self.headers.get(_ACTOR_HEADER) or "").strip() or None
         index = self._served_index = self.server.index
         if tm is not None:
-            return self._tick(index, tm.group("name"), form, done, actor)
+            return self._tick(index, tm.group("name"), form, done, actor, as_json)
         from ..index import actions
 
         number = int(m.group("n"))
         try:
-            act = actions.tick(index, number, done, actor)
+            # The comment follows on the server's comment worker: the reader
+            # waits for the label, which is the record, and nothing else.
+            act = actions.tick(index, number, done, actor, defer=actions.in_background)
         except actions.TickRefused as exc:
+            if as_json:
+                self._refuse(exc.status, f"Not saved: {exc}", True)
+                return
             self._send(exc.status, _html_page(render_html.actions_page(
                 index, notice=f"Not saved: {exc}")), "text/html; charset=utf-8")
+            return
+        if as_json:
+            self._send(200, render_json.dumps({
+                "ok": True, "number": act.number, "done": act.done,
+                "actionable": act.actionable,
+                "row": render_html.action_row(index, act.number)}),
+                "application/json; charset=utf-8")
             return
         self.send_response(303)
         self.send_header("Location", f"/actions#a{act.number}")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _refuse(self, status: int, message: str, as_json: bool) -> None:
+        """A write not made, in the representation the poster asked for."""
+        if as_json:
+            self._send(status, render_json.dumps({"ok": False, "error": message}),
+                       "application/json; charset=utf-8")
+            return
+        self._send(status, f"<h1>{status}</h1><p>{render_html.esc(message)}</p>",
+                   "text/html; charset=utf-8")
+
     def _tick(self, index: Index, name: str, form: dict, done: bool,
-              actor: str | None) -> None:
+              actor: str | None, as_json: bool = False) -> None:
         """A list tick (`index/ticks.py`): mark one shown row, then return the
         reader to the page it came from."""
         from ..index import ticks
@@ -191,12 +222,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         back = form.get("back") or ""
         back = back if _TICK_BACK.match(back) else "/"
+        key = form.get("key") or ""
         try:
-            ticks.tick(index, name, form.get("key") or "", done, actor, now_iso(),
+            ticks.tick(index, name, key, done, actor, now_iso(),
                        allowed=pages.tick_keys(index, name))
         except ticks.TickRefused as exc:
+            if as_json:
+                self._refuse(exc.status, f"Not saved: {exc}", True)
+                return
             self._send(exc.status, f"<h1>{exc.status}</h1><p>Not saved: {render_html.esc(str(exc))}</p>"
                        f'<p><a href="{render_html.esc(back)}">back</a></p>', "text/html; charset=utf-8")
+            return
+        if as_json:
+            self._send(200, render_json.dumps({"ok": True, "key": key, "done": done}),
+                       "application/json; charset=utf-8")
             return
         self.send_response(303)
         self.send_header("Location", back)

@@ -217,7 +217,8 @@ def live(monkeypatch):
     host = FakeHost([])
     real_tick = actions.tick
     monkeypatch.setattr(actions, "tick",
-                        lambda index, n, done, actor: real_tick(index, n, done, actor, request=host))
+                        lambda index, n, done, actor, **kw: real_tick(index, n, done, actor,
+                                                                      request=host, **kw))
     server = serve(idx, host="127.0.0.1", port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -243,6 +244,7 @@ def test_a_same_origin_tick_writes_and_redirects(live):
         "Cf-Access-Authenticated-User-Email": "brian@example.test"})
     assert status == 303 and headers["Location"] == "/actions#a1"
     assert host.calls[0][3] == {"labels": ["operator-done"]}
+    actions.wait_for_comments()
     assert "brian@example.test" in host.calls[1][3]["body"]
 
 
@@ -264,6 +266,191 @@ def test_an_unlisted_number_is_404_and_says_so(live):
     port, host, _ = live
     status, _, body = _post(port, "/actions/77", headers={"Origin": f"http://127.0.0.1:{port}"})
     assert status == 404 and "not on the actions list" in body and host.calls == []
+
+
+# ------------------------------------------- a tick without a page load ---
+# Brian 2026-11-05: "check the box and then don't lock up the screen for it to
+# shift". The page's script posts for JSON; the server answers as soon as the
+# LABEL is on the issue, and the comment follows off the request thread.
+
+_JSON = {"Accept": "application/json"}
+
+
+def test_a_json_tick_answers_with_the_confirmed_row_not_a_redirect(live):
+    port, host, idx = live
+    status, headers, body = _post(port, "/actions/1", headers={
+        **_JSON, "Origin": f"http://127.0.0.1:{port}"})
+    assert status == 200 and headers["Content-Type"].startswith("application/json")
+    reply = json.loads(body)
+    assert reply["ok"] is True and reply["number"] == 1 and reply["done"] is True
+    assert reply["actionable"] is False
+    # The row as /actions now renders it: ticked, its button an untick.
+    assert reply["row"].startswith('<tr id="a1" class="action action-done">')
+    assert 'name="done" value="0"' in reply["row"]
+    assert actions.listing(idx).actions[0].done
+    actions.wait_for_comments()
+    assert [c[1].rsplit("/", 1)[1] for c in host.calls] == ["labels", "comments"]
+
+
+def test_the_reply_does_not_wait_for_the_comment(monkeypatch):
+    """The label is the record and the reader waits for it alone: a comment
+    still in flight never holds the response."""
+    idx, _ = _index()
+    release = threading.Event()
+    calls = []
+
+    def host(method, url, token, body):
+        calls.append(url.rsplit("/", 1)[1])
+        if url.endswith("/comments"):
+            assert release.wait(10)
+        return {}
+
+    real_tick = actions.tick
+    monkeypatch.setattr(actions, "tick", lambda index, n, done, actor, **kw:
+                        real_tick(index, n, done, actor, request=host, **kw))
+    server = serve(idx, host="127.0.0.1", port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, _, body = _post(port, "/actions/1", headers={
+            **_JSON, "Origin": f"http://127.0.0.1:{port}"})
+        assert status == 200 and json.loads(body)["ok"] is True
+        assert not release.is_set()  # answered while the comment was blocked
+        release.set()
+        actions.wait_for_comments()
+        assert calls == ["labels", "comments"]
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_refused_json_tick_says_why_in_json_and_changes_nothing(live):
+    port, host, idx = live
+    status, _, body = _post(port, "/actions/77", headers={
+        **_JSON, "Origin": f"http://127.0.0.1:{port}"})
+    assert status == 404
+    assert json.loads(body) == {"ok": False, "error": "Not saved: #77 is not on the actions list"}
+    status, _, body = _post(port, "/actions/1", headers={**_JSON, "Origin": "https://evil.test"})
+    assert status == 403 and json.loads(body)["ok"] is False
+    assert host.calls == [] and not actions.listing(idx).actions[0].done
+
+
+def test_a_failed_comment_never_unsaves_a_written_label():
+    idx, _ = _index()
+    calls = []
+
+    def host(method, url, token, body):
+        calls.append(url.rsplit("/", 1)[1])
+        if url.endswith("/comments"):
+            raise RuntimeError("HTTP 502: Bad Gateway")
+        return {}
+
+    act = actions.tick(idx, 1, True, None, request=host)
+    assert act.done and actions.listing(idx).actions[0].done
+    assert calls == ["labels", "comments", "comments"]  # one retry, then logged
+
+
+def test_comments_land_in_the_order_their_labels_were_accepted():
+    idx, _ = _index()
+    calls = []
+
+    def host(method, url, token, body):
+        calls.append((method, body and body.get("body", "")[:8]))
+        return {}
+
+    actions.tick(idx, 1, True, None, request=host, defer=actions.in_background)
+    actions.tick(idx, 1, False, None, request=host, defer=actions.in_background)
+    actions.wait_for_comments()
+    assert [c for c in calls if c[0] == "POST" and c[1]] == [
+        ("POST", "Marked d"), ("POST", "Unticked")]
+
+
+def test_concurrent_ticks_on_different_rows_both_stick():
+    idx, _ = _index(issues=[_issue(n) for n in range(1, 21)])
+    host = FakeHost([])
+    threads = [threading.Thread(target=actions.tick, args=(idx, n, True, None),
+                                kwargs={"request": host}) for n in range(1, 21)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(a.done for a in actions.listing(idx).actions)
+
+
+def _node(prog: str, *args: str) -> str:
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    assert node, "node is required to test console.js (preinstalled on CI runners)"
+    script = Path(__file__).resolve().parent.parent / "console/static/console.js"
+    return subprocess.run([node, "-e", prog, str(script), *args],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def test_the_script_ticks_at_once_and_unticks_on_a_failed_save():
+    """`tickFlow`: the box changes before anything is sent; a confirmed save
+    confirms, a refusal or a dropped connection rolls back with the reason;
+    several ticks can be in flight, and the page is re-read once, after the
+    last one settles."""
+    prog = r"""
+const m = require(process.argv[1]);
+const log = [];
+const state = {inFlight: 0, onIdle: () => log.push("idle")};
+function ui(name) {
+  return {optimistic: () => log.push(name + ":ticked"),
+          confirm: r => log.push(name + ":confirm:" + r.number),
+          rollback: msg => log.push(name + ":rollback:" + msg)};
+}
+let resolveA;
+const a = m.tickFlow(ui("a"), () => new Promise(r => { resolveA = r; }), state);
+log.push("inFlight=" + state.inFlight);  // the box is ticked before the reply
+const b = m.tickFlow(ui("b"), () => Promise.resolve({ok: false, error: "Not saved: refused"}), state);
+const c = m.tickFlow(ui("c"), () => Promise.reject(new Error("network down")), state);
+Promise.all([b, c]).then(() => {
+  log.push("inFlight=" + state.inFlight);
+  resolveA({ok: true, number: 1});
+  return a;
+}).then(() => console.log(JSON.stringify(log)));
+"""
+    log = json.loads(_node(prog))
+    assert log[:2] == ["a:ticked", "inFlight=1"]
+    assert log.index("b:ticked") < log.index("b:rollback:Not saved: refused")
+    assert "c:rollback:not saved: network down" in log
+    assert log[-3:] == ["inFlight=1", "a:confirm:1", "idle"]
+    assert log.count("idle") == 1
+
+
+def test_only_the_servers_json_verdict_confirms_a_tick():
+    cases = [
+        [200, "application/json; charset=utf-8", '{"ok": true, "number": 4}'],
+        [404, "application/json", '{"ok": false, "error": "Not saved: gone"}'],
+        # A login page or proxy error in place of the verdict is a failure.
+        [200, "text/html", "<html>sign in</html>"],
+        [502, "text/html", "<h1>502</h1>"],
+        [200, "application/json", "not json"],
+    ]
+    prog = ("const m=require(process.argv[1]);"
+            "console.log(JSON.stringify(JSON.parse(process.argv[2]).map(c=>m.tickReply(...c))))")
+    out = json.loads(_node(prog, json.dumps(cases)))
+    assert out[0] == {"ok": True, "number": 4}
+    assert out[1] == {"ok": False, "error": "Not saved: gone"}
+    assert all(o["ok"] is False and "did not confirm" in o["error"] for o in out[2:])
+    assert "HTTP 502" in out[3]["error"]
+
+
+def test_the_page_script_posts_ticks_for_json_and_falls_back_to_the_form():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "console/static/console.js").read_text()
+    assert 'document.addEventListener("submit"' in src
+    assert '"Accept": "application/json"' in src
+    # No script, or no fetch: the form posts as it always did.
+    assert "if (!window.fetch || !window.URLSearchParams || !window.FormData) return;" in src
+    # A cadence refresh never swaps the page out from under an unsaved tick.
+    assert "if (ticks.inFlight > 0) { schedule(); return; }" in src
 
 
 # ----------------------------------------------------------------- timing ---

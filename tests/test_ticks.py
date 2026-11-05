@@ -147,7 +147,7 @@ def live(monkeypatch):
     s3 = FakeS3()
     idx = _index(s3)
     real = ticks.tick
-    monkeypatch.setattr(ticks, "tick", lambda index, name, key, done, actor, now, allowed:
+    monkeypatch.setattr(ticks, "tick", lambda index, name, key, done, actor, now, allowed, **_:
                         real(index, name, key, done, actor, now, allowed, getter=s3.get, putter=s3.put))
     server = serve(idx, host="127.0.0.1", port=0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -193,3 +193,17 @@ def test_an_undeclared_list_is_404(live):
     status, _, body = _post(port, "/ticks/nope", "key=id1&done=1",
                             {"Origin": f"http://127.0.0.1:{port}"})
     assert status == 404 and "no tick list" in body and s3.puts == []
+
+
+def test_a_json_tick_answers_with_the_outcome_not_a_redirect(live):
+    """The page's script asks for JSON so the reader's page never reloads."""
+    port, s3 = live
+    status, headers, body = _post(port, "/ticks/reading-list", "key=id1&done=1&back=/page/reading",
+                                  {"Origin": f"http://127.0.0.1:{port}",
+                                   "Accept": "application/json"})
+    assert status == 200 and "Location" not in headers
+    assert json.loads(body) == {"ok": True, "key": "id1", "done": True}
+    assert len(s3.puts) == 1
+    status, _, body = _post(port, "/ticks/reading-list", "key=nope&done=1",
+                            {"Origin": f"http://127.0.0.1:{port}", "Accept": "application/json"})
+    assert status == 404 and json.loads(body)["ok"] is False and len(s3.puts) == 1

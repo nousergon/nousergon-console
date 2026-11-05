@@ -25,21 +25,36 @@ trusted to the caller:
 - the token comes from ``write_token_command`` (a short-lived, one-repository
   credential minted per write), and the console stores none.
 
+**The label is the record; the comment is its note.** A tick is confirmed
+when the tracker accepts the label write, and only then. The comment that
+says who ticked is posted AFTER it — on the server, off the request thread
+(`in_background`), one at a time in the order the ticks were accepted, so a
+tick and a quick untick never land their notes out of order. A comment that
+still fails after one retry is logged and never un-confirms the label: the
+label is already on the issue, and telling the reader "not saved" about a
+write that happened is the wrong answer (it was, before 2026-11-05, when the
+reader waited on both writes and a page reload for every tick).
+
 The rendering lives in `render/html.py::actions_page`; the route is
 `/actions` (`server/router.py`), served in both representations (§3.8).
 """
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
+
+_LOG = logging.getLogger(__name__)
 
 SOURCE_NAME = "your-actions"
 ACTIONS_QUESTION = "What is waiting on me to do, and which have I already done?"
@@ -534,10 +549,52 @@ def comment_text(decl: Declaration, done: bool, actor: str | None) -> str:
     return f"Unticked on the console by {who}: not done yet."
 
 
+#: Runs a tick's follow-up (its comment) later; returns nothing useful.
+Defer = Callable[[Callable[[], None]], Any]
+
+#: One worker, so comments land in the order their labels were accepted.
+_COMMENTS: ThreadPoolExecutor | None = None
+_COMMENTS_LOCK = threading.Lock()
+#: `mark` replaces a listing's tuple; two ticks at once must not lose one.
+_MARK_LOCK = threading.Lock()
+
+
+def in_background(work: Callable[[], None]) -> Future:
+    """Queue ``work`` on the process's one comment worker."""
+    global _COMMENTS
+    with _COMMENTS_LOCK:
+        if _COMMENTS is None:
+            _COMMENTS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="action-comment")
+        return _COMMENTS.submit(work)
+
+
+def wait_for_comments(timeout: float = 10.0) -> None:
+    """Block until every comment queued so far has been tried (tests, shutdown)."""
+    in_background(lambda: None).result(timeout=timeout)
+
+
+def _say(call: Request, url: str, tok: str, body: str, number: int) -> None:
+    """Post the tick's comment, retrying once. A failure is logged: the label
+    it describes is already on the issue and stays the record."""
+    for attempt in (1, 2):
+        try:
+            call("POST", url, tok, {"body": body})
+            return
+        except Exception as exc:  # noqa: BLE001 - logged, never raised
+            if attempt == 2:
+                _LOG.warning("tick on #%s: label written, comment not posted: %s",
+                             number, str(exc)[:200])
+
+
 def tick(index: Any, number: int, done: bool, actor: str | None,
-         request: Request | None = None, token: str | None = None) -> Action:
+         request: Request | None = None, token: str | None = None,
+         defer: Defer | None = None) -> Action:
     """Add (``done``) or remove the done label on one LISTED action, and say
-    so on the issue. Returns the action as it now stands."""
+    so on the issue. Returns the action as it now stands.
+
+    Returns once the LABEL write is accepted. The comment is posted through
+    ``defer`` when one is given (the server passes `in_background`), else
+    before returning; either way its failure never fails the tick."""
     found = listing(index)
     if found is None:
         raise TickRefused("no actions are declared on this console", 404)
@@ -560,12 +617,18 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
             except RuntimeError as exc:
                 if not str(exc).startswith("HTTP 404"):  # already absent is the goal
                     raise
-        call("POST", f"{base}/comments", tok, {"body": comment_text(decl, done, actor)})
     except TickRefused:
         raise
     except Exception as exc:  # noqa: BLE001 - shown to the reader, nothing changed here
         raise TickRefused(f"the tracker refused the write: {str(exc)[:200]}", 502) from None
-    return mark(index, number, done)
+    act = mark(index, number, done)
+    text = comment_text(decl, done, actor)
+    say = lambda: _say(call, f"{base}/comments", tok, text, number)  # noqa: E731
+    if defer is None:
+        say()
+    else:
+        defer(say)
+    return act
 
 
 def mark(index: Any, number: int, done: bool) -> Action:
@@ -575,15 +638,16 @@ def mark(index: Any, number: int, done: bool) -> Action:
     found = listing(index)
     assert found is not None
     labels_done = found.declaration.done_label
-    updated: list[Action] = []
-    result: Action | None = None
-    for a in found.actions:
-        if a.number == number:
-            labels = set(a.labels) - {labels_done} | ({labels_done} if done else set())
-            a = replace(a, done=done, labels=tuple(sorted(labels)))
-            result = a
-        updated.append(a)
-    found.actions = tuple(updated)
+    with _MARK_LOCK:
+        updated: list[Action] = []
+        result: Action | None = None
+        for a in found.actions:
+            if a.number == number:
+                labels = set(a.labels) - {labels_done} | ({labels_done} if done else set())
+                a = replace(a, done=done, labels=tuple(sorted(labels)))
+                result = a
+            updated.append(a)
+        found.actions = tuple(updated)
     assert result is not None
     return result
 

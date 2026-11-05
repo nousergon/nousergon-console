@@ -2398,8 +2398,11 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
     it has one, then its first paragraph and its command), when it is due, any bound on when it may
     happen, and how long it has waited. The tick is a form POST, so it works
     with no script; the button is the checkbox."""
-    box = "☑" if a.done else "☐"
-    if writable:
+    checked = not a.actionable
+    box = "☑" if checked else "☐"
+    # Only a reader's own tick can be unticked here; an action done by its PR
+    # merging or by its issue closing is shown ticked, read-only.
+    if writable and not a.closed and (a.done or a.actionable):
         control = (f'<form method="post" action="/actions/{a.number}" class="action-tick">'
                    f'<input type="hidden" name="done" value="{"0" if a.done else "1"}">'
                    f'<button type="submit" aria-pressed="{"true" if a.done else "false"}" '
@@ -2408,8 +2411,16 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
                    f'{box}</button></form>')
     else:
         control = f'<span class="action-tick" aria-hidden="true">{box}</span>'
-    status = (f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
-              if a.done else "")
+    if a.closed:
+        status = ('<div><span class="chip state-healthy">closed'
+                  + (f' {esc(str(a.closed_at)[:10])}' if a.closed_at else "") + "</span></div>")
+    elif a.pr_state in ("merged", "closed"):
+        status = (f'<div><span class="chip state-healthy">PR {esc(a.pr_state)} — '
+                  "nothing left for you; the issue closes on the next check</span></div>")
+    elif a.done:
+        status = f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
+    else:
+        status = ""
     # PRs and commands, never the tracking issue (Brian 2026-11-04): the title
     # links the PR when there is one, and the command is shown to copy.
     title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url
@@ -2418,7 +2429,7 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
            if a.command else "")
     what = (f'<a href="{esc(a.pr_url)}">PR {esc(a.pr_ref)}</a>' if a.pr_url
             else "command" if a.command else "step")
-    return (f'<tr id="a{a.number}" class="action{" action-done" if a.done else ""}">'
+    return (f'<tr id="a{a.number}" class="action{" action-done" if checked else ""}">'
             f'<td class="action-cell">{control}</td>'
             f"<td>{title}"
             + (f'<div class="muted">{esc(a.summary)}</div>' if a.summary else "")
@@ -2450,15 +2461,14 @@ def actions_page(index: Index, notice: str | None = None) -> str:
     else:
         decl = found.declaration
         title = decl.title
-        todo = [a for a in found.actions if not a.done]
-        done = [a for a in found.actions if a.done]
+        todo, done = list(found.todo), list(found.done)
         if found.error:
             body = (f'<p class="absent">could not read the actions from '
                     f'{esc(decl.org)}/{esc(decl.repo)}: {esc(found.error)}</p>')
         else:
             where = " or ".join(f"<code>{esc(lab)}</code>" for lab in decl.labels)
-            body = (f'<p>{len(todo)} to do · {len(done)} done, waiting for a check · '
-                    f'open issues labelled {where} in '
+            body = (f'<p>{len(todo)} to do · {len(done)} done · '
+                    f'issues labelled {where} in '
                     f'<a href="https://github.com/{esc(decl.org)}/{esc(decl.repo)}/issues">'
                     f'{esc(decl.org)}/{esc(decl.repo)}</a></p>')
             if not decl.writable:
@@ -2469,8 +2479,15 @@ def actions_page(index: Index, notice: str | None = None) -> str:
                 body += "<h2>To do</h2>" + _actions_table(todo, decl, today)
             else:
                 body += '<p class="absent">Nothing to do.</p>'
+            # Brian 2026-11-05: the list is actionable only; everything else
+            # is an archive, ticked.
             if done:
-                body += "<h2>Done, waiting for a check</h2>" + _actions_table(done, decl, today)
+                body += ('<details class="actions-done"><summary><h2>Done · '
+                         f'{len(done)}</h2></summary>' + _actions_table(done, decl, today)
+                         + "</details>")
+            if found.archive_error:
+                body += (f'<p class="absent">could not read closed actions: '
+                         f'{esc(found.archive_error)}</p>')
     note = f'<p class="notice">{esc(notice)}</p>' if notice else ""
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

@@ -100,3 +100,30 @@ def test_a_malformed_triage_block_fails_the_strict_preflight():
     with pytest.raises(console_config.ConfigError):
         console_config.validate_config({"triage": {"bucket": "b"}})
     assert triage.parse(None) is None
+
+
+def test_a_bare_check_entry_covers_every_run_of_that_check():
+    idx = Index()
+    idx.add_result(AdapterResult(name="fixture", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=(
+                                     _row("probe@2026-11-04T18:52:05+00:00", State.DEGRADED),
+                                     _row("probe@2026-11-05T18:52:05+00:00", State.FAILED),
+                                     _row("other@2026-11-05T00:00:00+00:00", State.FAILED),
+                                     _row("pinned@2026-11-05T00:00:00+00:00", State.FAILED))))
+    doc = {"generated_utc": "2026-11-05T04:00:00Z", "rows": {
+        "probe": {"issue": "alpha-engine-config-I5", "priority": "P1"},
+        "pinned": {"issue": "alpha-engine-config-I6", "priority": "P3"},
+        "pinned@2026-11-05T00:00:00+00:00": {"issue": "alpha-engine-config-I7", "priority": "P2"},
+    }}
+    marks, result = triage.read(SRC, "2026-11-05T04:00:00Z",
+                                reader=lambda _s: json.dumps(doc).encode())
+    idx.add_result(result)
+    idx.set_triage(marks)
+    idx.finalize()
+    rows = {r["id"]: (r["priority"], r["tracked_by"])
+            for r in render_json.payload(idx, resolve("/exceptions"))["rows"]}
+    assert rows["probe@2026-11-04T18:52:05+00:00"] == ("P1", "alpha-engine-config-I5")
+    assert rows["probe@2026-11-05T18:52:05+00:00"] == ("P1", "alpha-engine-config-I5")
+    assert rows["other@2026-11-05T00:00:00+00:00"] == ("untriaged", None)
+    # The exact entry wins over the bare one.
+    assert rows["pinned@2026-11-05T00:00:00+00:00"] == ("P2", "alpha-engine-config-I7")

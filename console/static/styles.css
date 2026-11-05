@@ -285,5 +285,11 @@ table.actions tr.action-done td a { color: var(--muted); }
 .action-copy { position: absolute; top: 0.2rem; right: 0.2rem; font-size: 0.75rem; padding: 0.05rem 0.4rem; cursor: pointer; }
 .action-cmd { margin: 0.35rem 0 0; padding: 0.4rem 0.5rem; background: var(--surface-2, rgba(127,127,127,0.1)); border-radius: 4px; white-space: pre-wrap; word-break: break-all; font-size: 0.85em; user-select: all; }
 .action-tick button { font-size: 1.4rem; line-height: 1; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+/* A tick saving in the background (`console.js`): the box already shows the
+   new state; the row dims until the server confirms, and a failed save says
+   why beside the box. */
+.action-tick button[aria-busy="true"] { cursor: progress; }
+tr.tick-pending > td { opacity: 0.6; transition: opacity 0.15s; }
+.tick-error { display: block; margin-top: 0.2rem; font-size: 0.75rem; color: var(--bad); white-space: normal; }
 .notice { background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; }
 .muted { color: var(--muted); font-size: .85rem; }

@@ -2492,6 +2492,17 @@ def _actions_table(rows, decl, today: str) -> str:
             + "</tbody></table>")
 
 
+def action_row(index: Index, number: int) -> str:
+    """One action's row as `/actions` would render it now: what a script-side
+    tick swaps in once the tracker has accepted the label (`console.js`)."""
+    from ..index import actions
+
+    found = actions.listing(index)
+    a = next(a for a in found.actions if a.number == number)
+    decl = found.declaration
+    return _action_row(a, decl, decl.writable, render_now().date().isoformat())
+
+
 def actions_page(index: Index, notice: str | None = None) -> str:
     """Your actions (`index/actions.py`): every open issue carrying a declared
     label, not yet done first, oldest first. A tick writes the done label to

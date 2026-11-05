@@ -18,6 +18,13 @@
       with the time of the data still shown — it never leaves stale data
       looking current (§5.5).
 
+   3. A tick (Your actions, and any tick-list table) saves without a page
+      load. The box shows ticked at once and the page stays usable, so
+      several rows can be ticked in a row; the row moves only when the
+      server confirms the write, and a refused or failed write unticks the
+      box and says why beside it. Without script the tick is the plain form
+      post it always was.
+
    No network origin but this one, no library, no build step. */
 (function () {
   "use strict";
@@ -80,11 +87,49 @@
     });
   }
 
+  // A tick's reply as {ok, error, ...}. Anything that is not the server's
+  // JSON verdict (a login page, a proxy error, a redirect) is a failure:
+  // a tick is confirmed only by the console saying so.
+  function tickReply(status, contentType, text) {
+    var body = null;
+    if (/application\/json/.test(contentType || "")) {
+      try { body = JSON.parse(text); } catch (e) { body = null; }
+    }
+    if (body && body.ok === true && status >= 200 && status < 300) return body;
+    if (body && typeof body.error === "string" && body.error) {
+      return {ok: false, error: body.error};
+    }
+    return {ok: false, error: "the console did not confirm the save (HTTP " + status +
+                              ") — reload and try again"};
+  }
+
+  // One tick, start to finish. `ui.optimistic()` runs before anything is
+  // sent; then exactly one of `ui.confirm(reply)` / `ui.rollback(message)`.
+  // `state.inFlight` counts ticks not yet settled, and `state.onIdle` runs
+  // when the last one settles.
+  function tickFlow(ui, send, state) {
+    state.inFlight = (state.inFlight || 0) + 1;
+    ui.optimistic();
+    return Promise.resolve()
+      .then(send)
+      .then(function (reply) {
+        if (reply && reply.ok === true) ui.confirm(reply);
+        else ui.rollback((reply && reply.error) || "not saved");
+      }, function (err) {
+        ui.rollback("not saved: " + String(err && err.message || err || "network error"));
+      })
+      .then(function () {
+        state.inFlight -= 1;
+        if (state.inFlight === 0 && state.onIdle) state.onIdle();
+      });
+  }
+
   // Outside a browser (the console's own tests run this file under node)
   // only the pure functions above are exported; nothing below runs.
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
-      module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen};
+      module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen,
+                        tickReply: tickReply, tickFlow: tickFlow};
     }
     return;
   }
@@ -99,6 +144,8 @@
     }
     renderStatus();
   }
+
+  var ticks = {inFlight: 0, stale: false};
 
   // Status line --------------------------------------------------------
   var builtAt = meta(document, "console-built") || "";
@@ -142,6 +189,7 @@
   var due = false;
 
   function schedule() {
+    if (!refreshing) return;
     clearTimeout(timer);
     timer = setTimeout(refresh, period * 1000);
   }
@@ -164,6 +212,7 @@
   function refresh() {
     if (document.hidden) { due = true; return; }
     if (editing()) { schedule(); return; }  // never wipe a half-typed query
+    if (ticks.inFlight > 0) { schedule(); return; }  // never drop an unsaved tick
     due = false;
     fetch(location.href, {headers: {"Accept": "text/html"}, cache: "no-store"})
       .then(function (resp) {
@@ -175,6 +224,7 @@
         var stamp = meta(doc, "console-built");
         if (stamp === null) throw new Error("not a console page");
         if (editing()) return;  // the reader started typing while we fetched
+        if (ticks.inFlight > 0) { ticks.stale = true; return; }  // a tick began meanwhile
         var was = describe(document.querySelectorAll("details"));
         var x = window.scrollX, y = window.scrollY;
         document.body.replaceWith(document.adoptNode(doc.body));
@@ -337,6 +387,114 @@
       btn.textContent = "copied";
       setTimeout(function () { btn.textContent = "copy"; }, 1500);
     });
+  });
+
+  // Ticks without a page load -------------------------------------------
+  var BOX_ON = "\u2611", BOX_OFF = "\u2610";
+
+  function tickUi(form) {
+    var btn = form.querySelector("button");
+    var input = form.querySelector('input[name="done"]');
+    var cell = form.closest("td") || form.parentNode;
+    var row = form.closest("tr");
+    var was = {text: btn.textContent, pressed: btn.getAttribute("aria-pressed"),
+               label: btn.getAttribute("aria-label"), title: btn.getAttribute("title")};
+    var marking = input && input.value !== "0";
+    function clearError() {
+      var old = cell.querySelector(".tick-error");
+      if (old) old.parentNode.removeChild(old);
+    }
+    return {
+      optimistic: function () {
+        clearError();
+        btn.textContent = marking ? BOX_ON : BOX_OFF;
+        btn.setAttribute("aria-pressed", marking ? "true" : "false");
+        btn.setAttribute("aria-busy", "true");
+        btn.disabled = true;  // this row only; every other row stays live
+        if (row) row.classList.add("tick-pending");
+      },
+      confirm: function (reply) {
+        if (row) row.classList.remove("tick-pending");
+        btn.removeAttribute("aria-busy");
+        if (typeof reply.row === "string" && row) {
+          moveActionRow(row, reply.row, !reply.actionable);
+          return;
+        }
+        // A tick-list row: it stays where it is, now saved the other way.
+        btn.disabled = false;
+        if (input) input.value = marking ? "0" : "1";
+        var word = (was.label || "").replace(/^(Mark|Unmark) /, "");
+        btn.setAttribute("aria-label", (marking ? "Unmark " : "Mark ") + word);
+        btn.setAttribute("title", marking ? "Saved — click to unmark" : "Saved — click to mark");
+      },
+      rollback: function (message) {
+        if (row) row.classList.remove("tick-pending");
+        btn.removeAttribute("aria-busy");
+        btn.disabled = false;
+        btn.textContent = was.text;
+        if (was.pressed !== null) btn.setAttribute("aria-pressed", was.pressed);
+        clearError();
+        var err = document.createElement("span");
+        err.className = "tick-error";
+        err.setAttribute("role", "alert");
+        err.textContent = message;
+        cell.appendChild(err);
+      }
+    };
+  }
+
+  // The confirmed row, re-rendered by the server, goes to the table it now
+  // belongs in: Done when it is no longer waiting on the reader, To do when
+  // it is again. With no such table on the page the row is replaced where it
+  // stands, and the re-read after the last tick lays the page out afresh.
+  function moveActionRow(row, html, done) {
+    var tpl = document.createElement("template");
+    tpl.innerHTML = "<table><tbody>" + html + "</tbody></table>";
+    var fresh = tpl.content.querySelector("tr");
+    if (!fresh) return;
+    var tables = document.querySelectorAll("table.actions");
+    var target = null;
+    for (var i = 0; i < tables.length; i++) {
+      var inDone = !!tables[i].closest("details.actions-done");
+      if (inDone === done) { target = tables[i].tBodies[0]; break; }
+    }
+    if (target && !target.contains(row)) {
+      row.parentNode.removeChild(row);
+      target.appendChild(fresh);
+    } else {
+      row.parentNode.replaceChild(fresh, row);
+    }
+    ticks.stale = true;
+  }
+
+  function sendTick(form) {
+    var body = new URLSearchParams(new FormData(form)).toString();
+    return fetch(form.getAttribute("action"), {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {"Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded"},
+      body: body
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        return tickReply(resp.status, resp.headers.get("Content-Type"), text);
+      });
+    });
+  }
+
+  // After the last tick settles, re-read the page once so counts, order and
+  // sections match the server — the same quiet swap the cadence refresh does.
+  ticks.onIdle = function () {
+    if (ticks.stale) { ticks.stale = false; refresh(); }
+  };
+
+  document.addEventListener("submit", function (ev) {
+    var form = ev.target;
+    if (!form.classList || !form.classList.contains("action-tick")) return;
+    if (!window.fetch || !window.URLSearchParams || !window.FormData) return;  // plain post
+    ev.preventDefault();
+    var btn = form.querySelector("button");
+    if (!btn || btn.disabled) return;
+    tickFlow(tickUi(form), function () { return sendTick(form); }, ticks);
   });
 
   tickAges();

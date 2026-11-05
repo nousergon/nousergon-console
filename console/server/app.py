@@ -282,9 +282,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: str, content_type: str,
               cache_control: str | None = None) -> None:
         if content_type.startswith("text/html"):
-            body = body.replace(
+            body = render_html.with_new_tab_links(body.replace(
                 "<head>", "<head>" + render_html.head_inject(self._build_info()), 1
-            )
+            ))
         payload = body.encode("utf-8")
         try:
             self.send_response(status)

@@ -491,3 +491,33 @@ def test_two_in_scope_passes_still_conflict():
     ent = idx.finalize().entity("comp-alpha")
     assert ent.state is State.DEGRADED
     assert "state" in ent.conflicts
+
+
+def test_a_namesake_alone_does_not_hide_a_missing_declared_component():
+    """codex d00bf9ff6f07b1ce: `_reconcile` counted every DISCOVERY claim as
+    finding the component, namesakes included. A Lambda declared `substrate:
+    lambda` that the Lambda pass (which ran fine) did not find, but whose
+    same-named EventBridge rule the Events pass did, stayed UNREPORTED instead
+    of ABSENT: the rule was taken as discovering the Lambda."""
+    idx = _index(
+        _result("registry", ClaimClass.DECLARATION,
+                _comp(State.UNREPORTED, "registry", facets={"substrate": "lambda"})),
+        _result("lambda-metrics", ClaimClass.DISCOVERY,
+                _counter(State.HEALTHY, "AWS/Lambda", 2.0, cid="comp-other"),
+                discovery_scope=[("substrate", "lambda")]),
+        _result("events-metrics", ClaimClass.DISCOVERY,
+                _counter(State.HEALTHY, "AWS/Events", 1.0),
+                discovery_scope=[("substrate", "eventbridge")]),
+    )
+    ent = idx.finalize().entity("comp-alpha")
+    assert ent.state is State.ABSENT
+    # What the namesake said is still readable on the row.
+    assert any(p.source == "cloudwatch:AWS/Events" for _, _, p in ent.superseded)
+
+
+def test_an_in_scope_discovery_still_counts_as_finding_the_component():
+    """The other side: the declared substrate's own pass found it, so the
+    row is not ABSENT whatever the namesake said."""
+    ent = _shared_name_index("lambda", State.UNREPORTED, 0.0,
+                             State.HEALTHY, 2.0).finalize().entity("comp-alpha")
+    assert ent.state is State.HEALTHY

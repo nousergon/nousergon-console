@@ -93,3 +93,42 @@ def test_a_folded_job_failing_under_a_newer_run_is_neither_cleared_nor_new():
     assert delta["cleared_labels"] == {"job-y@old": "Job Y"}
     assert baseline.row_key("job-x@new", "run", "FAILED") == "run|job-x|FAILED"
     assert baseline.row_key("ae-a", "component", "FAILED") == "ae-a"
+
+
+def _unit_run_index(invocation, doc):
+    """A systemd unit and its run the way `local_units` emits them: the run's
+    id is the bare InvocationID, tied to its unit only by `belongs-to`."""
+    from console.model.entity import Edge
+
+    idx = Index()
+    # The unit's own state is read later than the run, so the run is not a
+    # component echo and lists in its own right.
+    unit = Entity(kind=Kind.COMPONENT, id="unit-x", state=State.FAILED,
+                  provenance=Provenance("systemd", "2026-11-01T11:00:00+00:00"))
+    run = Entity(kind=Kind.RUN, id=invocation, state=State.FAILED,
+                 provenance=Provenance("systemd", "2026-11-01T10:00:00+00:00"))
+    idx.add_result(AdapterResult(
+        name="local_units", status=AdapterStatus.OK, claim_class=ClaimClass.OBSERVATION,
+        entities=(unit, run),
+        edges=(Edge(source=invocation, rel="belongs-to", target="unit-x"),)))
+    base, result = baseline.read(SRC, NOW, reader=lambda s, k: json.dumps(doc).encode())
+    idx.add_result(result)
+    idx.set_exceptions_baseline(base)
+    idx.finalize()
+    return idx
+
+
+def test_a_unit_failing_under_a_newer_invocation_is_neither_cleared_nor_new():
+    """Codex 10fe7de16b3c53ab: a systemd run's id has no `@`, so the baseline
+    compared it by id and a unit still failing under a newer InvocationID read
+    cleared-and-new. The baseline uses the folding logic's job identity, and
+    the published row carries it so the next day's snapshot can match it."""
+    first = _unit_run_index("inv-old", {"view": "exceptions", "snapshot_utc": "x", "rows": []})
+    snap = render_json.payload(first, resolve("/exceptions"))
+    assert {r["id"]: r["job"] for r in snap["rows"]}["inv-old"] == "unit-x"
+    snap["snapshot_utc"] = "2026-10-31T21:24:39Z"
+    idx = _unit_run_index("inv-new", snap)
+    doc = render_json.payload(idx, resolve("/exceptions"))
+    assert {r["id"]: r["new"] for r in doc["rows"]}["inv-new"] is False
+    assert doc["since_baseline"]["cleared"] == []
+    assert baseline.row_key("inv-new", "run", "FAILED", "unit-x") == "run|unit-x|FAILED"

@@ -128,3 +128,48 @@ def test_freshness_metas_describe_the_index_the_response_rendered():
     assert handler._build_info() == "old-build"
     del handler._served_index
     assert handler._build_info() == "new-build"
+
+
+def test_open_details_survive_a_refresh_by_identity_not_position():
+    """codex e051f22ff1737637: open state was restored by position, and only
+    when the count was unchanged, so one new report collapsed every open one
+    and a shifted list would open the wrong ones."""
+    node = shutil.which("node")
+    assert node, "node is required to test console.js (preinstalled on CI runners)"
+
+    def d(text, open_=False, cls="report", id_=""):
+        return {"id": id_, "cls": cls, "text": text, "open": open_}
+
+    cases = {
+        # A new report arrives at the top: the open one stays open, the new
+        # one keeps the server's state.
+        "prepended": ([d("Nov 2", True), d("Nov 1")],
+                      [d("Nov 3"), d("Nov 2"), d("Nov 1")]),
+        # A report drops out: nothing shifts onto its neighbour.
+        "dropped": ([d("Nov 3"), d("Nov 2", True), d("Nov 1")],
+                    [d("Nov 3"), d("Nov 1")]),
+        # The only section of its class keeps its state while a count in its
+        # summary moves; a closed one the reader shut stays shut.
+        "count moved": ([d("milestones · 3 of 5 met", True, "milestones-summary"),
+                         d("cleared rows", False, "")],
+                        [d("milestones · 4 of 5 met", False, "milestones-summary"),
+                         d("cleared rows", True, "")]),
+        # Same summary twice pairs in order; an id wins over text.
+        "repeats": ([d("x", True, ""), d("x", False, ""), d("a", True, "", "keep")],
+                    [d("x", False, ""), d("x", True, ""), d("renamed", False, "", "keep")]),
+    }
+    prog = ("const m=require(process.argv[1]);const c=JSON.parse(process.argv[2]);"
+            "const o={};for(const k in c)o[k]=m.carryOpen(c[k][0],c[k][1]);"
+            "console.log(JSON.stringify(o))")
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT), json.dumps(cases)],
+                                    capture_output=True, text=True, check=True).stdout)
+    assert out == {
+        "prepended": [None, True, False],
+        "dropped": [False, False],
+        "count moved": [True, False],
+        "repeats": [True, False, True],
+    }
+    # The refresh path uses it, not the old positional copy.
+    src = SCRIPT.read_text()
+    assert "carryOpen(was, describe(now))" in src
+    assert "now.length === open.length" not in src

@@ -207,3 +207,121 @@ console.log(JSON.stringify({
                                     text=True, check=True).stdout)
     assert out == {"polluted": True, "keys": ["s3"], "s3": ["ok"],
                    "nullProto": True, "missing": True}
+
+
+# ── the live layer itself, under node with a stand-in DOM and uPlot ─────────
+#
+# A minimal DOM and a fake `uPlot` that records the options it was built with
+# and counts live instances, so the tests read what the script actually wires
+# up: the x-range callback, each series' drawing, and what a refresh leaves
+# alive. Codex review findings 93a91fb4, f52d2f93 and 5ac08eca (aec#13239).
+_LIVE_LAYER = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const payload = JSON.parse(process.argv[2]);
+function el(tag) {
+  const cls = new Set();
+  return {tag, children: [], style: {}, parentNode: null, clientWidth: 600,
+    classList: {add: c => cls.add(c), remove: c => cls.delete(c), contains: c => cls.has(c)},
+    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+    insertBefore(c) { this.children.push(c); c.parentNode = this; return c; },
+    removeChild(c) { this.children = this.children.filter(x => x !== c); c.parentNode = null; },
+    querySelectorAll: () => [], setAttribute() {}, getAttribute: () => null, closest: () => null};
+}
+function svg() {
+  const s = el("svg"), box = el("p");
+  box.appendChild(s);
+  s.getAttribute = n => n === "data-chart" ? JSON.stringify(payload) : n === "viewBox" ? "0 0 600 120" : null;
+  return s;
+}
+let svgs = [svg()];
+const handlers = {}, made = [];
+let alive = 0;
+function FakePlot(opts, data, host) { this.opts = opts; alive++; made.push(this); }
+FakePlot.prototype.destroy = function () { alive--; };
+FakePlot.paths = {bars: () => "bars"};
+const document = {
+  head: el("head"), documentElement: el("html"),
+  querySelectorAll: sel => sel.indexOf("data-chart") !== -1 ? svgs : [],
+  querySelector: () => null, createElement: el,
+  addEventListener: (name, fn) => { handlers[name] = fn; },
+};
+const window = {uPlot: FakePlot, addEventListener() {}};
+const ctx = {document, window, location: {hash: "", pathname: "/", search: ""},
+  getComputedStyle: () => ({getPropertyValue: n => n === "--warn" ? "#8a4b00" : "#2a78d6"}),
+  history: {replaceState() {}}, setTimeout, clearTimeout, Promise, JSON, Math, Object, isNaN};
+vm.runInNewContext(src, ctx);
+const tick = () => new Promise(r => setTimeout(r, 0));
+(async () => {
+  await tick();
+  const first = made[0].opts;
+  const n = payload.labels.length;
+  const full = first.scales.x.range(null, 0, n - 1);
+  const zoom = first.scales.x.range(null, 2.3, 5.7);
+  const again = first.scales.x.range(null, zoom[0], zoom[1]);
+  const series = first.series.slice(1).map(s => ({label: s.label, bars: s.paths === "bars",
+                                                    dash: s.dash || null, fill: s.fill || null}));
+  // Three refreshes, each with a new body (new SVGs).
+  for (let i = 0; i < 3; i++) { svgs = [svg()]; handlers["console:refreshed"](); await tick(); }
+  console.log(JSON.stringify({full, zoom, again, series, alive, made: made.length}));
+})();
+"""
+
+
+def _live_layer(payload: dict) -> dict:
+    node = shutil.which("node")
+    assert node, "node is required to test charts.js (preinstalled on CI runners)"
+    out = subprocess.run([node, "-e", _LIVE_LAYER, str(SCRIPT), json.dumps(payload)],
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+_TEN = {"key": "k", "unit": "", "labels": list("abcdefghij"), "series": [
+    {"label": "published daily", "kind": "bar", "sparse": True, "values": list(range(1, 11))},
+    {"label": "untriaged", "kind": "inset", "values": [1] * 10}]}
+
+
+def test_a_drag_selection_zooms_the_x_range():
+    """codex 93a91fb419cd7d42: the x-range callback widened every request back
+    to the whole series, so a drag selection never zoomed. A request is now
+    honoured, widened only to whole slots; the full view is still every slot,
+    and the callback is stable over a range it already returned."""
+    out = _live_layer(_TEN)
+    assert out["full"] == [-0.5, 9.5]
+    assert out["zoom"] == [1.5, 6.5]
+    assert out["again"] == out["zoom"]
+
+
+def test_xrange_is_held_inside_the_series():
+    node = shutil.which("node")
+    assert node, "node is required to test charts.js (preinstalled on CI runners)"
+    prog = ("const m=require(process.argv[1]);console.log(JSON.stringify(["
+            "m.xRange(-3,20,5),m.xRange(null,null,5),m.xRange(0,0,1),m.xRange(2.6,2.7,5)]))")
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT)], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out == [[-0.5, 4.5], [-0.5, 4.5], [-0.5, 0.5], [2.5, 3.5]]
+
+
+def test_a_refresh_destroys_the_charts_it_replaces():
+    """codex f52d2f933e5eddb7: `console:refreshed` reset the list of live
+    charts without destroying them, so every refresh left the old uPlot
+    instances and their window listeners alive."""
+    out = _live_layer(_TEN)
+    assert out["made"] == 4          # the first draw and three refreshes
+    assert out["alive"] == 1         # only the chart on the current body
+
+
+def test_the_untriaged_share_is_drawn_inside_the_bars():
+    """codex 5ac08eca053d7630: the server drew untriaged inside each bar, but
+    sent it as a `line`, which the live layer draws as a thin dashed stroke,
+    so with script on the overlay was gone. It is an `inset`: bars, in the
+    `--warn` token, at the SVG's .9 opacity, drawn after the totals."""
+    points = [SimpleNamespace(date="2026-10-30", total=7, by_priority={"untriaged": 2}),
+              SimpleNamespace(date="2026-10-31", total=5, by_priority={"untriaged": 1})]
+    data = _chart(render_html.exception_trend(points, now_total=4, now_untriaged=1))
+    assert data["series"][-1] == {"label": "untriaged", "kind": "inset", "values": [2, 1, 1]}
+    out = _live_layer(_TEN)
+    inset = [s for s in out["series"] if s["label"] == "untriaged"]
+    assert inset == [{"label": "untriaged", "bars": True, "dash": None,
+                      "fill": "rgba(138,75,0,0.9)"}]
+    assert '"warn"' in SCRIPT.read_text() and "--warn:" in CSS

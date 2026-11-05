@@ -448,9 +448,16 @@ class Index:
         from . import triage
         from .pages import _fields
 
-        for row_id, mark in marks.items():
-            ent = self._entities.get(row_id)
-            if ent is None:
+        # A run row's id is `<check>@<as_of>`, so each new run of a daily check
+        # is a new id and fell out of the map every morning (measured
+        # 2026-11-05: account-registry, isolation-probe, root-activity-alert
+        # re-read untriaged after every run). An exact entry still wins; a
+        # bare `<check>` entry covers every run of that check.
+        for row_id, ent in list(self._entities.items()):
+            mark = marks.get(row_id)
+            if mark is None and "@" in row_id:
+                mark = marks.get(row_id.split("@", 1)[0])
+            if mark is None:
                 continue
             own = bool((ent.facets or {}).get("priority")) or "priority" in _fields(ent)
             self._entities[row_id] = dataclasses.replace(

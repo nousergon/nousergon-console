@@ -106,6 +106,10 @@ class Action:
     #: closing ends it. Any other PR an issue names is context: its ask (a
     #: command, a decision) is still owed after that PR merges.
     merge_ask: bool = False
+    #: Every PR the issue links, in order, as (url, "repo#N", state-or-None).
+    prs: tuple[tuple[str, str, str | None], ...] = ()
+    #: Every command the issue gives to run, in order (`commands`).
+    commands: tuple[str, ...] = ()
 
     @property
     def actionable(self) -> bool:
@@ -313,6 +317,61 @@ def command(body: str | None) -> str | None:
     return m.group(1).strip() if m else None
 
 
+#: The most PRs one row lists.
+MAX_PRS = 6
+
+#: A line that starts a shell command. A fenced block is a command only when
+#: every line of it is one (or continues one): an issue also fences evidence
+#: (`LastModified ...`, JSON, logs), which must never be offered to paste.
+_CMD_START = re.compile(
+    r"^(?:[A-Z_][A-Z0-9_]*=\S*\s+)*(?:sudo\s+)?(?:aws|gcloud|gsutil|gh|git|bash|sh|zsh|cd|cp|mv|"
+    r"open|launchctl|python3?|pip3?|curl|tofu|terraform|kubectl|docker|make|npm|npx|"
+    r"ssh|scp|export|source|\.|chmod|mkdir|ls|cat|echo|jq|brew|uv|claude|codex)\b")
+
+
+def _is_command_block(block: str) -> bool:
+    lines = [ln.rstrip() for ln in block.strip().splitlines() if ln.strip()
+             and not ln.lstrip().startswith("#")]
+    if not lines:
+        return False
+    cont = False
+    for ln in lines:
+        if not cont and not _CMD_START.match(ln.strip()):
+            return False
+        cont = ln.endswith(("\\", "&&", "|", "||"))
+    return True
+
+
+def commands(body: str | None) -> tuple[str, ...]:
+    """Every command block in the body, in order: fenced blocks that are wholly
+    commands, and lines that are wholly `inline code` naming one."""
+    text = str(body or "")
+    found: list[tuple[int, str]] = []
+    for m in _FENCE.finditer(text):
+        if _is_command_block(m.group(1)):
+            found.append((m.start(), m.group(1).strip()))
+    fenced = [(m.start(), m.end()) for m in _FENCE.finditer(text)]
+    for m in _CODE_LINE.finditer(text):
+        inside = any(a <= m.start() < b for a, b in fenced)
+        if not inside and _is_command_block(m.group(1)):
+            found.append((m.start(), m.group(1).strip()))
+    out: list[str] = []
+    for _, cmd in sorted(found):
+        if cmd not in out:
+            out.append(cmd)
+    return tuple(out)
+
+
+def pull_requests(body: str | None) -> tuple[tuple[str, str], ...]:
+    """Every distinct PR the body links, in order, as (url, "repo#N")."""
+    out: list[tuple[str, str]] = []
+    for m in _PR_URL.finditer(str(body or "")):
+        pr = (m.group(0), f"{m.group(2)}#{m.group(3)}")
+        if pr not in out:
+            out.append(pr)
+    return tuple(out[:MAX_PRS])
+
+
 def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
@@ -330,6 +389,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         command=command(issue.get("body")),
         closed=closed, closed_at=issue.get("closed_at") if closed else None,
         merge_ask=_is_merge_ask(issue),
+        prs=tuple((u, r, None) for u, r in pull_requests(issue.get("body"))),
+        commands=commands(issue.get("body")),
     )
 
 
@@ -356,10 +417,11 @@ def _pr_states(decl: Declaration, actions: list[Action], call: Request,
     base = decl.api_url.rstrip("/")
     tokens: dict[str, str | None] = {}
     out: dict[str, str] = {}
-    for a in actions:
-        if not a.pr_url or a.pr_url in out:
+    urls = [u for a in actions for u, _, _ in a.prs]
+    for url in urls:
+        if url in out:
             continue
-        m = _PR_URL.match(a.pr_url)
+        m = _PR_URL.match(url)
         if not m or m.group(1) != decl.org:
             continue
         repo, number = m.group(2), m.group(3)
@@ -379,8 +441,8 @@ def _pr_states(decl: Declaration, actions: list[Action], call: Request,
         if not isinstance(issue, Mapping):
             continue
         merged = (issue.get("pull_request") or {}).get("merged_at")
-        out[a.pr_url] = ("merged" if merged else
-                         "closed" if issue.get("state") == "closed" else "open")
+        out[url] = ("merged" if merged else
+                    "closed" if issue.get("state") == "closed" else "open")
     return out
 
 
@@ -410,7 +472,9 @@ def read(decl: Declaration, now: str, request: Request | None = None,
                               claim_class=ClaimClass.OBSERVATION, fetched_at=now,
                               unavailable=(reason,)))
     states = _pr_states(decl, list(seen.values()), call, tok)
-    seen = {n: replace(a, pr_state=states.get(a.pr_url or "")) for n, a in seen.items()}
+    seen = {n: replace(a, pr_state=states.get(a.pr_url or ""),
+                       prs=tuple((u, r, states.get(u)) for u, r, _ in a.prs))
+            for n, a in seen.items()}
     # Actionable first; within that, the soonest due date first, undated
     # after, oldest first among equals.
     actions = tuple(sorted(seen.values(), key=lambda a: (
@@ -546,6 +610,8 @@ def _action_json(a: Action) -> dict[str, Any]:
             "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
             "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,
             "pr_state": a.pr_state, "merge_ask": a.merge_ask,
-            "command": a.command, "closed": a.closed,
+            "command": a.command, "commands": list(a.commands),
+            "prs": [{"url": u, "ref": r, "state": st} for u, r, st in a.prs],
+            "closed": a.closed,
             "closed_at": a.closed_at, "created_at": a.created_at,
             "updated_at": a.updated_at}

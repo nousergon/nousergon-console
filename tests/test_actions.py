@@ -385,3 +385,20 @@ def test_a_failed_archive_read_never_fails_the_list():
                             request=Flaky([_issue(1)]))
     assert found.error is None and [a.number for a in found.todo] == [1]
     assert found.archive_error == "HTTP 502: Bad Gateway"
+
+
+def test_a_related_pr_merging_does_not_end_a_command_ask():
+    """aec#10471: its ask is two gcloud deletions; atlas#656 is only context."""
+    body = ("Related PR: https://github.com/acme/atlas/pull/656\n\n"
+            "```\ngcloud storage rm -r gs://x\n```\n")
+    found, _ = _read(
+        [_issue(1, "Mothballing atlas leaves GCP storage", body=body)],
+        prs={"/repos/acme/atlas/issues/656": {"state": "closed",
+                                              "pull_request": {"merged_at": "2026-09-10T00:00:00Z"}}})
+    assert [a.number for a in found.todo] == [1]
+    idx = Index()
+    actions.attach(idx, found)
+    idx.finalize()
+    html = _html(idx, resolve("/actions"))
+    assert "<strong>Mothballing atlas leaves GCP storage</strong>" in html
+    assert 'related <a href="https://github.com/acme/atlas/pull/656">atlas#656</a> (merged)' in html

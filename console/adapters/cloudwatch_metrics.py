@@ -361,21 +361,34 @@ def _component_ids(values: list[str], id_capture: str | None) -> dict[str, str]:
     extraction of the name the substrate already gives the thing, never a
     minted slug (alpha-engine-config-I13080). A value the regex does not match,
     or whose name another value already took, keeps its verbatim id, so it
-    renders (UNREGISTERED at worst) rather than vanishing.
+    renders (UNREGISTERED at worst) rather than vanishing. No value is ever
+    overwritten: when a value's verbatim id was already taken as another
+    value's CAPTURED name, the verbatim value keeps it and the captured one
+    falls back to its own verbatim id (['/service/foo', 'foo'] under
+    ``(?P<id>foo)$`` gives both, not one).
     """
     if not id_capture:
         return {v: v for v in values}
     regex = re.compile(id_capture)
     out: dict[str, str] = {}
+
+    def _place_verbatim(value: str) -> None:
+        holder = out.get(value)
+        out[value] = value
+        if holder is not None and holder != value:
+            # A captured alias held this value's own name: the alias yields.
+            _place_verbatim(holder)
+
     for value in values:
         match = regex.search(value)
         name_ = None
         if match:
             name_ = match.group("id") if "id" in regex.groupindex else (
                 match.group(1) if regex.groups else None)
-        if not name_ or name_ in out:
-            name_ = value
-        out[name_] = value
+        if name_ and name_ not in out:
+            out[name_] = value
+        else:
+            _place_verbatim(value)
     return out
 
 

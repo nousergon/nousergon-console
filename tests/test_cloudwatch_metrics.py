@@ -260,6 +260,16 @@ def test_id_capture_never_hides_a_value_it_cannot_name():
     assert sorted(e.id for e in result.entities) == sorted(["dup", odd, b])
 
 
+def test_a_verbatim_value_is_never_overwritten_by_a_captured_name():
+    """codex 2e0d3651af86fd6e: '/service/foo' captures 'foo', then the value
+    'foo' itself collides; both must render, neither overwrites the other."""
+    from console.adapters.cloudwatch_metrics import _component_ids
+
+    out = _component_ids(["/service/foo", "foo"], r"(?P<id>foo)$")
+    assert out == {"foo": "foo", "/service/foo": "/service/foo"}
+    assert _component_ids(["foo", "/service/foo"], r"(?P<id>foo)$") == out
+
+
 def test_id_capture_falls_back_to_the_first_group_when_unnamed():
     result = _fetch([_SFN + "m"], {}, id_capture=r"stateMachine:(.+)$")
     assert [e.id for e in result.entities] == ["m"]

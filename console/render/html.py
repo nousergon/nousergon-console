@@ -2135,10 +2135,12 @@ def exception_trend(points, now_total: int | None = None,
         return ""
     bars = [(p.date, p.total, _untriaged(getattr(p, "by_priority", None) or {}), False)
             for p in points]
+    if not bars:
+        # The live "now" bar alone is not a trend: drawn by itself it read
+        # 'now - now: 7 -> 7 (0)', a fabricated zero change (codex c6dea540).
+        return '<p class="absent">no daily exception counts published yet</p>'
     if now_total is not None:
         bars.append(("now", now_total, now_untriaged, True))
-    if not bars:
-        return '<p class="absent">no daily exception counts published yet</p>'
     hi = max(t for _, t, _, _ in bars) or 1
     inner_h = _CHART_H - 2 * _CHART_PAD
     slot = (_CHART_W - 2 * _CHART_PAD) / len(bars)

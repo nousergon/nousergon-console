@@ -106,3 +106,13 @@ def test_every_page_menu_links_the_exceptions_list():
         nav = html[html.index('<nav class="site-nav">'):]
         nav = nav[:nav.index("</nav>")]
         assert '<a href="/exceptions">exceptions</a>' in nav, path
+
+
+def test_an_empty_history_with_a_live_count_draws_no_trend():
+    """codex c6dea5407217674d: the live 'now' bar alone rendered a fabricated
+    'now - now: 7 -> 7 (0)' and the empty-history text was unreachable."""
+    from console.render.html import exception_trend
+
+    html = exception_trend([], 7, 2)
+    assert "no daily exception counts published yet" in html
+    assert "(0)" not in html

@@ -310,7 +310,9 @@ def _mint_token(token_command: list[str], org: str, repo: str) -> str:
                              timeout=_TOKEN_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - becomes the source's reason
         raise RefReadError(f"token_command failed: {_describe(exc, stdout=False)}") from None
-    token = _first_line(out.stdout)
+    # The first non-blank line, untruncated: `_first_line` bounds REASON text
+    # to _REASON_CHARS, and a token cut to that length is a wrong credential.
+    token = next((ln.strip() for ln in str(out.stdout or "").splitlines() if ln.strip()), "")
     if not token:
         raise RefReadError("token_command printed no token")
     return token

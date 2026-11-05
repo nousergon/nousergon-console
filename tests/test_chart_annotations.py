@@ -126,6 +126,37 @@ def test_range_narrows_the_marks_with_the_points():
     assert sec["annotations_outside"] == 4
 
 
+def test_marks_place_by_day_on_a_series_that_is_not_in_date_order(monkeypatch):
+    # codex 25e8f237f4fba4b3: placement assumed ascending points.
+    first, *rest = ROWS
+    values = [{"date": d, "value": -float(i)} for i, d in enumerate(DAYS)][::-1]
+    reversed_row = Entity(
+        kind=first.kind, id=first.id, state=first.state, provenance=first.provenance,
+        facets=first.facets,
+        detail={"fields": {"underwater_pct": {"value": values, "unit": "%",
+                                              "render": "timeseries"}}})
+    monkeypatch.setitem(globals(), "ROWS", (reversed_row, *rest))
+    sec = _chart(_decl([PROMOTIONS, SEV1]))
+    assert [(m["day"], m["point"]) for m in sec["annotations"]] == [
+        ("2026-10-21", "2026-10-21"), ("2026-10-24", "2026-10-23"), ("2026-10-27", "2026-10-27")]
+    assert sec["annotations_outside"] == 2
+
+
+def test_an_empty_range_still_shows_the_event_counts(monkeypatch):
+    # codex 625409784abdd058: an empty range returned before the counts.
+    sec = {"type": "chart", "id": "x", "field": "f", "points": [], "url": "/x",
+           "annotations": [], "annotations_outside": 3, "annotations_undated": 1}
+    from console.render import html as render_html
+
+    class _Idx:
+        def entity(self, _id):
+            return None
+
+    out = render_html._page_chart(_Idx(), sec)
+    assert "no point inside the selected range" in out
+    assert "3 outside the chart&#x27;s dates" in out and "1 without a date" in out
+
+
 def test_html_draws_one_line_per_mark_and_lists_each_in_text():
     html = _html(_index(_decl([PROMOTIONS, SEV1])), resolve("/page/performance", ""))
     assert html.count('class="ts-mark"') == 3

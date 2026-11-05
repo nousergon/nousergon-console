@@ -2493,6 +2493,7 @@ def _page_tile(t: dict, empty: str = "") -> str:
             also = ('<div class="tile-meta tile-also">' + " · ".join(
                 f'{esc(a["label"])} {esc(a["text"])}'
                 + (f' <span class="tile-unit">{esc(a["unit"])}</span>' if a.get("unit") else "")
+                + (f' <small class="absent">{esc(a["defect"])}</small>' if a.get("defect") else "")
                 for a in t["also"]) + "</div>")
         body = (f'<div class="tile-value">{esc(t["text"])}{unit}{whole}</div>'
                 f'{also}<div class="tile-meta">{baseline}</div>{defect}')
@@ -2549,7 +2550,10 @@ def _page_chart(index: Index, sec: dict) -> str:
     by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))} if ent else {}
     f = by_name.get(sec["field"])
     if f is None or not sec["points"]:
-        return '<p class="absent">no point inside the selected range</p>'
+        # The event counts still show: an empty range hides no declared event
+        # (codex 625409784abdd058).
+        return ('<p class="absent">no point inside the selected range</p>'
+                + _chart_marks_html(sec))
     shown = dataclasses.replace(f, value=[list(p) for p in sec["points"]])
     marks = sec.get("annotations") or []
     chart = _timeseries_html(shown, by_name.get(f.of or ""), tuple(

@@ -78,3 +78,57 @@ def test_json_carries_each_pages_section():
 def test_a_bad_section_is_refused(bad):
     with pytest.raises(pages.PagesConfigError):
         pages.parse({"p": {"title": "t", "question": "q", "section": bad, "sections": SEC}})
+
+
+# --- products (Brian 2026-11-05: product pages grouped, then org-wide) -----
+
+from console.index import products  # noqa: E402
+
+
+def _product_index(page_decl, product_decl):
+    idx = Index()
+    idx.finalize()
+    layouts = pages.parse(page_decl)
+    declared = products.parse(product_decl)
+    products.check_pages(declared, layouts)
+    pages.attach(idx, layouts)
+    products.attach(idx, declared)
+    return idx
+
+
+def test_product_pages_group_before_org_wide_pages():
+    decl = _decl()
+    decl["perf"]["product"] = "crucible"
+    html = _html(_product_index(decl, {
+        "crucible": {"title": "Crucible", "about": "the trading system"},
+        "metron": {"title": "Metron",
+                   "links": [{"title": "Metron dash", "url": "https://metron.example/dash"}]},
+    }), resolve("/index"))
+    crucible = html.split('id="product-crucible"', 1)[1].split("<h2", 1)[0]
+    assert "Crucible — the trading system" in crucible
+    assert '<a href="/page/perf">Performance</a>' in crucible
+    metron = html.split('id="product-metron"', 1)[1].split("<h2", 1)[0]
+    assert '<a href="https://metron.example/dash">Metron dash</a>' in metron
+    assert html.index('id="product-crucible"') < html.index('id="product-metron"') \
+        < html.index('id="pages-cost"')
+    # The product's page is not listed again under org-wide.
+    assert 'id="pages-trading"' not in html
+    assert "Nous Ergon · org-wide · cost" in html
+
+
+def test_a_page_naming_an_undeclared_product_fails_the_build():
+    decl = _decl()
+    decl["perf"]["product"] = "vires"
+    with pytest.raises(products.ProductsConfigError, match="not declared"):
+        _product_index(decl, {"crucible": {"title": "Crucible"}})
+
+
+def test_a_pane_claimed_by_two_products_fails():
+    with pytest.raises(products.ProductsConfigError, match="already claimed"):
+        products.parse({"a": {"title": "A", "panes": ["cost"]},
+                        "b": {"title": "B", "panes": ["cost"]}})
+
+
+def test_org_wide_is_reserved():
+    with pytest.raises(products.ProductsConfigError):
+        products.parse({"org-wide": {"title": "x"}})

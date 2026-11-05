@@ -174,6 +174,9 @@ class Page:
     #: `trading`, `models`, `cost`, `archives`. Optional: an undeclared
     #: section lists the page under `other`, never hides it.
     section: str = "other"
+    #: Which product the page belongs to (`index/products.py`), e.g.
+    #: `crucible`. None: org-wide. The site index groups by product first.
+    product: str | None = None
 
     @property
     def url(self) -> str:
@@ -392,9 +395,12 @@ def parse(raw: Any, feeds: set[str] | None = None) -> tuple[Page, ...]:
         if not _SECTION.match(section):
             raise PagesConfigError(f"{where}: `section` must be a short lowercase name "
                                    "(letters, digits, spaces, dashes)")
+        product = str(p.get("product") or "").strip().lower() or None
+        if product is not None and not _PAGE_ID.match(product):
+            raise PagesConfigError(f"{where}: `product` must be a declared product id")
         pages.append(Page(
             id=pid, title=_text(p, "title", where), question=_text(p, "question", where),
-            section=section,
+            section=section, product=product,
             sections=tuple(_section(s, f"{where} section #{n}", feeds)
                            for n, s in enumerate(sections, start=1)),
             range=rng, variables=variables, links=_links(p.get("links"), where)))

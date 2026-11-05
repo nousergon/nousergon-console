@@ -316,7 +316,7 @@ def test_the_page_links_prs_and_shows_commands_never_the_issue():
     html = _html(idx, resolve("/actions"))
     assert "https://example.test/8" not in html and "https://example.test/9" not in html
     assert 'href="https://github.com/nousergon/nous-ergon-ops/pull/2133"' in html
-    assert "PR nous-ergon-ops#2133" in html
+    assert ">merge nous-ergon-ops#2133</a>" in html
     assert "bash ~/run-x.sh</code></pre>" in html and "bash ~/rotate.sh</code></pre>" in html
     assert "tracker-I8" not in html.split('<table class="actions">')[1]
     doc = render_json.payload(idx, resolve("/actions"))
@@ -401,4 +401,36 @@ def test_a_related_pr_merging_does_not_end_a_command_ask():
     idx.finalize()
     html = _html(idx, resolve("/actions"))
     assert "<strong>Mothballing atlas leaves GCP storage</strong>" in html
-    assert 'related <a href="https://github.com/acme/atlas/pull/656">atlas#656</a> (merged)' in html
+    assert 'Related <a href="https://github.com/acme/atlas/pull/656">atlas#656</a> (merged)' in html
+    assert "gcloud storage rm -r gs://x</code></pre>" in html
+
+
+def test_the_ask_lists_every_pr_to_merge_and_every_command_to_copy():
+    """Brian 2026-11-05: each row says the PRs to merge, linked, and the full
+    set of commands, copyable, when the row is opened. Evidence blocks are
+    never offered as commands."""
+    body = ("When: after https://github.com/acme/ops/pull/2172 merges\n\n"
+            "Related PR: https://github.com/acme/ops/pull/2169\n\n"
+            "```\naws s3api head-object --bucket b --key k\n  LastModified 2026-10-27\n```\n\n"
+            "```\nbash a.sh && bash a.sh --apply\n```\n\n"
+            "Then:\n\n`gh workflow run tofu-apply-on-merge.yml --ref main`\n")
+    found, _ = _read([_issue(1, "Apply the staging role", body=body)],
+                     prs={"/repos/acme/ops/issues/2172": {"state": "open", "pull_request": {}},
+                          "/repos/acme/ops/issues/2169": {"state": "closed",
+                                                         "pull_request": {"merged_at": "x"}}})
+    a = found.todo[0]
+    assert a.commands == ("bash a.sh && bash a.sh --apply",
+                          "gh workflow run tofu-apply-on-merge.yml --ref main")
+    idx = Index()
+    actions.attach(idx, found)
+    idx.finalize()
+    html = _html(idx, resolve("/actions"))
+    assert 'Merge <a href="https://github.com/acme/ops/pull/2172">ops#2172</a></li>' in html
+    assert 'Related <a href="https://github.com/acme/ops/pull/2169">ops#2169</a> (merged)' in html
+    assert "Run, in order:" in html and html.count('class="action-copy"') == 2
+    assert "LastModified" not in html.split('class="action-run"')[1]
+    assert "merge ops#2172</a> · run 2 commands" in html
+    doc = render_json.payload(idx, resolve("/actions"))
+    assert doc["actions"][0]["commands"][1].startswith("gh workflow run")
+    assert {p["ref"]: p["state"] for p in doc["actions"][0]["prs"]} == {
+        "ops#2172": "open", "ops#2169": "merged"}

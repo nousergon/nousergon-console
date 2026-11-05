@@ -326,6 +326,19 @@
   setInterval(markClipped, 2000);  // a refreshed body brings new cells
   markClipped();
 
+  // Copy a command (Your actions): the button copies its box's text and
+  // says so; the box itself stays selectable for a browser without the API.
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest(".action-copy");
+    if (!btn) return;
+    var code = btn.parentNode.querySelector("pre");
+    if (!code || !navigator.clipboard) return;
+    navigator.clipboard.writeText(code.textContent).then(function () {
+      btn.textContent = "copied";
+      setTimeout(function () { btn.textContent = "copy"; }, 1500);
+    });
+  });
+
   tickAges();
   setInterval(tickAges, TICK_MS);
   if (refreshing) schedule();

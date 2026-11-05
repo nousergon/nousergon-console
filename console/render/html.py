@@ -2428,24 +2428,61 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
     # (Brian 2026-11-05: atlas#656, merged long ago, headed the list).
     title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url and a.merge_ask
              else f"<strong>{esc(a.title)}</strong>")
-    cmd = (f'<pre class="action-cmd"><code>{esc(a.command)}</code></pre>'
-           if a.command else "")
-    if a.pr_url and a.merge_ask:
-        what = f'<a href="{esc(a.pr_url)}">PR {esc(a.pr_ref)}</a>'
-    else:
-        what = "command" if a.command else "step"
-        if a.pr_url:
-            what += (f' · related <a href="{esc(a.pr_url)}">{esc(a.pr_ref)}</a>'
-                     + (f" ({esc(a.pr_state)})" if a.pr_state else ""))
+    ask = _action_ask(a)
+    to_merge = _prs_to_merge(a)
+    parts = []
+    if to_merge:
+        parts.append(" · ".join(f'<a href="{esc(u)}">merge {esc(r)}</a>' for u, r, _ in to_merge))
+    if a.commands:
+        n = len(a.commands)
+        parts.append(f"run {n} command{'s' if n != 1 else ''}")
+    what = " · ".join(parts) or "step"
     return (f'<tr id="a{a.number}" class="action{" action-done" if checked else ""}">'
             f'<td class="action-cell">{control}</td>'
             f"<td>{title}"
             + (f'<div class="muted">{esc(a.summary)}</div>' if a.summary else "")
-            + cmd + status + "</td>"
+            + ask + status + "</td>"
             f"<td>{_action_due(a, today)}</td>"
             f"<td>{esc(a.when) if a.when else _ANY_TIME}</td>"
             f'<td>{what}<br>'
             f'<span class="muted">{as_of_html(a.created_at)}</span></td></tr>')
+
+
+def _prs_to_merge(a) -> list:
+    """The PRs this ask needs merged: a merge ask's own PR, and any other PR
+    it names that is still open (it has to land first)."""
+    out = []
+    for i, (u, r, st) in enumerate(a.prs):
+        if (a.merge_ask and i == 0) or st == "open":
+            out.append((u, r, st))
+    return out
+
+
+def _action_ask(a) -> str:
+    """The ask, spelled out (Brian 2026-11-05): every PR to merge, linked,
+    then every command to run, each in its own copy box. The row is one line
+    until opened, so this is what an opened row shows."""
+    if a.closed or not a.actionable:
+        return ""
+    to_merge = _prs_to_merge(a)
+    lines = []
+    for u, r, st in to_merge:
+        lines.append(f'<li>Merge <a href="{esc(u)}">{esc(r)}</a>'
+                     + (f" ({esc(st)})" if st and st != "open" else "") + "</li>")
+    for u, r, st in a.prs:
+        if (u, r, st) not in to_merge:
+            lines.append(f'<li class="muted">Related <a href="{esc(u)}">{esc(r)}</a>'
+                         + (f" ({esc(st)})" if st else "") + "</li>")
+    out = f'<ul class="action-prs">{"".join(lines)}</ul>' if lines else ""
+    if a.commands:
+        lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
+        out += (f'<div class="action-run">{lead}<ol class="action-cmds">'
+                + "".join(f'<li><pre class="action-cmd"><code>{esc(c)}</code></pre>'
+                          '<button type="button" class="action-copy" '
+                          'aria-label="Copy this command">copy</button></li>'
+                          for c in a.commands)
+                + "</ol></div>")
+    return out
 
 
 def _actions_table(rows, decl, today: str) -> str:

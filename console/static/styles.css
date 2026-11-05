@@ -9,6 +9,7 @@
   --good: #087f23; --good-bg: #e3f4e6; --info: #0b5fa5; --info-bg: #e2eefa;
   --off: #4c5563; --off-bg: #eceef1;
   --chart-1: #2a78d6; --chart-2: #8a63d2; --chart-3: #b8742a; --chart-ref: #59636e;
+  --chart-4: #199e70; --chart-5: #d55181; --chart-6: #6b7f00;
   --plan-1: #2a78d6; --plan-2: #d55181; --plan-3: #8a63d2; --plan-4: #199e70; --plan-5: #b8742a;
   --plan-other: #7a7f87; --plan-today: #2f80e0;
   --plan-met: #4c5563; --plan-on-track: #087f23; --plan-threatened: #c99700;
@@ -23,6 +24,7 @@
     --good: #5fd37a; --good-bg: #16301d; --info: #6cb6ff; --info-bg: #142a40;
     --off: #9aa5b1; --off-bg: #232a32;
     --chart-1: #6cb6ff; --chart-2: #b69cf0; --chart-3: #e0a35c; --chart-ref: #9aa5b1;
+    --chart-4: #4fd1a1; --chart-5: #f08fb3; --chart-6: #b5d65a;
   }
 }
 body { background: var(--bg); color: var(--text); font-size: 15px; }
@@ -202,6 +204,20 @@ svg.ts-chart { width: 15rem; height: 4rem; vertical-align: middle; color: inheri
 svg.ts-chart rect { fill: currentColor; fill-opacity: .55; }
 svg.ts-chart line.ts-ref { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .ts-summary { color: var(--muted); }
+/* An overlay chart (a chart section declaring several fields, alpha-engine-
+   config-I12798): one line per series, each its own colour token, with a
+   legend printing every series' latest value beside its colour (§5.7). The
+   colours tell series apart; they are not verdicts (§5.4). */
+svg.ts-chart path.ts-trace { fill: none; stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+svg.ts-chart line.ts-zero { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ts-trace-1 { stroke: var(--chart-1); color: var(--chart-1); }
+.ts-trace-2 { stroke: var(--chart-2); color: var(--chart-2); }
+.ts-trace-3 { stroke: var(--chart-3); color: var(--chart-3); }
+.ts-trace-4 { stroke: var(--chart-4); color: var(--chart-4); }
+.ts-trace-5 { stroke: var(--chart-5); color: var(--chart-5); }
+.ts-trace-6 { stroke: var(--chart-6); color: var(--chart-6); }
+.ts-legend { list-style: none; padding: 0; margin: .3rem 0; display: flex; flex-wrap: wrap; gap: .2rem 1.2rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.ts-swatch { display: inline-block; width: 1rem; height: .2rem; margin-right: .35rem; vertical-align: middle; background: currentColor; border-radius: .1rem; }
 
 /* A report feed (`/reports`): the newest report open, the recent window
    collapsed below it, and the older ones as a dated list. */

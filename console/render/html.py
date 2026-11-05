@@ -440,7 +440,8 @@ def _chart_data(key: str, labels: list[str], series: list[dict], unit: str) -> s
     full precision, so the interactive layer reads exact values from the page
     itself rather than re-parsing the 4-significant-figure `<title>`s.
 
-    Each series is ``{"label", "kind": "bar" | "line", "values"}`` with one
+    Each series is ``{"label", "kind": "bar" | "line" | "trace", "values"}``
+    (a trace is one line of an overlay, in its own colour token) with one
     value per label; ``None`` is a gap (not measured), never zero, exactly as
     the SVG leaves it out. A ``"sparse": true`` series holds only its own
     points, so its ``None`` means "another series' point", not a gap. A
@@ -528,15 +529,7 @@ def _timeseries_html(f: Field, whole: Field | None,
         above = sum(1 for y in ys if y > ref)
         summary.append(f"{whole.name} {_num(ref)}{unit} "  # type: ignore[union-attr]
                        f"({above} of {len(ys)} above)")
-    ticks = []
-    for i, title in marks:
-        if 0 <= i < len(points):
-            mx = _CHART_PAD + i * slot + slot / 2
-            ticks.append(
-                f'<line class="ts-mark" x1="{mx:.2f}" x2="{mx:.2f}" y1="0" '
-                f'y2="{_CHART_H:g}" stroke="currentColor" stroke-width="0.6" '
-                f'stroke-dasharray="1 2">'
-                f"<title>{esc(title)}</title></line>")
+    ticks = _mark_ticks(marks, len(points))
     if ticks:
         summary.append(f"{len(ticks)} event mark{'s' if len(ticks) != 1 else ''}")
     text = " · ".join(summary)
@@ -551,6 +544,96 @@ def _timeseries_html(f: Field, whole: Field | None,
         f"<title>{esc(f.name)}: {esc(text)}</title>"
         + "".join(bars) + line + "".join(ticks)
         + f'</svg><br><small class="ts-summary">{esc(text)}</small>'
+    )
+
+
+def _mark_ticks(marks: tuple[tuple[int, str], ...], n: int) -> list[str]:
+    """Event marks as thin vertical lines through their point's slot, one per
+    mark inside the chart's ``n`` points (alpha-engine-config-I12784)."""
+    slot = (_CHART_W - 2 * _CHART_PAD) / max(n, 1)
+    ticks = []
+    for i, title in marks:
+        if 0 <= i < n:
+            mx = _CHART_PAD + i * slot + slot / 2
+            ticks.append(
+                f'<line class="ts-mark" x1="{mx:.2f}" x2="{mx:.2f}" y1="0" '
+                f'y2="{_CHART_H:g}" stroke="currentColor" stroke-width="0.6" '
+                f'stroke-dasharray="1 2">'
+                f"<title>{esc(title)}</title></line>")
+    return ticks
+
+
+def _overlay_html(labels: list[str], series: list[dict], unit: str | None,
+                  key: str, marks: tuple[tuple[int, str], ...] = ()) -> str:
+    """Several series of one row on one axis, each a line in its own colour
+    token (alpha-engine-config-I12798: a return beside its benchmarks).
+
+    A ``None`` value is a gap: the line breaks there and is never bridged, and
+    a point with no neighbour is drawn as a short tick so it is not lost. Each
+    series' latest value is printed in the legend beside its colour, so
+    nothing is carried by colour or position alone (§5.7). A horizontal rule
+    marks zero when the values cross it. Uncoloured as a verdict: the colours
+    tell series apart and say nothing about good or bad (§5.4)."""
+    n = len(labels)
+    u = f" {unit}" if unit else ""
+    ys = [v for s in series for v in s["values"] if v is not None]
+    lo, hi = min([0.0, *ys]), max([0.0, *ys])
+    span = (hi - lo) or 1.0
+    inner_h = _CHART_H - 2 * _CHART_PAD
+    slot = (_CHART_W - 2 * _CHART_PAD) / max(n, 1)
+
+    def x_at(i: int) -> float:
+        return _CHART_PAD + i * slot + slot / 2
+
+    def y_at(v: float) -> float:
+        return _CHART_PAD + (hi - v) / span * inner_h
+
+    paths, legend, summary = [], [], [f"{n} points, {labels[0]} – {labels[-1]}"]
+    for k, s in enumerate(series, start=1):
+        runs: list[list[tuple[float, float]]] = [[]]
+        for i, v in enumerate(s["values"]):
+            if v is None:
+                if runs[-1]:
+                    runs.append([])
+                continue
+            runs[-1].append((x_at(i), y_at(v)))
+        d = []
+        for run in (r for r in runs if r):
+            if len(run) == 1:
+                (x, y), half = run[0], max(slot * 0.3, 0.5)
+                d.append(f"M{x - half:.2f} {y:.2f}L{x + half:.2f} {y:.2f}")
+            else:
+                d.append("M" + "L".join(f"{x:.2f} {y:.2f}" for x, y in run))
+        measured = [(labels[i], v) for i, v in enumerate(s["values"]) if v is not None]
+        if measured:
+            at, latest = measured[-1]
+            said = f"{s['field']} {_num(latest)}{u} at {at}"
+        else:
+            said = f"{s['field']}: no measured point"
+        summary.append(said)
+        if d:
+            paths.append(f'<path class="ts-trace ts-trace-{k}" d="{"".join(d)}">'
+                         f"<title>{esc(said)}</title></path>")
+        legend.append(f'<li><span class="ts-swatch ts-trace-{k}" aria-hidden="true"></span>'
+                      f"{esc(said)}</li>")
+    zero = ""
+    if lo < 0 < hi:
+        zy = y_at(0.0)
+        zero = (f'<line class="ts-zero" x1="0" x2="{_CHART_W:g}" y1="{zy:.2f}" '
+                f'y2="{zy:.2f}"><title>0{esc(u)}</title></line>')
+    ticks = _mark_ticks(marks, n)
+    if ticks:
+        summary.append(f"{len(ticks)} event mark{'s' if len(ticks) != 1 else ''}")
+    text = " · ".join(summary)
+    data = _chart_data(key, list(labels), [
+        {"label": s["field"], "kind": "trace", "values": s["values"]} for s in series
+    ], unit or "")
+    return (
+        f'<svg class="ts-chart ts-overlay"{data} viewBox="0 0 {_CHART_W:g} {_CHART_H:g}" '
+        f'preserveAspectRatio="none" role="img" aria-label="{esc(text)}">'
+        f"<title>{esc(text)}</title>"
+        + zero + "".join(paths) + "".join(ticks)
+        + f'</svg><ul class="ts-legend">{"".join(legend)}</ul>'
     )
 
 
@@ -2546,6 +2629,8 @@ def _page_chart(index: Index, sec: dict) -> str:
     if "absent" in sec:
         note = _empty_note(sec) if sec.get("id") is None else ""
         return f'<p class="absent">{note}{esc(sec["absent"])} — <code>{esc(sec.get("selector", ""))}</code></p>'
+    if "fields" in sec:
+        return _page_overlay(sec)
     ent = index.entity(sec["id"])
     by_name = {f.name: f for f in parse_fields(ent.detail.get("fields"))} if ent else {}
     f = by_name.get(sec["field"])
@@ -2563,6 +2648,26 @@ def _page_chart(index: Index, sec: dict) -> str:
     return (f'<figure class="page-chart">{chart}{note}{_chart_marks_html(sec)}<figcaption>'
             f'<a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · {as_of_html(sec.get("as_of"))}'
             f'</figcaption></figure>')
+
+
+def _page_overlay(sec: dict) -> str:
+    """A chart section declaring several fields: one line per series."""
+    missing = sec.get("missing") or []
+    not_drawn = ("<small>Not drawn: " + esc("; ".join(
+        f'{m["field"]} ({m["why"]})' for m in missing)) + "</small>") if missing else ""
+    if not sec["labels"]:
+        return ('<p class="absent">no point inside the selected range</p>'
+                + not_drawn + _chart_marks_html(sec))
+    marks = sec.get("annotations") or []
+    chart = _overlay_html(sec["labels"], sec["series"], sec.get("unit"),
+                          "+".join(sec["fields"]), tuple(
+                              (m["slot"], f'{m["label"]} {m["at"]}: {m["text"]}')
+                              for m in marks))
+    note = (f'<small> · {sec["outside_range"]} earlier points outside the range</small>'
+            if sec.get("outside_range") else "")
+    return (f'<figure class="page-chart">{chart}{note}{not_drawn}{_chart_marks_html(sec)}'
+            f'<figcaption><a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · '
+            f'{as_of_html(sec.get("as_of"))}</figcaption></figure>')
 
 
 def _chart_marks_html(sec: dict) -> str:

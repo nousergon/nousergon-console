@@ -29,6 +29,9 @@
   var LIB_CSS = "/vendor/uplot/uPlot.min.css";
   // Series colour tokens, in order; a reference line takes `--chart-ref`.
   var BAR_TOKENS = ["chart-1", "chart-2", "chart-3"];
+  // An overlay's lines (`kind: "trace"`, one series each, server class
+  // `ts-trace-<n>`), in the same order the server's SVG colours them.
+  var TRACE_TOKENS = ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5", "chart-6"];
 
   // Pure helpers (exported under node for the console's tests) ---------
   function formatValue(v, unit) {
@@ -220,20 +223,24 @@
       value: function (u, v) { return v === null || v === undefined ? "—" : data.labels[v]; },
     }];
     for (var i = 0; i < n; i++) xs.push(i);
-    var plotted = [xs], barNo = 0;
+    var plotted = [xs], barNo = 0, traceNo = 0;
     data.series.forEach(function (s) {
       var line = s.kind === "line";
-      var colour = line ? token("chart-ref") : token(BAR_TOKENS[barNo++ % BAR_TOKENS.length]);
+      // A trace is a series in its own right drawn as a solid line, never
+      // bridged across a gap (uPlot's default `spanGaps: false`).
+      var trace = s.kind === "trace";
+      var colour = trace ? token(TRACE_TOKENS[traceNo++ % TRACE_TOKENS.length])
+        : line ? token("chart-ref") : token(BAR_TOKENS[barNo++ % BAR_TOKENS.length]);
       plotted.push(s.values);
       seriesOpts.push({
         label: s.label,
         show: !hidden[s.label],
         stroke: colour,
-        width: line ? 1.5 : 1,
+        width: trace ? 2 : line ? 1.5 : 1,
         dash: line ? [4, 3] : undefined,
-        fill: line ? undefined : withAlpha(colour, 0.55),
+        fill: line || trace ? undefined : withAlpha(colour, 0.55),
         fillTo: 0,
-        paths: line ? undefined : bars,
+        paths: line || trace ? undefined : bars,
         points: {show: false},
         // At rest (no point under the cursor) the legend names no value; a
         // gap reads "not measured", except in a sparse series, where a null

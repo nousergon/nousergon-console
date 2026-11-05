@@ -65,6 +65,10 @@ RANGE_PARAM = "range"
 SORT_PARAM = "sort"
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
+#: The most timeseries one chart overlays (alpha-engine-config-I12798): a
+#: return beside its benchmarks. One colour token per series
+#: (`--chart-1`..`--chart-6`); more lines than that stop being readable.
+MAX_CHART_SERIES = 6
 
 #: Priority order for an exceptions section: P0 first, then rows nobody has
 #: triaged yet, then P1-P3 (Brian, 2026-10-28 18:13Z).
@@ -123,7 +127,8 @@ class Section:
     #: tiles only.
     tiles: tuple[Tile, ...] = ()
     #: table: the declared fields shown as columns (empty: every declared
-    #: field, in declaration order). chart: the one timeseries field.
+    #: field, in declaration order). chart: the one timeseries field, or 2..
+    #: `MAX_CHART_SERIES` timeseries of the same row overlaid as lines.
     fields: tuple[str, ...] = ()
     #: table: a declared field to order by, `-` prefix for descending.
     sort: str | None = None
@@ -316,8 +321,12 @@ def _section(raw: Any, where: str, feeds: set[str] | None) -> Section:
         raise PagesConfigError(f"{where}: `title` is required")
     select = _selector(raw.get("select"), where)
     fields = _names(raw.get("fields"), where, "fields")
-    if kind == "chart" and len(fields) != 1:
-        raise PagesConfigError(f"{where}: `fields` must name exactly one timeseries field")
+    if kind == "chart" and not 1 <= len(fields) <= MAX_CHART_SERIES:
+        raise PagesConfigError(
+            f"{where}: `fields` must name exactly one timeseries field, or 2..{MAX_CHART_SERIES} "
+            "of the same row to overlay as lines")
+    if kind == "chart" and len(set(fields)) != len(fields):
+        raise PagesConfigError(f"{where}: `fields` names a series twice")
     annotations = _annotations(raw.get("annotations"), where)
     if annotations and kind != "chart":
         raise PagesConfigError(f"{where}: only a chart takes `annotations`")
@@ -621,6 +630,20 @@ def by_priority(rows: list) -> list:
                                        _instant(e.provenance.as_of) or ceiling, e.id))
 
 
+def _before_range(label: Any, since: datetime | None) -> bool:
+    """Whether a point's label is a date or instant wholly before the range.
+
+    A label that is not a date is never before anything: it stays."""
+    if since is None:
+        return False
+    when = _instant(label)
+    if when is not None and len(str(label).strip()) == 10:
+        # A bare date is a whole day: it is inside the range when any part of
+        # it is.
+        when += timedelta(days=1)
+    return when is not None and when <= since
+
+
 def _chart(ent: Any, field: str, since: datetime | None) -> dict[str, Any]:
     f = _fields(ent).get(field)
     if f is None:
@@ -632,12 +655,7 @@ def _chart(ent: Any, field: str, since: datetime | None) -> dict[str, Any]:
     if since is not None:
         kept = []
         for label, y in points:
-            when = _instant(label)
-            if when is not None and len(str(label).strip()) == 10:
-                # A bare date is a whole day: it is inside the range when any
-                # part of it is.
-                when += timedelta(days=1)
-            if when is not None and when <= since:
+            if _before_range(label, since):
                 dropped += 1
                 continue
             kept.append((label, y))
@@ -647,6 +665,57 @@ def _chart(ent: Any, field: str, since: datetime | None) -> dict[str, Any]:
             "outside_range": dropped,
             "reference": ({"name": whole.name, "value": whole.value}
                           if whole is not None else None)}
+
+
+def _overlay(ent: Any, fields: tuple[str, ...], since: datetime | None) -> dict[str, Any]:
+    """Several timeseries of ONE row on one axis (alpha-engine-config-I12798):
+    a return beside the benchmarks it is measured against, each a line.
+
+    The x axis is the union of every series' labels — chronological when every
+    label is a date or instant, first-seen order otherwise — and each series
+    carries one value per label, ``None`` where it has no point (a gap, never
+    zero, and never interpolated). A field the row does not carry, or carries
+    in a shape this console cannot read, is listed under ``missing`` with why
+    and drawn as nothing; the other series still draw. Series in different
+    units share no axis, so a mix renders as absent rather than as one
+    misleading picture. Nothing is computed: each value is the row's own."""
+    by_name = _fields(ent)
+    read: list[tuple[str, Any, list]] = []
+    missing: list[dict[str, str]] = []
+    for name in fields:
+        f = by_name.get(name)
+        if f is None:
+            missing.append({"field": name, "why": "the newest row carries no such field"})
+            continue
+        points = series_points(f.value) if f.render is Render.TIMESERIES else None
+        if points is None:
+            missing.append({"field": name,
+                            "why": "not a timeseries this console can read"})
+            continue
+        read.append((name, f, points))
+    if not read:
+        return {"absent": "the newest row carries none of the fields as a timeseries",
+                "missing": missing}
+    units = sorted({f.unit or "" for _, f, _ in read})
+    if len(units) > 1:
+        return {"absent": "the fields carry different units ("
+                + ", ".join(repr(u) for u in units) + "); an overlay needs one axis",
+                "missing": missing}
+    labels: dict[str, None] = {}
+    for _, _, points in read:
+        for label, _ in points:
+            labels.setdefault(label, None)
+    order = list(labels)
+    if order and all(_instant(label) is not None for label in order):
+        order.sort(key=lambda label: (_instant(label), label))
+    shown = [label for label in order if not _before_range(label, since)]
+    dropped = len(order) - len(shown)
+    series = []
+    for name, _, points in read:
+        values = dict(points)
+        series.append({"field": name, "values": [values.get(label) for label in shown]})
+    return {"labels": shown, "series": series, "missing": missing,
+            "unit": units[0] or None, "outside_range": dropped}
 
 
 def _day(value: Any) -> str | None:
@@ -727,15 +796,22 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
     doc["selector"] = s.select.text
     rows = _select(index, s.select, variables)
     if s.type == "chart":
-        doc["field"] = s.fields[0]
+        overlay = len(s.fields) > 1
+        if overlay:
+            doc["fields"] = list(s.fields)
+        else:
+            doc["field"] = s.fields[0]
         if not rows:
             doc["absent"] = "no row matches the selector"
             return doc
         ent = rows[0]
         doc.update(id=ent.id, url=ent.route, as_of=ent.provenance.as_of,
-                   **_chart(ent, s.fields[0], since))
-        if s.annotations and "points" in doc:
-            marks, outside, undated = _marks(index, s.annotations, variables, doc["points"])
+                   **(_overlay(ent, s.fields, since) if overlay
+                      else _chart(ent, s.fields[0], since)))
+        points = ([[label, None] for label in doc["labels"]] if "labels" in doc
+                  else doc.get("points"))
+        if s.annotations and points is not None:
+            marks, outside, undated = _marks(index, s.annotations, variables, points)
             doc.update(annotations=marks, annotations_outside=outside,
                        annotations_undated=undated)
         return doc

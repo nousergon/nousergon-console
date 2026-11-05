@@ -1638,7 +1638,10 @@ home:
 # newest matching row's field, its state, its baseline or "no baseline", and
 # its staleness), `table` (rows with `fields` as columns, optional `sort:
 # [-]<field>` and `limit`), `chart` (one `timeseries` field of the newest
-# matching row), `report` (a declared `reports:` feed's latest report),
+# matching row as bars, or 2..6 `timeseries` fields of that row overlaid as
+# lines on one axis — a return beside its benchmarks — aligned on the union of
+# their dates, a missing point a gap and a missing field named as not drawn;
+# fields in different units are refused rather than drawn), `report` (a declared `reports:` feed's latest report),
 # `exceptions` (the not-healthy matching rows: P0 first, then untriaged, then
 # P1-P3, each tier worst state then oldest first; priority is read from a
 # `priority` facet or field), and `text` (a `body:` of markdown prose — raw
@@ -1668,8 +1671,8 @@ home:
 # `?sort=[-]<field>` reorders every table that lists the field as `sortable`.
 #
 # A bad declaration (an id that is not a URL segment, no sections, an unknown
-# section type or kind, a selector with no facet, a chart without exactly one
-# field, a report naming no declared feed, a range outside the vocabulary,
+# section type or kind, a selector with no facet, a chart with no field, more
+# than six, or one named twice, a report naming no declared feed, a range outside the vocabulary,
 # a `sort_order` without an ascending `sort`, a `sortable` off a table or naming
 # a field outside its `fields`, a variable named `sort`, a blank `empty`, a link that is
 # not http(s) or a /path, `annotations` on a section that is not a chart or an

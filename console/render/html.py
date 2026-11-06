@@ -3105,8 +3105,10 @@ def with_new_tab_links(page: str) -> str:
 
 _ANCHOR_OPEN = re.compile(r"<a\b([^>]*)>", re.IGNORECASE)
 _ANCHOR_HREF = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
-_ANCHOR_TARGET = re.compile(r"\btarget\s*=", re.IGNORECASE)
-_ANCHOR_REL = re.compile(r"""\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+# An attribute NAME starts after whitespace; `\b` also matched `?target=` and
+# `&rel=` inside an href's query string (I13239, codex 044e9f92cef31ca9).
+_ANCHOR_TARGET = re.compile(r"(?<!\S)target\s*=", re.IGNORECASE)
+_ANCHOR_REL = re.compile(r"""(?<!\S)rel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
 _SAME_PAGE_SCHEMES = ("#", "javascript:", "mailto:", "tel:")
 
 

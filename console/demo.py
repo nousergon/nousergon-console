@@ -50,6 +50,7 @@ import dataclasses
 import fnmatch
 import html as _html
 import re
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -118,6 +119,14 @@ BUILTIN_REDACTIONS: tuple[tuple[str, re.Pattern[str] | _EmailPattern], ...] = tu
 )
 
 
+def _has_dot_segment(url: str) -> bool:
+    """True when the URL's path carries a `.` or `..` segment, however spelled."""
+    path = urllib.parse.urlsplit(str(url).replace("\\", "/")).path
+    for _ in range(3):  # double-encoding (`%252e`) unwraps too
+        path = urllib.parse.unquote(path)
+    return any(seg in (".", "..") for seg in path.replace("\\", "/").split("/"))
+
+
 class DemoConfigError(ValueError):
     """A `demo:` declaration this build cannot honour. Raised during
     `config.build_index`, so it fails the build naming the key rather than
@@ -148,6 +157,13 @@ class Demo:
     def external_allowed(self, url: str) -> bool:
         if self.external_links is None:
             return True
+        if _has_dot_segment(url):
+            # The browser resolves `..` (also as `%2e%2e`, or behind a `\`)
+            # BEFORE it navigates, so `https://host/public/../private` passes a
+            # prefix pattern for `/public` and lands on `/private`. A link the
+            # allowlist cannot judge as written is not a link (I13239, codex
+            # b86dcdc622a85e14).
+            return False
         return any(p.match(url) for p in self.external_links)
 
     # ---------------------------------------------------------------- rules --

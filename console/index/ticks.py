@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -173,6 +174,20 @@ def store(index: Any, name: str) -> Store | None:
 
 # ------------------------------------------------------------------ write ---
 
+#: One lock per store object. `tick` is a read-modify-write of the WHOLE
+#: object and the server is a ThreadingHTTPServer, so two ticks landing
+#: together each read the same marks and the later put erased the earlier
+#: mark (alpha-engine-config-I13239, codex 23e92b8f13727a91 / 8ed39846f7376189).
+#: Serialising the read-put pair per object closes that inside this process.
+_STORE_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
+
+
+def _store_lock(bucket: str, key: str) -> threading.Lock:
+    with _STORE_LOCKS_GUARD:
+        return _STORE_LOCKS.setdefault((bucket, key), threading.Lock())
+
+
 class TickRefused(Exception):
     """A tick the handler will not save, with the reason and HTTP status."""
 
@@ -192,22 +207,23 @@ def tick(index: Any, name: str, key: str, done: bool, actor: str | None, now: st
     if not KEY.match(key) or key not in allowed:
         raise TickRefused(f"{key!r} is not a row shown with a {name} checkbox", 404)
     decl = found.declaration
-    try:
-        marks = _marks((getter or _s3_get)(decl.bucket, decl.key), decl)
-    except Exception as exc:  # noqa: BLE001 - nothing was written
-        raise TickRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
-    if done:
-        marks[key] = {"done": True, "at": now, "by": actor}
-    else:
-        marks.pop(key, None)
-    if len(marks) > MAX_MARKS:
-        raise TickRefused(f"{name} already holds {MAX_MARKS} marks", 409)
-    doc = {"schema_version": SCHEMA_VERSION, "list": name, "updated_at": now, "marks": marks}
-    try:
-        from ..render.json import dumps  # the one wire encoder (test_wire_encoder)
+    with _store_lock(decl.bucket, decl.key):
+        try:
+            marks = _marks((getter or _s3_get)(decl.bucket, decl.key), decl)
+        except Exception as exc:  # noqa: BLE001 - nothing was written
+            raise TickRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
+        if done:
+            marks[key] = {"done": True, "at": now, "by": actor}
+        else:
+            marks.pop(key, None)
+        if len(marks) > MAX_MARKS:
+            raise TickRefused(f"{name} already holds {MAX_MARKS} marks", 409)
+        doc = {"schema_version": SCHEMA_VERSION, "list": name, "updated_at": now, "marks": marks}
+        try:
+            from ..render.json import dumps  # the one wire encoder (test_wire_encoder)
 
-        (putter or _s3_put)(decl.bucket, decl.key, dumps(doc).encode("utf-8"))
-    except Exception as exc:  # noqa: BLE001 - nothing was written
-        raise TickRefused(f"could not save {decl.uri}: {str(exc)[:160]}", 502) from None
-    found.marks, found.read_at, found.error = marks, now, None
+            (putter or _s3_put)(decl.bucket, decl.key, dumps(doc).encode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - nothing was written
+            raise TickRefused(f"could not save {decl.uri}: {str(exc)[:160]}", 502) from None
+        found.marks, found.read_at, found.error = marks, now, None
     return found

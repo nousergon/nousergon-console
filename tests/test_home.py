@@ -220,6 +220,16 @@ def test_notes_show_the_newest_batch_sorted_and_capped_above_health():
     assert render_json.payload(idx, resolve("/"))["notes"]["rows"][0]["id"] == "a"
 
 
+def test_notes_with_mixed_sort_types_still_render():
+    """I13239 (codex db2789e362c3f656): an int beside a str in the sort field
+    raised TypeError and took the whole home page down."""
+    new = "2026-11-04T12:00:00+00:00"
+    idx = _notes_index([_note("s", "high", new), _note("n", 1, new), _note("z", None, new)])
+    doc = home.notes(idx, now=datetime(2026, 11, 4, 13, tzinfo=timezone.utc))
+    assert [r["id"] for r in doc["rows"]] == ["n", "s"] and doc["total"] == 3
+    assert "Things to know" in _html(idx, resolve("/"))
+
+
 def test_old_notes_say_they_are_old_and_no_notes_say_so():
     idx = _notes_index([_note("a", 1, "2026-11-01T12:00:00+00:00")])
     assert home.notes(idx, now=datetime(2026, 11, 4, tzinfo=timezone.utc))["stale"] is True

@@ -312,7 +312,9 @@ def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | N
 
 
 _PR_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
-_FENCE = re.compile(r"```[\w-]*\n(.+?)\n```", re.DOTALL)
+# `\r?\n`: an issue body edited in a browser arrives with CRLF line endings
+# (I13239, codex ee3c591006774d77).
+_FENCE = re.compile(r"```[\w-]*\r?\n(.+?)\r?\n```", re.DOTALL)
 _CODE_LINE = re.compile(r"^\s*`([^`\n]{4,})`\s*$", re.MULTILINE)
 
 

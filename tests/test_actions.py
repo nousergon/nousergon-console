@@ -627,3 +627,11 @@ def test_the_ask_lists_every_pr_to_merge_and_every_command_to_copy():
     assert doc["actions"][0]["commands"][1].startswith("gh workflow run")
     assert {p["ref"]: p["state"] for p in doc["actions"][0]["prs"]} == {
         "ops#2172": "open", "ops#2169": "merged"}
+
+
+def test_a_crlf_issue_body_still_yields_its_fenced_command():
+    """I13239 (codex ee3c591006774d77): a body edited in a browser carries
+    CRLF, and the fence regex required a bare LF after the language tag."""
+    body = "Run this:\r\n```bash\r\naws s3 ls s3://bucket/prefix/\r\n```\r\n"
+    assert actions.command(body) == "aws s3 ls s3://bucket/prefix/"
+    assert actions.commands(body) == ("aws s3 ls s3://bucket/prefix/",)

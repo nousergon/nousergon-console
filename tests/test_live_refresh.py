@@ -199,3 +199,26 @@ m.tickFlow(ui, () => Promise.resolve({ok: true}), state).then(() => {
     src = SCRIPT.read_text()
     assert "var seen = ticks.started || 0;" in src
     assert "if (busy() || superseded(seen, ticks)) { retry = true; return; }" in src
+
+
+def test_a_clipped_row_opens_from_the_keyboard():
+    """codex e57a4c9e28c3be77: row expansion was click-only, so a clipped cell
+    could not be read in full without a mouse. A row with a cut cell now takes
+    focus and opens on Enter or Space, the keys a button answers to."""
+    node = shutil.which("node")
+    assert node, "node is required to test console.js (preinstalled on CI runners)"
+    cases = [["Enter", True], [" ", True], ["Spacebar", True], ["Tab", True],
+             ["a", True], ["Enter", False], [" ", False]]
+    prog = ("const m=require(process.argv[1]);const c=JSON.parse(process.argv[2]);"
+            "console.log(JSON.stringify(c.map(([k,o])=>m.rowToggleKey(k,o))))")
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT), json.dumps(cases)],
+                                    capture_output=True, text=True, check=True).stdout)
+    assert out == [True, True, True, False, False, False, False]
+    src = SCRIPT.read_text()
+    # The clipped row is reachable by Tab and announces its state, and the
+    # key handler shares the click's toggle.
+    assert 'focusableRow(c.closest("tr"));' in src
+    assert 'tr.setAttribute("tabindex", "0");' in src
+    assert 'document.addEventListener("keydown"' in src
+    assert "if (!rowToggleKey(ev.key, onRow)) return;" in src
+    assert src.count("toggleRow(row);") == 2

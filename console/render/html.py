@@ -2526,11 +2526,13 @@ def _action_ask(a) -> str:
     if a.commands:
         lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
         out += (f'<div class="action-run">{lead}<ol class="action-cmds">'
-                + "".join(f'<li><pre class="action-cmd"><code>{esc(c)}</code></pre>'
+                + "".join('<li>' + (f'<div class="action-step">{esc(lab)}</div>' if lab else "")
+                          + f'<pre class="action-cmd"><code>{esc(c)}</code></pre>'
                           '<button type="button" class="action-copy" '
                           'aria-label="Copy this command">copy</button>'
                           + _login_note(c) + '</li>'
-                          for c in a.commands)
+                          for lab, c in zip(a.command_labels or ("",) * len(a.commands),
+                                            a.commands, strict=False))
                 + "</ol></div>")
     return out
 

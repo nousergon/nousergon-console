@@ -129,6 +129,8 @@ class Action:
     prs: tuple[tuple[str, str, str | None], ...] = ()
     #: Every command the issue gives to run, in order (`commands`).
     commands: tuple[str, ...] = ()
+    #: The prose line before each command (where and why it runs), parallel to `commands`.
+    command_labels: tuple[str, ...] = ()
 
     @property
     def actionable(self) -> bool:
@@ -408,6 +410,25 @@ def _is_command_block(block: str) -> bool:
 def commands(body: str | None) -> tuple[str, ...]:
     """Every command block in the body, in order: fenced blocks that are wholly
     commands, and lines that are wholly `inline code` naming one."""
+    return tuple(cmd for _, cmd in command_steps(body))
+
+
+_LABEL_MAX = 240
+
+
+def _label(gap: str) -> str:
+    """The last line of prose before a command: where and why it runs (Brian
+    2026-11-06: a box command must say it runs on the box)."""
+    lines = [ln.strip() for ln in gap.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    ln = re.sub(r"[*_`]", "", lines[-1]).strip()
+    return ln if len(ln) <= _LABEL_MAX else ln[:_LABEL_MAX - 1].rstrip() + "…"
+
+
+def command_steps(body: str | None) -> tuple[tuple[str, str], ...]:
+    """``(label, command)`` for every command block, the label being the line of
+    prose just before it (empty when the command follows another directly)."""
     text = str(body or "")
     found: list[tuple[int, str]] = []
     for m in _FENCE.finditer(text):
@@ -418,13 +439,18 @@ def commands(body: str | None) -> tuple[str, ...]:
         inside = any(a <= m.start() < b for a, b in fenced)
         if not inside and _is_command_block(m.group(1)):
             found.append((m.start(), m.group(1).strip()))
-    out: list[str] = []
-    for _, cmd in sorted(found):
+    ends = {m.start(): m.end() for m in _FENCE.finditer(text)}
+    ends.update({m.start(): m.end() for m in _CODE_LINE.finditer(text)})
+    out: list[tuple[str, str]] = []
+    prev_end = 0
+    for start, cmd in sorted(found):
+        label = _label(text[prev_end:start])
+        prev_end = ends.get(start, start)
         # Only an IMMEDIATE repeat is a duplicate quote. The same command again
         # after a different step is a step of its own, and dropping it changes
         # the procedure "Run, in order" presents (I13239, codex 88ec14d066fdbf57).
-        if not out or out[-1] != cmd:
-            out.append(cmd)
+        if not out or out[-1][1] != cmd:
+            out.append((label, cmd))
     return tuple(out)
 
 
@@ -456,7 +482,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         closed=closed, closed_at=issue.get("closed_at") if closed else None,
         merge_ask=_is_merge_ask(issue),
         prs=tuple((u, r, None) for u, r in pull_requests(issue.get("body"))),
-        commands=tuple(complete(c) for c in commands(issue.get("body"))),
+        commands=tuple(complete(c) for _, c in command_steps(issue.get("body"))),
+        command_labels=tuple(lab for lab, _ in command_steps(issue.get("body"))),
     )
 
 
@@ -747,7 +774,7 @@ def _action_json(a: Action) -> dict[str, Any]:
             "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
             "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,
             "pr_state": a.pr_state, "merge_ask": a.merge_ask,
-            "command": a.command, "commands": list(a.commands),
+            "command": a.command, "commands": list(a.commands), "command_labels": list(a.command_labels),
             "prs": [{"url": u, "ref": r, "state": st} for u, r, st in a.prs],
             "closed": a.closed,
             "closed_at": a.closed_at, "created_at": a.created_at,

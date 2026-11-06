@@ -449,8 +449,14 @@ def test_the_page_script_posts_ticks_for_json_and_falls_back_to_the_form():
     assert '"Accept": "application/json"' in src
     # No script, or no fetch: the form posts as it always did.
     assert "if (!window.fetch || !window.URLSearchParams || !window.FormData) return;" in src
-    # A cadence refresh never swaps the page out from under an unsaved tick.
-    assert "if (ticks.inFlight > 0) { schedule(); return; }" in src
+    # A cadence refresh never swaps the page out from under an unsaved tick
+    # or a reader who is active (Brian 2026-11-06: the swap undid his clicks).
+    assert "return editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;" in src
+    assert "if (busy()) { retrySoon(); return; }" in src
+    # A settled tick moves its row and recounts in place; it never re-reads.
+    assert "ticks.onIdle" not in src and "recountActions();" in src
+    # Expanded rows survive a cadence swap.
+    assert 'rows[r].classList.add("row-open")' in src
 
 
 # ----------------------------------------------------------------- timing ---

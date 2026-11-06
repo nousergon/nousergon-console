@@ -145,7 +145,7 @@
     renderStatus();
   }
 
-  var ticks = {inFlight: 0, stale: false};
+  var ticks = {inFlight: 0};
 
   // Status line --------------------------------------------------------
   var builtAt = meta(document, "console-built") || "";
@@ -209,10 +209,31 @@
     return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
   }
 
+  // The reader's last click, key or scroll. A refresh swaps the whole page,
+  // so it waits until the reader has been still for QUIET_MS: what they were
+  // doing is never undone under them (Brian 2026-11-06).
+  var QUIET_MS = 20000;
+  var lastActive = 0;
+  ["click", "keydown", "scroll", "pointerdown", "wheel", "touchstart"].forEach(function (t) {
+    window.addEventListener(t, function () { lastActive = Date.now(); },
+                            {capture: true, passive: true});
+  });
+  function busy() {
+    return editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;
+  }
+
+  // An expanded table row (`tr.row-open`), named by its first link or, with
+  // none, its first cell's text: the same row in the re-read page reopens.
+  function rowKey(tr) {
+    var a = tr.querySelector("a[href]");
+    if (a) return "a:" + a.getAttribute("href");
+    var td = tr.querySelector("td");
+    return "t:" + (td ? td.textContent.replace(/\s+/g, " ").trim() : "");
+  }
+
   function refresh() {
     if (document.hidden) { due = true; return; }
-    if (editing()) { schedule(); return; }  // never wipe a half-typed query
-    if (ticks.inFlight > 0) { schedule(); return; }  // never drop an unsaved tick
+    if (busy()) { retrySoon(); return; }  // never undo what the reader is doing
     due = false;
     fetch(location.href, {headers: {"Accept": "text/html"}, cache: "no-store"})
       .then(function (resp) {
@@ -223,15 +244,21 @@
         var doc = new DOMParser().parseFromString(text, "text/html");
         var stamp = meta(doc, "console-built");
         if (stamp === null) throw new Error("not a console page");
-        if (editing()) return;  // the reader started typing while we fetched
-        if (ticks.inFlight > 0) { ticks.stale = true; return; }  // a tick began meanwhile
+        if (busy()) { retry = true; return; }  // the reader acted while we fetched
         var was = describe(document.querySelectorAll("details"));
+        var openRows = {};
+        var opened = document.querySelectorAll("tr.row-open");
+        for (var k = 0; k < opened.length; k++) openRows[rowKey(opened[k])] = true;
         var x = window.scrollX, y = window.scrollY;
         document.body.replaceWith(document.adoptNode(doc.body));
         var now = document.querySelectorAll("details");
         var keep = carryOpen(was, describe(now));
         for (var j = 0; j < now.length; j++) {
           if (keep[j] !== null) now[j].open = keep[j];
+        }
+        var rows = document.querySelectorAll(".table-scroll tr");
+        for (var r = 0; r < rows.length; r++) {
+          if (openRows[rowKey(rows[r])]) rows[r].classList.add("row-open");
         }
         window.scrollTo(x, y);
         // /charts.js re-draws its interactive layer over the new SVGs.
@@ -244,8 +271,17 @@
       })
       .then(function () {
         tickAges();
-        schedule();
+        if (retry) { retry = false; retrySoon(); } else { schedule(); }
       });
+  }
+
+  // A refresh put off because the reader was active tries again shortly
+  // rather than a whole period later.
+  var retry = false;
+  function retrySoon() {
+    if (!refreshing) return;
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 5000);
   }
 
   document.addEventListener("visibilitychange", function () {
@@ -458,13 +494,40 @@
       var inDone = !!tables[i].closest("details.actions-done");
       if (inDone === done) { target = tables[i].tBodies[0]; break; }
     }
-    if (target && !target.contains(row)) {
-      row.parentNode.removeChild(row);
-      target.appendChild(fresh);
-    } else {
+    if (!target || target.contains(row)) {
       row.parentNode.replaceChild(fresh, row);
+      return;
     }
-    ticks.stale = true;
+    // Fade the row out where it stands, then add it to the other table and
+    // recount. Nothing else on the page is touched (Brian 2026-11-06).
+    row.classList.add("tick-leaving");
+    setTimeout(function () {
+      if (row.parentNode) row.parentNode.removeChild(row);
+      fresh.classList.add("tick-arrived");
+      target.insertBefore(fresh, target.firstChild);
+      recountActions();
+      setTimeout(function () { fresh.classList.remove("tick-arrived"); }, 1600);
+    }, 350);
+  }
+
+  // The "N to do · M done" line and the Done heading, counted from the rows
+  // now on the page, so they agree with the move without a re-read.
+  function recountActions() {
+    var tables = document.querySelectorAll("table.actions");
+    var todo = 0, done = 0;
+    for (var i = 0; i < tables.length; i++) {
+      var n = tables[i].tBodies[0] ? tables[i].tBodies[0].rows.length : 0;
+      if (tables[i].closest("details.actions-done")) done += n; else todo += n;
+    }
+    var h = document.querySelector("details.actions-done > summary > h2");
+    if (h) h.textContent = "Done \u00b7 " + done;
+    var ps = document.querySelectorAll("body > p");
+    for (var j = 0; j < ps.length; j++) {
+      var t = ps[j].firstChild;
+      if (t && t.nodeType === 3 && /^\d+ to do \u00b7 \d+ done \u00b7 /.test(t.nodeValue)) {
+        t.nodeValue = t.nodeValue.replace(/^\d+ to do \u00b7 \d+ done/, todo + " to do \u00b7 " + done + " done");
+      }
+    }
   }
 
   function sendTick(form) {
@@ -481,11 +544,10 @@
     });
   }
 
-  // After the last tick settles, re-read the page once so counts, order and
-  // sections match the server — the same quiet swap the cadence refresh does.
-  ticks.onIdle = function () {
-    if (ticks.stale) { ticks.stale = false; refresh(); }
-  };
+  // A settled tick does NOT re-read the page: the row already moved and the
+  // counts were redone in place. The cadence refresh, once the reader is
+  // still, brings the rest (Brian 2026-11-06: a re-read right after a tick
+  // undid what he had done in the seconds since).
 
   document.addEventListener("submit", function (ev) {
     var form = ev.target;

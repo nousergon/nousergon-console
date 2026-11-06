@@ -741,3 +741,22 @@ def test_a_cd_command_still_gets_the_login_it_lacks():
     cmd = "cd ~/Development/ops && git fetch -q origin && aws iam list-roles --profile ne-admin"
     assert actions.complete(cmd).startswith(
         "(aws sts get-caller-identity --profile ne-admin >/dev/null 2>&1 || aws sso login --profile ne-admin) && cd ~/")
+
+
+def test_each_command_carries_the_line_that_says_where_it_runs():
+    """Brian 2026-11-06: a command that runs on a box must say so on the page."""
+    body = ("**Step 1. On your Mac: open a shell on the dashboard box.**\n\n"
+            "```\naws ssm start-session --target i-1 --profile ne-admin --region us-east-1\n```\n\n"
+            "**Step 2. In that box shell: run the sign-in script.**\n\n"
+            "```\ncd ~ && sudo bash /home/ec2-user/x.sh\n```\n")
+    steps = actions.command_steps(body)
+    assert [lab for lab, _ in steps] == [
+        "Step 1. On your Mac: open a shell on the dashboard box.",
+        "Step 2. In that box shell: run the sign-in script.",
+    ]
+    found, _ = _read([_issue(1, "Sign in on the box", body=body)])
+    idx = Index()
+    actions.attach(idx, found)
+    idx.finalize()
+    html = _html(idx, resolve("/actions"))
+    assert '<div class="action-step">Step 2. In that box shell: run the sign-in script.</div>' in html

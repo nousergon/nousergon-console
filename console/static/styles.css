@@ -289,6 +289,7 @@ table.actions tr.action-done td a { color: var(--muted); }
 .action-tick { margin: 0; }
 .action-prs { margin: 0.3rem 0 0; padding-left: 1.1rem; }
 .action-run { margin-top: 0.35rem; }
+.action-step { font-size: 0.85em; margin: 0.3em 0 0.15em; }
 .action-cmds { margin: 0.2rem 0 0; padding-left: 1.4rem; }
 .action-cmds li { position: relative; margin-bottom: 0.3rem; }
 .action-copy { position: absolute; top: 0.2rem; right: 0.2rem; font-size: 0.75rem; padding: 0.05rem 0.4rem; cursor: pointer; }

@@ -1737,7 +1737,6 @@ def dashboards_page(index: Index, query: str | None = None) -> str:
                         (f' · <span class="state-UNREPORTED">{m["unreported"]} '
                          "UNREPORTED</span>") if m.get("unreported") else "")
            for m in model.milestones], "none declared")
-    registries = registry_link_items(model.registry_links)
     group("lists", "all lists",
           [_index_entry(f"{k.value}s", f"/{k.route}", f"{len(index.of_kind(k))} rows")
            for k in Kind], "")
@@ -1746,21 +1745,26 @@ def dashboards_page(index: Index, query: str | None = None) -> str:
     total = sum(len(g[2]) for g in groups)
     shown = 0
     body = []
+    toc_items = []
+    # Registries render their own status lines, after milestones; a filter
+    # matches them by name and URL like any other entry, rather than hiding
+    # every one of them (I13239, codex 2ecd5dda519d6286).
+    regs = [r for r in model.registry_links
+            if all(w in f'registries {r["name"]} {r["url"]}'.lower() for w in words)]
     for gid, title, entries, empty in groups:
         kept = [h for h, text in entries if all(w in text for w in words)]
         shown += len(kept)
-        if words and not kept:
-            continue
-        items = "".join(kept) or (f'<li class="absent">{esc(empty)}</li>' if empty else "")
-        body.append(f'<h2 id="{esc(gid)}">{esc(title)}</h2><ul>{items}</ul>')
-        if gid == "milestones" and not words:
-            # Registries render their own status lines; listed unfiltered.
-            body.append(f'<h2 id="registries">registries</h2><ul>{registries}</ul>')
-    toc_items = [(g[0], g[1]) for g in groups
-                 if not words or any(all(w in t for w in words) for _, t in g[2])]
-    if not words:
-        at = next(i for i, (gid, _) in enumerate(toc_items) if gid == "milestones") + 1
-        toc_items.insert(at, ("registries", "registries"))
+        if not words or kept:
+            items = "".join(kept) or (f'<li class="absent">{esc(empty)}</li>' if empty else "")
+            body.append(f'<h2 id="{esc(gid)}">{esc(title)}</h2><ul>{items}</ul>')
+            toc_items.append((gid, title))
+        if gid == "milestones" and (not words or regs):
+            body.append('<h2 id="registries">registries</h2>'
+                        f'<ul>{registry_link_items(regs)}</ul>')
+            toc_items.append(("registries", "registries"))
+    if words:
+        shown += len(regs)
+        total += len(model.registry_links)
     toc = " · ".join(f'<a href="#{esc(gid)}">{esc(title)}</a>' for gid, title in toc_items)
     count = (f"{shown} of {total} entries match “{esc(query or '')}” · "
              '<a href="/index">clear</a>' if words else f"{total} entries")
@@ -2572,6 +2576,10 @@ def actions_page(index: Index, notice: str | None = None) -> str:
                     f'issues labelled {where} in '
                     f'<a href="https://github.com/{esc(decl.org)}/{esc(decl.repo)}/issues">'
                     f'{esc(decl.org)}/{esc(decl.repo)}</a></p>')
+            if found.truncated:
+                body += (f'<p class="state-MISSED">more open actions than this console '
+                         f'reads ({actions.MAX_PAGES * actions.MAX_ACTIONS} per label); '
+                         f'the rest are on the tracker only</p>')
             if not decl.writable:
                 body += ('<p class="absent">ticking is off on this console (no '
                          'write_token_command) — tick on the issue instead</p>')
@@ -2596,6 +2604,7 @@ def actions_page(index: Index, notice: str | None = None) -> str:
 <nav><a href="/">fleet</a> &rsaquo; {esc(title)}</nav>
 <h1>{esc(title)}</h1>
 <p class="pane-question">{esc(actions.ACTIONS_QUESTION)}</p>
+{index_freshness(index)}
 {note}
 {body}
 </body></html>"""

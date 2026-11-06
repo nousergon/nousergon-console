@@ -635,3 +635,87 @@ def test_a_crlf_issue_body_still_yields_its_fenced_command():
     body = "Run this:\r\n```bash\r\naws s3 ls s3://bucket/prefix/\r\n```\r\n"
     assert actions.command(body) == "aws s3 ls s3://bucket/prefix/"
     assert actions.commands(body) == ("aws s3 ls s3://bucket/prefix/",)
+
+
+# --- I13239 pass 3 (codex findings) ------------------------------------------
+def _page(url):
+    from urllib.parse import parse_qs, urlsplit
+
+    return int(parse_qs(urlsplit(url).query).get("page", ["1"])[0])
+
+
+def test_a_when_bound_keeps_its_operators_and_says_when_it_is_cut():
+    # codex 942684eb6a5de678
+    _, _, when = actions.timing("When: **after** > 16:30 ET, once PR #12 lands")
+    assert when == "after > 16:30 ET, once PR #12 lands"
+    assert actions.timing("When: > 16:30 ET")[2] == "> 16:30 ET"
+    _, _, when = actions.timing("When: " + "word " * 60)
+    assert when.endswith("…") and len(when) <= actions.WHEN_CHARS + 1
+
+
+def test_a_repeated_step_is_kept_and_an_immediate_repeat_is_not():
+    # codex 88ec14d066fdbf57
+    body = ("```\naws sso login\n```\n\n```\ngh pr merge 1\n```\n\n"
+            "```\naws sso login\n```\n\n`aws sso login`\n")
+    assert actions.commands(body) == ("aws sso login", "gh pr merge 1", "aws sso login")
+
+
+def test_open_actions_beyond_one_page_are_read():
+    # codex e978e70a0e90aa2c
+    class Paged(FakeHost):
+        def __call__(self, method, url, token, body):
+            self.calls.append((method, url, token, body))
+            if "state=closed" in url:
+                return []
+            if _page(url) == 1:
+                return [_issue(n) for n in range(1, actions.MAX_ACTIONS + 1)]
+            if _page(url) == 2:
+                return [_issue(actions.MAX_ACTIONS + 1)]
+            return []
+
+    found, _ = actions.read(actions.parse(DECL), "2026-11-05T12:00:00Z", request=Paged([]))
+    assert len(found.actions) == actions.MAX_ACTIONS + 1 and not found.truncated
+
+
+def test_a_read_that_hits_the_page_cap_says_so():
+    class Endless(FakeHost):
+        def __call__(self, method, url, token, body):
+            if "state=closed" in url:
+                return []
+            base = (_page(url) - 1) * actions.MAX_ACTIONS
+            return [_issue(base + n) for n in range(1, actions.MAX_ACTIONS + 1)]
+
+    found, _ = actions.read(actions.parse(DECL), "2026-11-05T12:00:00Z", request=Endless([]))
+    assert found.truncated and actions.as_json(found)["truncated"] is True
+    idx = Index()
+    actions.attach(idx, found)
+    idx.finalize()
+    assert "the rest are on the tracker only" in _html(idx, resolve("/actions"))
+
+
+def test_the_archive_is_the_last_closed_not_the_last_updated():
+    # codex eb6b5e9f7f84f623: 100 old closures touched recently fill page 1;
+    # the newest closure is on page 2 and must still lead the archive.
+    def closed(n, closed_at, updated):
+        return dict(_issue(n), state="closed", closed_at=closed_at, updated_at=updated)
+
+    class Paged(FakeHost):
+        def __call__(self, method, url, token, body):
+            if "state=closed" in url:
+                if _page(url) == 1:
+                    return [closed(100 + n, "2026-10-01T00:00:00Z", "2026-11-05T00:00:00Z")
+                            for n in range(actions.MAX_ACTIONS)]
+                if _page(url) == 2:
+                    return [closed(7, "2026-11-04T00:00:00Z", "2026-11-04T00:00:00Z")]
+                return []
+            return super().__call__(method, url, token, body)
+
+    found, _ = actions.read(actions.parse(DECL), "2026-11-05T12:00:00Z",
+                            request=Paged([_issue(1)]))
+    assert found.archive[0].number == 7 and len(found.archive) == actions.ARCHIVE_SIZE
+
+
+def test_the_actions_page_says_how_current_it_is():
+    # codex 859c65deadf22b93
+    idx, _ = _index()
+    assert "index build time unknown" in _html(idx, resolve("/actions"))

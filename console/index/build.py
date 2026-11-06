@@ -342,6 +342,15 @@ class Supervisor:
         except Exception as exc:  # noqa: BLE001 - the marker IS the handling
             with self._lock:
                 _mark_stale(self._current, self._clock, exc)
+                # A failed build ENDS the bootstrap window: it is no longer
+                # "has not finished" but "failed", the distinction `bootstrap`
+                # exists to carry (see `_blank_stale`). Left set, a warm-started
+                # surface read "restarted and reloading" over every later
+                # failure (I13239, codex 91fd3e1bd4e7adea).
+                info = self._current.build_info
+                if info.bootstrap or info.warm_start_from:
+                    self._current.build_info = replace(
+                        info, bootstrap=False, warm_start_from=None)
             return False
         _stamp(fresh, self._clock, self._refresh_seconds,
                build_seconds=self._monotonic() - started)

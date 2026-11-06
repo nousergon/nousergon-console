@@ -111,3 +111,21 @@ def test_a_failed_write_never_breaks_the_build(tmp_path):
                      defer_first_build=True,
                      warm_start_path=str(blocker / "sub" / "last_index.pickle"))
     assert sup.refresh_once()
+
+
+def test_a_failed_build_after_a_warm_start_says_it_failed(tmp_path):
+    # I13239, codex 91fd3e1bd4e7adea: the warm marker outlived a failed build,
+    # so every later failure read "restarted and reloading".
+    path = tmp_path / "last_index.pickle"
+    _built(path)
+    restarted = Supervisor(lambda: (_ for _ in ()).throw(RuntimeError("source down")),
+                           refresh_seconds=180, clock=lambda: T1,
+                           defer_first_build=True, warm_start_path=str(path))
+    assert not restarted.refresh_once()
+    idx = restarted.current
+    info = idx.build_info
+    assert info.bootstrap is False and info.warm_start_from is None
+    assert "source down" in info.last_error
+    page = landing_page(idx)
+    assert "The last refresh failed" in page and "Restarted" not in page
+    assert "Trading" in page  # the last good rows are still served

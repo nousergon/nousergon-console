@@ -376,6 +376,13 @@ def format_shape(value: Any, spec: dict[str, Any]) -> Any:
       ``discrepancies``) can be shown as a number; an empty list is ``0``.
       Declare it with ``render: count`` and a unit.
 
+    - ``cents``: an integer count of cents becomes the same amount in whole
+      currency units (``123456`` -> ``1234.56``), so a ledger that stores
+      exact cents reads as money. Declare it with a currency ``unit``.
+    - ``pairs``: a list of mappings becomes ``"a: x · b: y"``, each item's
+      ``key`` key then its ``value`` key; ``value_format: cents`` writes each
+      value as money (a journal entry's postings). An empty list is ``"none"``.
+
     A value of the wrong shape, or an unknown `format`, is returned unchanged,
     so it still renders as itself rather than vanishing. A null never reaches
     here: `absent` (or the page's own "no value") is what a null renders as.
@@ -383,6 +390,22 @@ def format_shape(value: Any, spec: dict[str, Any]) -> Any:
     fmt = spec.get("format")
     if fmt == "length" and isinstance(value, (list, dict)):
         return len(value)
+    if fmt == "cents" and _is_int(value):
+        return _cents(value)
+    if fmt == "pairs" and isinstance(value, list):
+        if not value:
+            return "none"
+        key, val = str(spec.get("key", "key")), str(spec.get("value", "value"))
+        money = spec.get("value_format") == "cents"
+        parts = []
+        for row in value:
+            if not isinstance(row, dict):
+                parts.append(str(row))
+                continue
+            v = row.get(val)
+            text = f"{_cents(v):,.2f}" if money and _is_int(v) else str(v)
+            parts.append(f"{row.get(key)}: {text}")
+        return " · ".join(parts)
     if fmt == "counts" and isinstance(value, dict):
         parts = [f"{k}: {_count_text(v)}" for k, v in value.items() if _is_count(v) and v != 0]
         total = sum(v for v in value.values() if _is_count(v))
@@ -635,3 +658,13 @@ def resolve_state(
         return "unreadable"
     age = (now - ts).total_seconds()
     return "fresh" if age <= cadence_seconds * staleness_factor else "stale"
+
+
+def _is_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _cents(v: int) -> float:
+    """Exact cents to currency units: Decimal, so 10 cents is 0.1, never 0.1000000001."""
+    from decimal import Decimal
+    return float(Decimal(v) / 100)

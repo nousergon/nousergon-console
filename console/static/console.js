@@ -105,10 +105,11 @@
 
   // One tick, start to finish. `ui.optimistic()` runs before anything is
   // sent; then exactly one of `ui.confirm(reply)` / `ui.rollback(message)`.
-  // `state.inFlight` counts ticks not yet settled, and `state.onIdle` runs
-  // when the last one settles.
+  // `state.inFlight` counts ticks not yet settled, `state.started` every tick
+  // ever begun, and `state.onIdle` runs when the last one settles.
   function tickFlow(ui, send, state) {
     state.inFlight = (state.inFlight || 0) + 1;
+    state.started = (state.started || 0) + 1;
     ui.optimistic();
     return Promise.resolve()
       .then(send)
@@ -124,12 +125,21 @@
       });
   }
 
+  // Whether a page read begun when `state.started` was `seen` predates a tick
+  // since: such a read may carry the pre-tick state, so swapping it in would
+  // undo a confirmed tick. Idle-time alone could not tell, because a read
+  // slower than the quiet window landed after the reader went quiet (codex
+  // 52edc3b676051f1b).
+  function superseded(seen, state) {
+    return (state.started || 0) !== seen;
+  }
+
   // Outside a browser (the console's own tests run this file under node)
   // only the pure functions above are exported; nothing below runs.
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
       module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen,
-                        tickReply: tickReply, tickFlow: tickFlow};
+                        tickReply: tickReply, tickFlow: tickFlow, superseded: superseded};
     }
     return;
   }
@@ -235,6 +245,7 @@
     if (document.hidden) { due = true; return; }
     if (busy()) { retrySoon(); return; }  // never undo what the reader is doing
     due = false;
+    var seen = ticks.started || 0;
     fetch(location.href, {headers: {"Accept": "text/html"}, cache: "no-store"})
       .then(function (resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -244,7 +255,8 @@
         var doc = new DOMParser().parseFromString(text, "text/html");
         var stamp = meta(doc, "console-built");
         if (stamp === null) throw new Error("not a console page");
-        if (busy()) { retry = true; return; }  // the reader acted while we fetched
+        // The reader acted, or ticked, while we fetched.
+        if (busy() || superseded(seen, ticks)) { retry = true; return; }
         var was = describe(document.querySelectorAll("details"));
         var openRows = {};
         var opened = document.querySelectorAll("tr.row-open");

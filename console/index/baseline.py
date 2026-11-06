@@ -147,15 +147,20 @@ def compare(base: Baseline | None, current_ids: list[str],
     """New and cleared ids against the baseline, or None with no baseline.
 
     Rows match on ``row_key`` (``current_keys``: id -> key for today's rows),
-    so a folded job whose newest run changed is neither new nor cleared."""
+    so a folded job whose newest run changed is neither new nor cleared.
+
+    The same id on both days is the same row, whatever its key: a snapshot
+    written before `row_key` learned the job (its rows carry no ``job``) keys
+    a bare-id run by its id while today keys it by its job, and the unchanged
+    run read as cleared-and-new (codex 8262684956a0132f)."""
     if base is None:
         return None
     cur = {i: (current_keys or {}).get(i, i) for i in current_ids}
     old = {i: base.keys.get(i, i) for i in base.ids}
     old_keys, cur_keys = set(old.values()), set(cur.values())
-    cleared = {i for i, k in old.items() if k not in cur_keys}
+    cleared = {i for i, k in old.items() if k not in cur_keys and i not in cur}
     return {"taken_at": base.taken_at,
-            "new": sorted(i for i, k in cur.items() if k not in old_keys),
+            "new": sorted(i for i, k in cur.items() if k not in old_keys and i not in old),
             "cleared": sorted(cleared),
             "cleared_labels": {i: base.labels[i] for i in cleared if i in base.labels}}
 

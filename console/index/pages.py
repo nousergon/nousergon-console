@@ -315,6 +315,15 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     if empty is not None and kind == "text":
         raise PagesConfigError(f"{where}: `empty` is for selector sections; a text "
                                "section selects no rows")
+    if kind in ("text", "tiles", "report"):
+        # These return before the table/chart keys are read, so a key only a
+        # table or chart takes would otherwise be accepted and ignored
+        # (codex aa70f0fe8eaa1d58).
+        stray = [k for k in ("sortable", "sort", "sort_order", "annotations") if k in raw]
+        if stray:
+            raise PagesConfigError(
+                f"{where}: {', '.join(f'`{k}`' for k in stray)} applies to a table or chart, "
+                f"not a {kind} section")
     if kind == "text":
         body = raw.get("body")
         if not isinstance(body, str) or not body.strip():

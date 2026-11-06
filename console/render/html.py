@@ -2528,10 +2528,20 @@ def _action_ask(a) -> str:
         out += (f'<div class="action-run">{lead}<ol class="action-cmds">'
                 + "".join(f'<li><pre class="action-cmd"><code>{esc(c)}</code></pre>'
                           '<button type="button" class="action-copy" '
-                          'aria-label="Copy this command">copy</button></li>'
+                          'aria-label="Copy this command">copy</button>'
+                          + _login_note(c) + '</li>'
                           for c in a.commands)
                 + "</ol></div>")
     return out
+
+
+def _login_note(cmd: str) -> str:
+    """Which browser sign-in the command may open, so the right one is used."""
+    from ..index.actions import logins
+    names = logins(cmd)
+    if not names:
+        return ""
+    return (f'<div class="muted">If a browser sign-in opens: {esc(" · ".join(names))}.</div>')
 
 
 def _actions_table(rows, decl, today: str) -> str:

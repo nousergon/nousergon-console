@@ -340,6 +340,39 @@ def pull_request(body: str | None) -> tuple[str | None, str | None]:
     return m.group(0), f"{m.group(2)}#{m.group(3)}"
 
 
+#: Which sign-in a profile's browser prompt wants (Brian 2026-10-27: say which login).
+LOGIN_LABELS = {"ne-admin": "PROD login (user cipher813)"}
+
+_PROFILE = re.compile(r"--profile[ =]([\w.-]+)")
+
+
+def complete(cmd: str) -> str:
+    """The command as Brian pastes it, from a fresh terminal (Brian 2026-11-06: "all
+    commands … should include all commands, including the login commands and the
+    directory navigation commands"). Each AWS profile it uses is signed in first,
+    only when its session has expired; a command that never changes directory starts
+    from home. A command that already does either is left as written."""
+    cmd = cmd.strip()
+    pre: list[str] = []
+    if not re.search(r"(^|&&|;|\n)\s*cd\s", cmd) and not re.search(r"(^|&&|;|\n|\|)\s*git\s", cmd):
+        pre.append("cd ~")
+    for prof in dict.fromkeys(_PROFILE.findall(cmd)):
+        if not re.search(rf"aws\s+sso\s+login\b[^\n&;]*--profile[ =]{re.escape(prof)}\b", cmd):
+            pre.append(f"(aws sts get-caller-identity --profile {prof} >/dev/null 2>&1 "
+                       f"|| aws sso login --profile {prof})")
+    if not pre:
+        return cmd
+    if "\n" in cmd:
+        return "\n".join(pre) + "\n" + cmd
+    return " && ".join([*pre, cmd])
+
+
+def logins(cmd: str) -> tuple[str, ...]:
+    """Which sign-ins a command may open in the browser, named for Brian."""
+    return tuple(LOGIN_LABELS.get(p, f"AWS login for profile {p}")
+                 for p in dict.fromkeys(_PROFILE.findall(cmd)))
+
+
 def command(body: str | None) -> str | None:
     """The first fenced block, else the first line that is wholly `inline code`."""
     text = str(body or "")
@@ -419,11 +452,11 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         **dict(zip(("due", "due_source", "when"),
                    timing(issue.get("body"), issue.get("milestone")))),
         **dict(zip(("pr_url", "pr_ref"), pull_request(issue.get("body")))),
-        command=command(issue.get("body")),
+        command=(lambda c: complete(c) if c else None)(command(issue.get("body"))),
         closed=closed, closed_at=issue.get("closed_at") if closed else None,
         merge_ask=_is_merge_ask(issue),
         prs=tuple((u, r, None) for u, r in pull_requests(issue.get("body"))),
-        commands=commands(issue.get("body")),
+        commands=tuple(complete(c) for c in commands(issue.get("body"))),
     )
 
 

@@ -514,7 +514,7 @@ def test_the_page_links_prs_and_shows_commands_never_the_issue():
     assert "tracker-I8" not in html.split('<table class="actions">')[1]
     doc = render_json.payload(idx, resolve("/actions"))
     by_n = {a["number"]: a for a in doc["actions"]}
-    assert by_n[8]["pr_ref"] == "nous-ergon-ops#2133" and by_n[9]["command"] == "bash ~/rotate.sh"
+    assert by_n[8]["pr_ref"] == "nous-ergon-ops#2133" and by_n[9]["command"] == "cd ~ && bash ~/rotate.sh"
 
 
 # --- actionable only; everything else is the done archive (Brian 2026-11-05) --
@@ -612,8 +612,8 @@ def test_the_ask_lists_every_pr_to_merge_and_every_command_to_copy():
                           "/repos/acme/ops/issues/2169": {"state": "closed",
                                                          "pull_request": {"merged_at": "x"}}})
     a = found.todo[0]
-    assert a.commands == ("bash a.sh && bash a.sh --apply",
-                          "gh workflow run tofu-apply-on-merge.yml --ref main")
+    assert a.commands == ("cd ~ && bash a.sh && bash a.sh --apply",
+                          "cd ~ && gh workflow run tofu-apply-on-merge.yml --ref main")
     idx = Index()
     actions.attach(idx, found)
     idx.finalize()
@@ -624,7 +624,7 @@ def test_the_ask_lists_every_pr_to_merge_and_every_command_to_copy():
     assert "LastModified" not in html.split('class="action-run"')[1]
     assert "merge ops#2172</a> · run 2 commands" in html
     doc = render_json.payload(idx, resolve("/actions"))
-    assert doc["actions"][0]["commands"][1].startswith("gh workflow run")
+    assert doc["actions"][0]["commands"][1].startswith("cd ~ && gh workflow run")
     assert {p["ref"]: p["state"] for p in doc["actions"][0]["prs"]} == {
         "ops#2172": "open", "ops#2169": "merged"}
 
@@ -719,3 +719,25 @@ def test_the_actions_page_says_how_current_it_is():
     # codex 859c65deadf22b93
     idx, _ = _index()
     assert "index build time unknown" in _html(idx, resolve("/actions"))
+
+
+def test_every_command_starts_from_home_and_signs_in_first():
+    """Brian 2026-11-06: commands include the login and the directory change, so
+    an expired SSO session never stops a pasted command halfway."""
+    cmd = ("aws s3 cp s3://b/run-x.sh ~/run-x.sh --profile ne-admin --region us-east-1 "
+           "&& bash ~/run-x.sh")
+    assert actions.complete(cmd) == (
+        "cd ~ && (aws sts get-caller-identity --profile ne-admin >/dev/null 2>&1 "
+        "|| aws sso login --profile ne-admin) && " + cmd)
+    assert actions.logins(cmd) == ("PROD login (user cipher813)",)
+
+
+def test_a_command_that_already_moves_and_signs_in_is_left_alone():
+    cmd = "cd ~/Development/ops && aws sso login --profile ne-admin && aws s3 ls --profile ne-admin"
+    assert actions.complete(cmd) == cmd
+
+
+def test_a_cd_command_still_gets_the_login_it_lacks():
+    cmd = "cd ~/Development/ops && git fetch -q origin && aws iam list-roles --profile ne-admin"
+    assert actions.complete(cmd).startswith(
+        "(aws sts get-caller-identity --profile ne-admin >/dev/null 2>&1 || aws sso login --profile ne-admin) && cd ~/")

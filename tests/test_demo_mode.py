@@ -389,6 +389,24 @@ def test_external_and_declared_links_are_kept():
     assert 'href="//' not in out
 
 
+@pytest.mark.parametrize("url", [
+    "https://github.com/example-org/public/../private",
+    "https://github.com/example-org/public/%2e%2e/private",
+    "https://github.com/example-org/public/%2E%2e/private",
+    "https://github.com/example-org/public/%252e%252e/private",
+    "https://github.com/example-org/public\\..\\private",
+    "https://github.com/example-org/public/./../private",
+])
+def test_a_dot_segment_cannot_walk_out_of_the_external_allowlist(url):
+    """I13239 (codex b86dcdc622a85e14): the pattern matched the RAW url, which
+    the browser resolves before navigating."""
+    d = demo.parse({"pages": ["demo-harness"],
+                    "links": {"external": [r"https://github\.com/example-org/public(/|$)"]}},
+                   {"demo-harness"})
+    assert d.external_allowed("https://github.com/example-org/public/issues/1")
+    assert not d.external_allowed(url)
+
+
 def test_a_numeric_account_id_is_redacted_in_json():
     d = demo.parse({"pages": ["demo-harness"]}, {"demo-harness"})
     out = demo._scrub({"account": 210987654321, "count": 4, "ok": True}, d)

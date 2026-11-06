@@ -131,6 +131,32 @@ def test_tick_rereads_writes_whole_and_unticks():
     assert "id2" not in json.loads(s3.objects[("bucket-x", "dashboard/reading-list/reads.json")])["marks"]
 
 
+def test_concurrent_ticks_never_erase_each_other():
+    """I13239 (codex 23e92b8f13727a91): two ticks racing through the
+    read-modify-write each read the same marks, and the later put erased the
+    earlier mark. A slow store widens the window so the race is certain."""
+    import time
+
+    class SlowS3(FakeS3):
+        def get(self, bucket, key):
+            body = super().get(bucket, key)
+            time.sleep(0.05)
+            return body
+
+    s3 = SlowS3()
+    idx = _index(FakeS3())
+    allowed = pages.tick_keys(idx, "reading-list")
+    threads = [threading.Thread(target=ticks.tick, args=(
+        idx, "reading-list", k, True, None, "T", allowed), kwargs={
+        "getter": s3.get, "putter": s3.put}) for k in ("id1", "id2")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    marks = json.loads(s3.objects[("bucket-x", "dashboard/reading-list/reads.json")])["marks"]
+    assert set(marks) == {"id1", "id2"}
+
+
 def test_a_key_no_table_shows_is_refused_and_nothing_is_written():
     s3 = FakeS3()
     idx = _index(s3)

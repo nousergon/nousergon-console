@@ -240,6 +240,18 @@ def headline_groups(index: Any) -> list[dict[str, Any]]:
 
 
 
+def _sort_key(value: Any) -> tuple:
+    """A notes sort key that never compares across types: numbers first by
+    value, then everything else by its text, then nulls. A source emitting
+    `3` on one row and `"high"` on the next used to raise TypeError and take
+    the whole home page down (I13239, codex db2789e362c3f656)."""
+    if value is None:
+        return (2, 0, "")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (0, value, "")
+    return (1, 0, str(value))
+
+
 def notes(index: Any, now: datetime | None = None) -> dict[str, Any] | None:
     """The declared notes list: the newest batch of matching rows, sorted and
     capped, with its as-of and whether it is older than `stale_hours`."""
@@ -255,7 +267,7 @@ def notes(index: Any, now: datetime | None = None) -> dict[str, Any] | None:
     extra = [x for x in (n.severity_field, n.link_field, n.sort) if x and x not in names]
     out = [pages._row(e, names + extra) for e in batch]
     if n.sort:
-        out.sort(key=lambda r: (r["fields"].get(n.sort) is None, r["fields"].get(n.sort)))
+        out.sort(key=lambda r: _sort_key(r["fields"].get(n.sort)))
     when = _instant(newest)
     now = now or datetime.now(timezone.utc)
     stale = when is not None and (now - when).total_seconds() > n.stale_hours * 3600

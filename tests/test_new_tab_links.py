@@ -89,3 +89,14 @@ def test_every_served_link_opens_a_new_tab_and_anchors_do_not(live_server, path)
         assert 'target="_blank"' in a and "noopener" in a and "noreferrer" in a, a
     for a in in_page:
         assert "target=" not in a, a
+
+
+def test_a_target_or_rel_inside_the_href_query_is_not_an_attribute():
+    """I13239 (codex 044e9f92cef31ca9): `\\btarget\\s*=` matched `?target=` in
+    the href, so the link kept opening in the console's own tab."""
+    out = with_new_tab_links('<a href="https://x.example/p?target=1&rel=me">x</a>')
+    assert out == ('<a href="https://x.example/p?target=1&rel=me" target="_blank" '
+                   'rel="noopener noreferrer">x</a>')
+    out = with_new_tab_links('<a href="https://x.example/p?rel=me" rel="author">x</a>')
+    assert 'href="https://x.example/p?rel=me"' in out
+    assert 'rel="author noopener noreferrer"' in out and 'target="_blank"' in out

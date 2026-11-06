@@ -134,12 +134,20 @@
     return (state.started || 0) !== seen;
   }
 
+  // Whether a key pressed on a focused table row (not on a link or control
+  // inside it) opens or closes that row: Enter or Space, the keys a button
+  // answers to, so a clipped row is not mouse-only (codex e57a4c9e28c3be77).
+  function rowToggleKey(key, onRow) {
+    return !!onRow && (key === "Enter" || key === " " || key === "Spacebar");
+  }
+
   // Outside a browser (the console's own tests run this file under node)
   // only the pure functions above are exported; nothing below runs.
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
       module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen,
-                        tickReply: tickReply, tickFlow: tickFlow, superseded: superseded};
+                        tickReply: tickReply, tickFlow: tickFlow, superseded: superseded,
+                        rowToggleKey: rowToggleKey};
     }
     return;
   }
@@ -404,6 +412,7 @@
       var cut = c.scrollWidth > c.clientWidth + 1 || c.scrollHeight > c.clientHeight + 1;
       if (cut && !c.closest("tr.row-open")) {
         c.classList.add("clipped");
+        focusableRow(c.closest("tr"));
         if (!c.hasAttribute("title")) c.setAttribute("title", c.textContent.replace(/\s+/g, " ").trim());
       } else if (!c.closest("tr.row-open")) {
         c.classList.remove("clipped");
@@ -411,13 +420,35 @@
     }
   }
 
+  // A row with a cut cell takes keyboard focus and says whether it is open,
+  // so the click below has a keyboard twin.
+  function focusableRow(tr) {
+    if (!tr) return;
+    if (!tr.hasAttribute("tabindex")) tr.setAttribute("tabindex", "0");
+    tr.setAttribute("aria-expanded", String(tr.classList.contains("row-open")));
+  }
+
+  function toggleRow(row) {
+    row.classList.toggle("row-open");
+    if (row.hasAttribute("aria-expanded")) {
+      row.setAttribute("aria-expanded", String(row.classList.contains("row-open")));
+    }
+    schedulePlace();
+  }
+
   document.addEventListener("click", function (ev) {
     if (ev.target.closest("a, button, input, select, textarea, label, summary")) return;
     var row = ev.target.closest(".table-scroll tbody tr, .table-scroll tr");
     if (!row || row.querySelector("th") && !row.querySelector("td")) return;
     if (window.getSelection && String(window.getSelection())) return;  // selecting text
-    row.classList.toggle("row-open");
-    schedulePlace();
+    toggleRow(row);
+  });
+  document.addEventListener("keydown", function (ev) {
+    var row = ev.target;
+    var onRow = row && row.matches && row.matches(".table-scroll tr[tabindex]");
+    if (!rowToggleKey(ev.key, onRow)) return;
+    ev.preventDefault();  // Space would otherwise scroll the page
+    toggleRow(row);
   });
   window.addEventListener("load", markClipped);
   window.addEventListener("resize", markClipped);
@@ -494,7 +525,8 @@
   // The confirmed row, re-rendered by the server, goes to the table it now
   // belongs in: Done when it is no longer waiting on the reader, To do when
   // it is again. With no such table on the page the row is replaced where it
-  // stands, and the re-read after the last tick lays the page out afresh.
+  // stands; the cadence refresh, once the reader is still, lays the page out
+  // afresh with the missing section (see the note above the submit handler).
   function moveActionRow(row, html, done) {
     var tpl = document.createElement("template");
     tpl.innerHTML = "<table><tbody>" + html + "</tbody></table>";

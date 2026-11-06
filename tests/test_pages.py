@@ -400,6 +400,13 @@ def test_a_descending_sort_still_puts_a_row_without_the_value_last():
     ({"type": "table", "title": "x", "empty": " ", "select": {"facets": {"a": "b"}}},
      "non-blank"),
     ({"type": "report", "feed": "daily", "empty": "none"}, "no report yet"),
+    # codex aa70f0fe8eaa1d58: these returned before the table/chart keys were
+    # read, so `sortable` and friends were accepted and silently ignored.
+    ({"type": "tiles", "sortable": ["mtd"], "tiles": [
+        {"label": "AWS", "field": "mtd", "select": {"facets": {"meter": "spend"}}}]},
+     "`sortable` applies to a table"),
+    ({"type": "report", "feed": "daily", "sort": "d"}, "`sort` applies to a table"),
+    ({"type": "text", "body": "hi", "annotations": []}, "`annotations` applies to a table"),
 ])
 def test_a_bad_order_or_empty_declaration_fails_by_name(section, message):
     with pytest.raises(pages.PagesConfigError, match=message):

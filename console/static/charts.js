@@ -111,6 +111,23 @@
     return [lo < 0 ? lo - pad : 0, hi > 0 ? hi + pad : 0];
   }
 
+  // The indices of a series' isolated values: a value with no neighbour on
+  // either side, which a line has no segment to draw. A trace marks these
+  // as points (the server's SVG draws each as a short stroke), or the value vanishes once the
+  // interactive layer replaces the SVG (codex 639fc6a45853b41c). Null when
+  // there are none, which is what uPlot's `points.filter` takes for "none".
+  function isolated(values) {
+    var out = [];
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] === null || values[i] === undefined) continue;
+      var before = i > 0 && values[i - 1] !== null && values[i - 1] !== undefined;
+      var after = i < values.length - 1 && values[i + 1] !== null
+        && values[i + 1] !== undefined;
+      if (!before && !after) out.push(i);
+    }
+    return out.length ? out : null;
+  }
+
   // The x range for a requested [lo, hi] over `n` slots (slot i is centred
   // on i): widened to whole slots, so a bar is never cut in half, and held
   // inside the series. It honours the request, so a drag selection zooms;
@@ -128,7 +145,8 @@
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
       module.exports = {formatValue: formatValue, hiddenFrom: hiddenFrom, hashFor: hashFor, bag: bag,
-                        withAlpha: withAlpha, yRange: yRange, xRange: xRange};
+                        withAlpha: withAlpha, yRange: yRange, xRange: xRange,
+                        isolated: isolated};
     }
     return;
   }
@@ -157,6 +175,8 @@
 
   // Charts --------------------------------------------------------------
   var live = [];
+
+  function constant(v) { return function () { return v; }; }
 
   function token(name) {
     return getComputedStyle(document.documentElement).getPropertyValue("--" + name).trim();
@@ -260,7 +280,7 @@
         fill: line || trace ? undefined : withAlpha(colour, inset ? 0.9 : 0.55),
         fillTo: 0,
         paths: line || trace ? undefined : bars,
-        points: {show: false},
+        points: trace ? {show: false, filter: constant(isolated(s.values))} : {show: false},
         // At rest (no point under the cursor) the legend names no value; a
         // gap reads "not measured", except in a sparse series, where a null
         // only means the point belongs to another series.

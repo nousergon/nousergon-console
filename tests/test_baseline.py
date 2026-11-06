@@ -132,3 +132,16 @@ def test_a_unit_failing_under_a_newer_invocation_is_neither_cleared_nor_new():
     assert {r["id"]: r["new"] for r in doc["rows"]}["inv-new"] is False
     assert doc["since_baseline"]["cleared"] == []
     assert baseline.row_key("inv-new", "run", "FAILED", "unit-x") == "run|unit-x|FAILED"
+
+
+def test_a_snapshot_from_before_the_job_key_does_not_churn_unchanged_runs():
+    """Codex 8262684956a0132f: a snapshot written before rows carried `job`
+    keys a bare-id run by its id, while today keys the same run by its job,
+    so an unchanged run read as cleared-and-new on the first day after the
+    change. The same id on both days is the same row."""
+    old_snapshot = {"id": "inv-same", "kind": "run", "state": "FAILED", "label": "Unit X"}
+    base = baseline.from_snapshot({"view": "exceptions", "snapshot_utc": "x",
+                                   "rows": [old_snapshot]})
+    today = {"inv-same": baseline.row_key("inv-same", "run", "FAILED", "unit-x")}
+    delta = baseline.compare(base, list(today), today)
+    assert delta["new"] == [] and delta["cleared"] == []

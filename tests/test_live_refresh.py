@@ -173,3 +173,29 @@ def test_open_details_survive_a_refresh_by_identity_not_position():
     src = SCRIPT.read_text()
     assert "carryOpen(was, describe(now))" in src
     assert "now.length === open.length" not in src
+
+
+def test_a_refresh_begun_before_a_tick_never_lands_after_it():
+    """codex 52edc3b676051f1b: a page read issued before a tick could carry the
+    pre-tick state and, once it landed after the 20s quiet window, swap it in
+    over the confirmed tick. Every tick advances `started`; a read that began
+    under an older count is superseded and retried, never swapped in."""
+    node = shutil.which("node")
+    assert node, "node is required to test console.js (preinstalled on CI runners)"
+    prog = r"""
+const m = require(process.argv[1]);
+const state = {inFlight: 0};
+const ui = {optimistic() {}, confirm() {}, rollback() {}};
+const seen = state.started || 0;            // the refresh's GET goes out
+const before = m.superseded(seen, state);   // nothing ticked yet
+m.tickFlow(ui, () => Promise.resolve({ok: true}), state).then(() => {
+  console.log(JSON.stringify({before, after: m.superseded(seen, state),
+                              fresh: m.superseded(state.started, state)}));
+});
+"""
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT)], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out == {"before": False, "after": True, "fresh": False}
+    src = SCRIPT.read_text()
+    assert "var seen = ticks.started || 0;" in src
+    assert "if (busy() || superseded(seen, ticks)) { retry = true; return; }" in src

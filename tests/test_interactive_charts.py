@@ -259,8 +259,9 @@ const tick = () => new Promise(r => setTimeout(r, 0));
   const full = first.scales.x.range(null, 0, n - 1);
   const zoom = first.scales.x.range(null, 2.3, 5.7);
   const again = first.scales.x.range(null, zoom[0], zoom[1]);
-  const series = first.series.slice(1).map(s => ({label: s.label, bars: s.paths === "bars",
-                                                    dash: s.dash || null, fill: s.fill || null}));
+  const series = first.series.slice(1).map(s => Object.assign(
+    {label: s.label, bars: s.paths === "bars", dash: s.dash || null, fill: s.fill || null},
+    s.points.filter ? {points: s.points.filter()} : {}));
   // Three refreshes, each with a new body (new SVGs).
   for (let i = 0; i < 3; i++) { svgs = [svg()]; handlers["console:refreshed"](); await tick(); }
   console.log(JSON.stringify({full, zoom, again, series, alive, made: made.length}));
@@ -325,3 +326,24 @@ def test_the_untriaged_share_is_drawn_inside_the_bars():
     assert inset == [{"label": "untriaged", "bars": True, "dash": None,
                       "fill": "rgba(138,75,0,0.9)"}]
     assert '"warn"' in SCRIPT.read_text() and "--warn:" in CSS
+
+
+def test_an_isolated_trace_value_is_drawn_as_a_point():
+    """codex 639fc6a45853b41c: a trace draws lines with points off, so a value
+    with no measured neighbour had no segment and vanished once the live layer
+    replaced the server's SVG (which draws it as a short stroke). Isolated
+    values are drawn as points; joined values and other kinds are untouched."""
+    node = shutil.which("node")
+    assert node, "node is required to test charts.js (preinstalled on CI runners)"
+    prog = ("const m=require(process.argv[1]);console.log(JSON.stringify(["
+            "m.isolated([1,null,2,3,null,null,4]),m.isolated([1,2]),m.isolated([null,5]),"
+            "m.isolated([])]))")
+    out = json.loads(subprocess.run([node, "-e", prog, str(SCRIPT)], capture_output=True,
+                                    text=True, check=True).stdout)
+    assert out == [[0, 6], None, [1], None]
+    payload = {"key": "k", "unit": "", "labels": list("abcde"), "series": [
+        {"label": "a", "kind": "trace", "values": [1, None, 2, 3, None]},
+        {"label": "b", "kind": "trace", "values": [None, None, 7, None, None]},
+        {"label": "c", "kind": "bar", "values": [1, None, 1, None, 1]}]}
+    series = {s["label"]: s.get("points", "no filter") for s in _live_layer(payload)["series"]}
+    assert series == {"a": [0], "b": [2], "c": "no filter"}

@@ -87,3 +87,18 @@ def test_length_of_a_scalar_or_a_missing_list_is_not_invented():
     spec = {"render": "count", "format": "length"}
     assert format_shape("3", spec) == "3"
     assert build_fields({}, {"open_breaks": spec}, None)["open_breaks"]["value"] is None
+
+
+def test_cents_reads_exact_cents_as_money():
+    assert format_shape(123456, {"format": "cents"}) == 1234.56
+    assert format_shape(-10, {"format": "cents"}) == -0.1
+    assert format_shape(True, {"format": "cents"}) is True  # never a bool
+    assert format_shape("12", {"format": "cents"}) == "12"  # wrong shape: unchanged
+
+
+def test_pairs_write_each_posting_on_one_line():
+    postings = [{"account": "assets:cash:USD", "amount_cents": -1234},
+                {"account": "expenses:commissions", "amount_cents": 1234}]
+    spec = {"format": "pairs", "key": "account", "value": "amount_cents", "value_format": "cents"}
+    assert format_shape(postings, spec) == "assets:cash:USD: -12.34 · expenses:commissions: 12.34"
+    assert format_shape([], spec) == "none"

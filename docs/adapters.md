@@ -841,7 +841,12 @@ where the first present wins), in `group_order` when declared. Use them with
 `render: text`; URLs in the result are linked by the page. `format: length`
 writes a list or mapping as the number of its members (an empty list is `0`),
 for a count the source carries only as a list; use it with `render: count` and
-a unit. `absent` is the
+a unit. `format: cents` writes an integer count of cents as currency units
+(`123456` is `1234.56`), for a ledger that stores exact cents; declare a
+currency `unit`. `format: pairs` writes a list of mappings as
+`"a: x · b: y"` (each row's `key`, then its `value`), with
+`value_format: cents` writing each value as money; use it with `render: text`.
+`absent` is the
 text a null renders as (`"not recorded"`), so a night the source never
 recorded does not read as zero. A value of the wrong shape renders unchanged.
 

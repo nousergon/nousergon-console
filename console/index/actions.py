@@ -65,8 +65,12 @@ _TIMEOUT_SECONDS = 20
 _TOKEN_TIMEOUT_SECONDS = 60
 #: The summary shown under an action's title: its body's first paragraph.
 SUMMARY_CHARS = 280
-#: The most actions one listing reads (one page of the host's API per label).
+#: The host API's page size for one listing read.
 MAX_ACTIONS = 100
+#: The most pages one label's read follows. A read that still finds a full
+#: page after this many says so (`Listing.truncated`) rather than dropping the
+#: rest silently (I13239, codex e978e70a0e90aa2c).
+MAX_PAGES = 10
 
 
 class ActionsConfigError(ValueError):
@@ -147,6 +151,8 @@ class Listing:
     #: of it says so (``archive_error``) and never fails the open list.
     archive: tuple[Action, ...] = ()
     archive_error: str | None = None
+    #: True when some label had more open issues than `MAX_PAGES` pages hold.
+    truncated: bool = False
 
     @property
     def todo(self) -> tuple[Action, ...]:
@@ -290,6 +296,9 @@ _REEXAM_LINE = re.compile(r"^\s*(?:[*_-]\s*)*re-?exam\s*[*_]*\s*:\s*[*_]*\s*"
 _WHEN_LINE = re.compile(r"^\s*(?:[*_-]\s*)*(?:when|window|merge window|timing)\s*[*_]*\s*:"
                         r"\s*[*_]*\s*(?P<text>\S.*?)\s*$", re.IGNORECASE | re.MULTILINE)
 WHEN_CHARS = 120
+#: Emphasis only. A timing bound is copied, not summarised: `>` and `#` are
+#: its content ("> 16:30 ET", "after PR #12") (I13239, codex 942684eb6a5de678).
+_WHEN_NOISE = re.compile(r"[*_`]+")
 
 
 def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | None, str | None]:
@@ -307,7 +316,11 @@ def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | N
     when = None
     m = _WHEN_LINE.search(text)
     if m:
-        when = " ".join(_MD_NOISE.sub("", m.group("text")).split())[:WHEN_CHARS] or None
+        when = " ".join(_WHEN_NOISE.sub("", m.group("text")).split())
+        if len(when) > WHEN_CHARS:
+            # Cut visibly: a bound silently shortened reads as the whole bound.
+            when = when[:WHEN_CHARS].rsplit(" ", 1)[0] + "…"
+        when = when or None
     return due, source, when
 
 
@@ -374,7 +387,10 @@ def commands(body: str | None) -> tuple[str, ...]:
             found.append((m.start(), m.group(1).strip()))
     out: list[str] = []
     for _, cmd in sorted(found):
-        if cmd not in out:
+        # Only an IMMEDIATE repeat is a duplicate quote. The same command again
+        # after a different step is a step of its own, and dropping it changes
+        # the procedure "Run, in order" presents (I13239, codex 88ec14d066fdbf57).
+        if not out or out[-1] != cmd:
             out.append(cmd)
     return tuple(out)
 
@@ -473,15 +489,22 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     try:
         tok = token or _mint(decl.token_command, decl)
         seen: dict[int, Action] = {}
+        truncated = False
         for label in decl.labels:
-            q = urllib.parse.urlencode({"state": "open", "labels": label,
-                                        "per_page": MAX_ACTIONS})
-            rows = call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}", tok, None)
-            for issue in rows or []:
-                if "pull_request" in issue:
-                    continue
-                act = _action(decl, issue)
-                seen.setdefault(act.number, act)
+            for page in range(1, MAX_PAGES + 1):
+                q = urllib.parse.urlencode({"state": "open", "labels": label,
+                                            "per_page": MAX_ACTIONS, "page": page})
+                rows = call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}",
+                            tok, None) or []
+                for issue in rows:
+                    if "pull_request" in issue:
+                        continue
+                    act = _action(decl, issue)
+                    seen.setdefault(act.number, act)
+                if len(rows) < MAX_ACTIONS:
+                    break
+            else:
+                truncated = True
     except Exception as exc:  # noqa: BLE001 - the reason is the source's
         reason = str(exc)[:240] or type(exc).__name__
         return (Listing(declaration=decl, read_at=now, error=reason),
@@ -498,7 +521,7 @@ def read(decl: Declaration, now: str, request: Request | None = None,
         not a.actionable, a.due is None, a.due or "", a.created_at or "", a.number)))
     archive, archive_error = _archive(decl, call, tok, base)
     return (Listing(declaration=decl, actions=actions, read_at=now,
-                    archive=archive, archive_error=archive_error),
+                    archive=archive, archive_error=archive_error, truncated=truncated),
             AdapterResult(name=SOURCE_NAME, status=AdapterStatus.OK,
                           claim_class=ClaimClass.OBSERVATION, fetched_at=now))
 
@@ -509,15 +532,29 @@ def _archive(decl: Declaration, call: Request, tok: str,
     seen: dict[int, Action] = {}
     try:
         for label in decl.labels:
-            q = urllib.parse.urlencode({"state": "closed", "labels": label, "sort": "updated",
-                                        "direction": "desc", "per_page": ARCHIVE_SIZE})
-            for issue in call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}",
-                              tok, None) or []:
-                if "pull_request" in issue:
-                    continue
-                act = _action(decl, issue)
-                if act.closed:
-                    seen.setdefault(act.number, act)
+            # The API cannot sort by closure, so read by update time (never
+            # earlier than closure) until no unread issue can have closed
+            # after the newest ARCHIVE_SIZE already held. The first
+            # ARCHIVE_SIZE by update time were not the last ARCHIVE_SIZE
+            # closed (I13239, codex eb6b5e9f7f84f623).
+            for page in range(1, MAX_PAGES + 1):
+                q = urllib.parse.urlencode({"state": "closed", "labels": label,
+                                            "sort": "updated", "direction": "desc",
+                                            "per_page": MAX_ACTIONS, "page": page})
+                rows = call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}",
+                            tok, None) or []
+                for issue in rows:
+                    if "pull_request" in issue:
+                        continue
+                    act = _action(decl, issue)
+                    if act.closed:
+                        seen.setdefault(act.number, act)
+                if len(rows) < MAX_ACTIONS:
+                    break
+                closed = sorted((a.closed_at or "" for a in seen.values()), reverse=True)
+                if (len(closed) >= ARCHIVE_SIZE
+                        and str(rows[-1].get("updated_at") or "") < closed[ARCHIVE_SIZE - 1]):
+                    break
     except Exception as exc:  # noqa: BLE001 - the archive's own reason
         return (), str(exc)[:240] or type(exc).__name__
     ordered = sorted(seen.values(), key=lambda a: a.closed_at or "", reverse=True)
@@ -667,6 +704,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "actions": [_action_json(a) for a in found.actions],
         "archive": [_action_json(a) for a in found.archive],
         "archive_error": found.archive_error,
+        "truncated": found.truncated,
     }
 
 

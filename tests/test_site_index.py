@@ -132,3 +132,22 @@ def test_a_pane_claimed_by_two_products_fails():
 def test_org_wide_is_reserved():
     with pytest.raises(products.ProductsConfigError):
         products.parse({"org-wide": {"title": "x"}})
+
+
+def test_a_filter_matches_registries_by_name(monkeypatch):
+    # I13239, codex 2ecd5dda519d6286: any filter used to hide every registry,
+    # including the one it named.
+    from console.index import landing
+
+    regs = [{"name": "artifact-registry", "url": "/registry/artifacts", "status": "ok",
+             "rows": 3, "declared": 3, "not_healthy": 0},
+            {"name": "observation-registry", "url": "/registry/obs", "status": "ok",
+             "rows": 1, "declared": 1, "not_healthy": 0}]
+    monkeypatch.setattr(landing, "registry_links", lambda index: regs)
+    idx = _index(_decl())
+    html = _html(idx, resolve("/index", "q=artifact-registry"))
+    assert 'id="registries"' in html and "/registry/artifacts" in html
+    assert "/registry/obs" not in html and "1 of " in html
+    assert 'href="#registries"' in html
+    assert 'id="registries"' not in _html(idx, resolve("/index", "q=spy"))
+    assert "/registry/obs" in _html(idx, resolve("/index"))

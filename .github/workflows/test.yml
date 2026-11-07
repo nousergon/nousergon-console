@@ -61,7 +61,7 @@ jobs:
             echo "::warning::type errors were fixed but .basedpyright/baseline.json was not shrunk; run basedpyright locally and commit the smaller baseline."
             git checkout -- .basedpyright/baseline.json
           fi
-          if [ -n "${BASE_REF}" ] && git fetch --quiet --depth=1 origin "${BASE_REF}"; then
+          if [ -n "${BASE_REF}" ] && git fetch --quiet origin "${BASE_REF}"; then
             mapfile -t changed < <(git diff --name-only --diff-filter=AMR FETCH_HEAD HEAD -- 'console/*.py')
             if [ "${#changed[@]}" -gt 0 ]; then
               ruff check --select ANN --ignore ANN401 "${changed[@]}"

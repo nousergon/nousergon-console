@@ -31,6 +31,10 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e ".[test]"
+      - name: Audit dependencies
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit
       - name: Undefined names (F821) — the class that merged green here
         # `console/adapters/object_store.py` shipped a `_failed` helper that
         # three failure paths called and nothing defined; every one of them

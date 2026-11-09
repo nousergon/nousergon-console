@@ -265,3 +265,34 @@ def test_a_cross_site_save_is_refused(live: tuple[int, FakeS3]) -> None:
     port, s3 = live
     status, _, _ = _post(port, "/planner/beta", "rank=1", {"Origin": "https://evil.test"})
     assert status == 403 and s3.puts == []
+
+
+# ------------------------------------------------------------ sweep feed --
+
+def test_status_and_sweep_order_lift_projects_that_are_behind() -> None:
+    from datetime import datetime, timezone
+
+    s3 = FakeS3()
+    idx = _index(s3)
+    # gamma ranked last but past its board date: off track, lifted 3 places.
+    _save(idx, s3, "gamma", next_milestone="2026-11-01")
+    b = board.evaluate(idx, now=datetime(2026, 11, 9, 12, tzinfo=timezone.utc))
+    status = {r["id"]: r["status"] for r in b["active"]}
+    assert status == {"alpha": "on track", "beta": "no dates", "gamma": "off track"}
+    assert b["sweep_order"] == ["gamma", "alpha", "beta"]
+    assert [r["position"] for r in b["active"]] == [1, 2, 3]  # rank is untouched
+    assert "next milestone date passed" in b["active"][2]["status_reason"]
+
+
+def test_issues_closed_in_the_last_day_show_what_the_sweep_did() -> None:
+    from datetime import datetime, timezone
+
+    SUBS[10][2]["closed_at"] = "2026-11-09T06:00:00Z"
+    try:
+        idx = _index(FakeS3())
+        b = board.evaluate(idx, now=datetime(2026, 11, 9, 12, tzinfo=timezone.utc))
+        assert [i["ref"] for i in b["active"][0]["closed_recent"]] == ["repo-I13"]
+        b = board.evaluate(idx, now=datetime(2026, 11, 11, 12, tzinfo=timezone.utc))
+        assert b["active"][0]["closed_recent"] == []
+    finally:
+        SUBS[10][2].pop("closed_at")

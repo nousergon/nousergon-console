@@ -444,8 +444,8 @@ def parse(raw: Any, feeds: set[str] | None = None,
             section=section, product=product,
             sections=tuple(_section(s, f"{where} section #{n}", feeds, ticks)
                            for n, s in enumerate(sections, start=1)),
-            range=rng, variables=variables, default_newest=default_newest,
-            links=_links(p.get("links"), where)))
+            range=rng, variables=variables, links=_links(p.get("links"), where),
+            default_newest=default_newest))
     return tuple(pages)
 
 

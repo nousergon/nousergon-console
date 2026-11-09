@@ -193,6 +193,8 @@ input, select, textarea { max-width: 100%; }
 /* Planning board (Brian 2026-11-09): ranked rows, inputs inline. */
 .board-table td:nth-child(3) { white-space: normal; }
 .board-rank { width: 3.6rem; }
+.board-save { position: sticky; bottom: 0; padding: 0.5rem 0; background: var(--bg); border-top: 1px solid var(--border); }
+.board-review { display: block; color: var(--info); }
 .board-issues { margin: .2rem 0 0; padding-left: 1.1rem; font-size: .85rem; }
 .board-count { font-size: .9rem; font-variant-numeric: tabular-nums; }
 .board-hint { display: block; opacity: .7; font-size: .8rem; }

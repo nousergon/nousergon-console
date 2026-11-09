@@ -174,11 +174,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         parts = urlsplit(self.path)
         m = _ACTION_POST.match(parts.path)
         length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(min(length, 4096)).decode("utf-8", "replace") if length else ""
+        whole_board = parts.path == "/planner"
+        # The whole-table board save posts every row at once (~120 bytes a row).
+        cap = 65536 if whole_board else 4096
+        raw = self.rfile.read(min(length, cap)).decode("utf-8", "replace") if length else ""
         tm = _TICK_POST.match(parts.path)
         bm = _BOARD_POST.match(parts.path)
         as_json = _wants_json(self.headers)
-        if m is None and tm is None and bm is None:
+        if m is None and tm is None and bm is None and not whole_board:
             self._refuse(405, "Only an action tick, a list tick or a planning-board row is writable.",
                          as_json)
             return
@@ -193,6 +196,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._tick(index, tm.group("name"), form, done, actor, as_json)
         if bm is not None:
             return self._board(index, bm.group("id"), form, actor, as_json)
+        if whole_board:
+            return self._board_all(index, form, actor, as_json)
         from ..index import actions
 
         number = int(m.group("n"))
@@ -283,6 +288,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         anchor = next((p.id for p in planner.declared(index).projects if p.id == project_id), "")
         self.send_response(303)
         self.send_header("Location", f"/planner#p-{anchor}" if anchor else "/planner")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _board_all(self, index: Index, form: dict[str, str], actor: str | None,
+                   as_json: bool = False) -> None:
+        """Save the whole planning-board table in one write (one Save button,
+        Brian 2026-11-09), then return the reader to the board."""
+        from ..index import board
+        from ..index.build import now_iso
+
+        try:
+            changed = board.save_all(index, form, actor, now_iso())
+        except board.SaveRefused as exc:
+            if as_json:
+                self._refuse(exc.status, f"Not saved: {exc}", True)
+                return
+            self._send(exc.status, f"<h1>{exc.status}</h1><p>Not saved: {render_html.esc(str(exc))}</p>"
+                       '<p><a href="/planner">back to the planner</a></p>', "text/html; charset=utf-8")
+            return
+        if as_json:
+            self._send(200, render_json.dumps({"ok": True, "changed": changed}),
+                       "application/json; charset=utf-8")
+            return
+        self.send_response(303)
+        self.send_header("Location", "/planner#board")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

@@ -177,7 +177,28 @@ def test_a_variable_narrows_only_rows_that_carry_its_facet():
     # The chart's row has no `provider` facet, so the variable leaves it alone.
     assert page["sections"][3]["points"]
     assert page["variables"] == [{"name": "provider", "value": "neon",
-                                  "options": ["aws", "neon", "openrouter", "vercel"]}]
+                                  "options": ["aws", "neon", "openrouter", "vercel"],
+                                  "all": True}]
+
+
+def test_a_default_newest_variable_opens_on_its_newest_value():
+    decl = {"cost": {**DECL["cost"], "default_newest": ["provider"]}}
+    idx = _index()
+    pg = pages.parse(decl)[0]
+    page = pages.evaluate(idx, pg, {})
+    assert page["variables"][0]["value"] == "vercel"  # the last sorted option
+    assert page["variables"][0]["all"] is False
+    assert [r["id"] for r in page["sections"][2]["rows"]] == ["spend:vercel"]
+    # A picked value still wins.
+    picked = pages.evaluate(idx, pg, {"provider": "neon"})
+    assert [r["id"] for r in picked["sections"][2]["rows"]] == ["spend:neon"]
+
+
+def test_default_newest_must_name_a_declared_variable():
+    with pytest.raises(pages.PagesConfigError, match="default_newest"):
+        pages.parse({"p": {"title": "t", "question": "q", "variables": ["a"],
+                           "default_newest": ["b"],
+                           "sections": [{"type": "text", "body": "x"}]}})
 
 
 def test_an_unknown_range_falls_back_to_the_declared_default():

@@ -2832,7 +2832,8 @@ def _page_controls(pg: dict) -> str:
         for o in rng["options"])
     parts = [f'<label>range <select name="range">{opts}</select></label>']
     for v in pg["variables"]:
-        choices = '<option value="">all</option>' + "".join(
+        # A `default_newest` variable has no "all": empty means the newest.
+        choices = ('<option value="">all</option>' if v["all"] is not False else "") + "".join(
             f'<option value="{esc(o)}"{" selected" if o == v["value"] else ""}>{esc(o)}</option>'
             for o in v["options"])
         parts.append(f'<label>{esc(v["name"])} <select name="{esc(v["name"])}">'

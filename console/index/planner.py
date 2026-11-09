@@ -65,7 +65,7 @@ from __future__ import annotations
 import string
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, cast
 
 #: The question the planner panes answer, rendered on them (§4.4) and held here
 #: so the pane registry, the HTML heading and the JSON cannot drift apart.
@@ -188,6 +188,12 @@ class Project:
     #: (`index/landing.py::dashboards`); this lets a dated plan sit beside the
     #: live rows it is judged by without a second copy of its dates.
     panes: tuple[str, ...] = ()
+    #: Epic issue refs whose open sub-issues are this project's active work
+    #: on the planning board (`index/board.py`), read live from the host.
+    epics: tuple[str, ...] = ()
+    #: Further named issue refs that count as this project's active work
+    #: while open, for work not (yet) filed under an epic as sub-issues.
+    issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -203,10 +209,17 @@ class Plan:
         """Every tracker ref any milestone requires, once, in declared order."""
         seen: dict[str, None] = {}
         for p in self.projects:
+            for r in p.issues:
+                seen.setdefault(r, None)
             for m in p.milestones:
                 for r in m.requires:
                     seen.setdefault(r, None)
         return tuple(seen)
+
+    @property
+    def epics(self) -> tuple[str, ...]:
+        """Every epic any project names, once, in declared order."""
+        return tuple(dict.fromkeys(e for p in self.projects for e in p.epics))
 
 
 EMPTY = Plan(projects=())
@@ -308,6 +321,23 @@ def _parse_panes(raw: Any, pid: str) -> tuple[str, ...]:
     return panes
 
 
+def _parse_refs(raw: object, pid: str, key: str) -> tuple[str, ...]:
+    from ..adapters.git_host import parse_issue_ref
+
+    if raw is None:
+        return ()
+    where = f"planner project {pid!r} {key}"
+    if isinstance(raw, str) or not isinstance(raw, Sequence):
+        raise PlannerConfigError(f"{where}: must be a list of `<repo>-I<N>` refs")
+    refs = tuple(str(r).strip() for r in cast(Sequence[object], raw))
+    bad = [r for r in refs if parse_issue_ref(r) is None]
+    if bad:
+        raise PlannerConfigError(f"{where}: takes tracker refs `<repo>-I<N>`, not {bad}")
+    if len(set(refs)) != len(refs):
+        raise PlannerConfigError(f"{where}: a ref is named twice")
+    return refs
+
+
 def parse(raw: Any) -> Plan:
     """Validate and freeze the `planner:` block. Raises on anything it could
     not evaluate honestly later."""
@@ -377,6 +407,8 @@ def parse(raw: Any) -> Plan:
             tracker=(str(p["tracker"]) if p.get("tracker") else None),
             alerts=_parse_alerts(p.get("alerts"), pid),
             panes=_parse_panes(p.get("panes"), pid),
+            epics=_parse_refs(cast(Mapping[str, object], p).get("epics"), pid, "epics"),
+            issues=_parse_refs(cast(Mapping[str, object], p).get("issues"), pid, "issues"),
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -636,6 +668,8 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "id": p.id, "title": p.title, "owner": p.owner, "tracker": p.tracker,
             "url": f"/planner/{p.id}",
             "panes": list(p.panes),
+            "epics": list(p.epics),
+            "issues": list(p.issues),
             # Declared position: the project's colour on the calendar follows
             # the project, so a project page draws it in the same colour.
             "slot": slot,

@@ -58,7 +58,7 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping, Protocol, TypedDict, cast
 
 from ..model.entity import Entity, Provenance
 from ..index.build import now_iso
@@ -318,6 +318,51 @@ def _mint_token(token_command: list[str], org: str, repo: str) -> str:
     return token
 
 
+def _rest_getter(token_command: list[str], api_url: str,
+                 urlopen: Callable[..., object] | None, org: str, repo: str,
+                 ttl: float) -> Callable[[str], object]:
+    """One repo's REST ``get_json``: a token minted lazily from
+    ``token_command`` (a fully cached repo mints nothing) and each successful
+    response memoised for ``ttl`` seconds in `_REST_CACHE`."""
+    import urllib.error
+    import urllib.request
+
+    opener: Callable[..., object] = urlopen or urllib.request.urlopen
+    base_url = str(api_url).rstrip("/")
+    token: list[str] = []
+
+    def get_json(path: str) -> object:
+        url = f"{base_url}/{path}"
+        now = time.monotonic()
+        hit = _REST_CACHE.get(url)
+        if hit is not None and hit[0] > now:
+            return cast(object, hit[1])
+        if not token:
+            token.append(_mint_token(token_command, org, repo))
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token[0]}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "nousergon-console",
+        })
+        try:
+            with cast(_Response, opener(req, timeout=_REST_TIMEOUT_SECONDS)) as resp:
+                body = cast(object, json.loads(resp.read().decode("utf-8") or "null"))
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"HTTP {exc.code}: {exc.reason}") from None
+        if ttl > 0:
+            _REST_CACHE[url] = (now + ttl, body)
+        return body
+
+    return get_json
+
+
+class _Response(Protocol):
+    def __enter__(self) -> "_Response": ...
+    def __exit__(self, *exc: object) -> None: ...
+    def read(self) -> bytes: ...
+
+
 def rest_ref_reader(token_command: list[str],
                     api_url: str = "https://api.github.com",
                     urlopen: Callable[..., Any] | None = None) -> RefReader:
@@ -328,43 +373,153 @@ def rest_ref_reader(token_command: list[str],
 
     ``urlopen`` is injectable for hermetic tests; the default is urllib's.
     """
-    import urllib.error
-    import urllib.request
-
-    opener = urlopen or urllib.request.urlopen
-    base_url = str(api_url).rstrip("/")
-
     def reader(org: str, repo: str, numbers: list[int],
                cache: str) -> list[dict[str, Any]]:
-        ttl = _cache_seconds(cache)
-        token: list[str] = []  # minted lazily: a fully cached repo mints nothing
-
-        def get_json(path: str) -> Any:
-            url = f"{base_url}/{path}"
-            now = time.monotonic()
-            hit = _REST_CACHE.get(url)
-            if hit is not None and hit[0] > now:
-                return hit[1]
-            if not token:
-                token.append(_mint_token(token_command, org, repo))
-            req = urllib.request.Request(url, headers={
-                "Authorization": f"Bearer {token[0]}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "nousergon-console",
-            })
-            try:
-                with opener(req, timeout=_REST_TIMEOUT_SECONDS) as resp:
-                    body = json.loads(resp.read().decode("utf-8") or "null")
-            except urllib.error.HTTPError as exc:
-                raise RuntimeError(f"HTTP {exc.code}: {exc.reason}") from None
-            if ttl > 0:
-                _REST_CACHE[url] = (now + ttl, body)
-            return body
-
+        get_json = _rest_getter(token_command, api_url, urlopen, org, repo,
+                                _cache_seconds(cache))
         return _read_named(get_json, org, repo, numbers, "REST")
 
     return reader
+
+
+#: One raw JSON object from the host.
+JsonObject = dict[str, object]
+
+#: Reads one epic's sub-issues: (org, repo, number, cache) -> the host's raw
+#: sub-issue rows. Raises when the epic cannot be read; an epic with no
+#: sub-issues is an empty list, which is a different answer.
+SubIssueReader = Callable[[str, str, int, str], list[JsonObject]]
+
+#: Sub-issue pages read per epic (100 rows each).
+SUB_ISSUE_PAGES = 3
+
+
+class SubIssue(TypedDict):
+    """One sub-issue in the planning board's item shape."""
+
+    ref: str
+    title: str
+    closed: bool
+    url: str | None
+    labels: list[str]
+    updated_at: str | None
+
+
+def _objects(value: object) -> list[JsonObject]:
+    """The JSON objects in a JSON array; raises when it is not an array."""
+    if not isinstance(value, list):
+        raise RuntimeError(f"sub_issues answered {type(value).__name__}, not a list")
+    return [cast(JsonObject, r) for r in cast(list[object], value) if isinstance(r, dict)]
+
+
+def _sub_issues(get_json: Callable[[str], object], org: str, repo: str,
+                number: int) -> list[JsonObject]:
+    rows: list[JsonObject] = []
+    for page in range(1, SUB_ISSUE_PAGES + 1):
+        batch = _objects(get_json(f"repos/{org}/{repo}/issues/{number}/sub_issues"
+                                  f"?per_page=100&page={page}") or [])
+        rows.extend(batch)
+        if len(batch) < 100:
+            break
+    return rows
+
+
+def rest_sub_issue_reader(token_command: list[str],
+                          api_url: str = "https://api.github.com",
+                          urlopen: Callable[..., object] | None = None) -> SubIssueReader:
+    """A `SubIssueReader` over REST with a minted token, cached like the ref
+    reader: one call per epic per cache window, on the box's App token and
+    never on a person's API limit."""
+    def reader(org: str, repo: str, number: int, cache: str) -> list[JsonObject]:
+        get_json = _rest_getter(token_command, api_url, urlopen, org, repo,
+                                _cache_seconds(cache))
+        return _sub_issues(get_json, org, repo, number)
+
+    return reader
+
+
+def _gh_sub_issue_reader(org: str, repo: str, number: int,
+                         cache: str) -> list[JsonObject]:
+    gh = shutil.which("gh")
+    if gh is None:
+        raise RefReadError("gh CLI not found on this process's PATH and no "
+                           "`planner.fetch.token_command` is set")
+
+    def get_json(path: str) -> object:
+        return cast(object, json.loads(subprocess.run(
+            [gh, "api", "--cache", cache, path],
+            capture_output=True, text=True, check=True,
+        ).stdout or "null"))
+
+    return _sub_issues(get_json, org, repo, number)
+
+
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def sub_issue_row(row: Mapping[str, object], repo: str) -> SubIssue:
+    """One host sub-issue row in the planner's item shape."""
+    sub_repo = str(row.get("repository_url") or "").rsplit("/", 1)[-1] or repo
+    raw_labels = row.get("labels")
+    labels = [str(cast(JsonObject, lab).get("name", ""))
+              for lab in (cast(list[object], raw_labels) if isinstance(raw_labels, list) else [])
+              if isinstance(lab, dict)]
+    return SubIssue(
+        ref=f"{sub_repo}-I{row.get('number')}",
+        title=str(row.get("title") or ""),
+        closed=str(row.get("state", "")).lower() == "closed",
+        url=_opt_str(row.get("html_url")),
+        labels=sorted(labels),
+        updated_at=_opt_str(row.get("updated_at")),
+    )
+
+
+def _token_command(config: Mapping[str, object]) -> list[str]:
+    raw = config.get("token_command")
+    if isinstance(raw, str):
+        return raw.split()
+    if isinstance(raw, list):
+        return [str(a) for a in cast(list[object], raw)]
+    return []
+
+
+def fetch_sub_issues(
+    config: Mapping[str, object],
+    epics: Iterable[str],
+    reader: SubIssueReader | None = None,
+) -> tuple[dict[str, list[SubIssue]], AdapterResult]:
+    """Every named epic's sub-issues, keyed by epic ref, plus the source's
+    envelope. An epic that cannot be read is absent from the mapping and
+    named in ``unavailable`` with the reason: unread, never "no issues"."""
+    org = str(config.get("org") or "")
+    name = str(config.get("_name") or "planner-epics")
+    cache = str(config.get("cache") or "15m")
+    wanted = [e for e in dict.fromkeys(epics) if parse_issue_ref(e) is not None]
+    if not org:
+        return {}, AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
+                                 status=AdapterStatus.FAILED, unavailable=("all",))
+    if reader is None:
+        token_command = _token_command(config)
+        reader = (rest_sub_issue_reader(token_command,
+                                        str(config.get("api_url") or "https://api.github.com"))
+                  if token_command else _gh_sub_issue_reader)
+    out: dict[str, list[SubIssue]] = {}
+    unavailable: list[str] = []
+    for epic in wanted:
+        parsed = parse_issue_ref(epic)
+        if parsed is None:  # pragma: no cover - filtered above
+            continue
+        repo, number = parsed
+        try:
+            raw = reader(org, repo, number, cache)
+        except Exception as exc:  # noqa: BLE001 - this epic is unread, not empty
+            unavailable.append(f"{epic} ({_describe(exc)})")
+            continue
+        out[epic] = [sub_issue_row(r, repo) for r in raw]
+    status = AdapterStatus.FAILED if unavailable and not out else AdapterStatus.OK
+    return out, AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
+                              status=status, unavailable=tuple(unavailable))
 
 
 def fetch_refs(

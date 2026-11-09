@@ -18,6 +18,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qsl, urlsplit
 
 from .. import demo as demo_mode
@@ -27,6 +28,14 @@ from ..render import html as render_html
 from ..render import json as render_json
 from .negotiate import negotiate
 from .router import UnknownRoute, resolve
+
+if TYPE_CHECKING:
+    from email.message import Message
+
+    from ..index.build import BuildInfo, Supervisor
+    from ..model.entity import Entity
+    from ..model.kinds import Kind
+    from .router import Resolved
 
 
 #: The only files served from `console/static/`, by exact path.
@@ -44,10 +53,12 @@ _STATIC = {
 }
 
 
-#: `/actions/<issue number>` and `/ticks/<list>` — the only POST routes
+#: `/actions/<issue number>`, `/ticks/<list>` and `/planner/<project>` — the only POST routes
 #: (`ConsoleHandler.do_POST`).
 _ACTION_POST = re.compile(r"^/actions/(?P<n>[1-9][0-9]{0,8})$")
 _TICK_POST = re.compile(r"^/ticks/(?P<name>[a-z0-9][a-z0-9-]{0,39})$")
+#: `/planner/<project>` — save one planning-board row (`index/board.py`).
+_BOARD_POST = re.compile(r"^/planner/(?P<id>[a-z0-9][a-z0-9-]{0,39})$")
 #: Where a tick returns the reader: a declared page, never another host.
 _TICK_BACK = re.compile(r"^/page/[a-z0-9-]+(?:\?[^\s]*)?$")
 #: Who ticked, as the edge proxy (Cloudflare Access) asserts it. Absent on a
@@ -55,7 +66,7 @@ _TICK_BACK = re.compile(r"^/page/[a-z0-9-]+(?:\?[^\s]*)?$")
 _ACTOR_HEADER = "Cf-Access-Authenticated-User-Email"
 
 
-def _same_origin(headers) -> bool:
+def _same_origin(headers: "Message") -> bool:
     """True when the browser says the POST came from a page on this host."""
     host = (headers.get("Host") or "").strip().lower()
     source = headers.get("Origin") or headers.get("Referer") or ""
@@ -64,7 +75,7 @@ def _same_origin(headers) -> bool:
     return urlsplit(source).netloc.lower() == host
 
 
-def _wants_json(headers) -> bool:
+def _wants_json(headers: "Message") -> bool:
     """A script-side tick (`console.js`) asks for JSON; a plain form post,
     with no script, gets the redirect it always got."""
     return "application/json" in (headers.get("Accept") or "")
@@ -165,9 +176,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(min(length, 4096)).decode("utf-8", "replace") if length else ""
         tm = _TICK_POST.match(parts.path)
+        bm = _BOARD_POST.match(parts.path)
         as_json = _wants_json(self.headers)
-        if m is None and tm is None:
-            self._refuse(405, "Only an action tick or a list tick is writable.", as_json)
+        if m is None and tm is None and bm is None:
+            self._refuse(405, "Only an action tick, a list tick or a planning-board row is writable.",
+                         as_json)
             return
         if not _same_origin(self.headers):
             self._refuse(403, "A tick must come from this console's own page.", as_json)
@@ -178,6 +191,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         index = self._served_index = self.server.index
         if tm is not None:
             return self._tick(index, tm.group("name"), form, done, actor, as_json)
+        if bm is not None:
+            return self._board(index, bm.group("id"), form, actor, as_json)
         from ..index import actions
 
         number = int(m.group("n"))
@@ -242,6 +257,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _board(self, index: Index, project_id: str, form: dict[str, str],
+               actor: str | None, as_json: bool = False) -> None:
+        """Save one planning-board row (rank, dates, complete), then return
+        the reader to that row on /planner."""
+        from ..index import board
+        from ..index.build import now_iso
+
+        try:
+            entry = board.save(index, project_id, form, actor, now_iso())
+        except board.SaveRefused as exc:
+            if as_json:
+                self._refuse(exc.status, f"Not saved: {exc}", True)
+                return
+            self._send(exc.status, f"<h1>{exc.status}</h1><p>Not saved: {render_html.esc(str(exc))}</p>"
+                       '<p><a href="/planner">back to the planner</a></p>', "text/html; charset=utf-8")
+            return
+        if as_json:
+            self._send(200, render_json.dumps({"ok": True, "id": project_id, "entry": entry}),
+                       "application/json; charset=utf-8")
+            return
+        self.send_response(303)
+        self.send_header("Location", f"/planner#p-{project_id}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _demo(self, index: Index, path: str, query: str) -> None:
         """A `/demo/...` request (alpha-engine-config-I13023; `console/demo.py`).
 
@@ -253,7 +293,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         built by `demo.payload` (JSON), which redact it."""
         demo = demo_mode.declared(index)
 
-        def target(p: str):
+        def target(p: str) -> "Resolved | None":
             try:
                 req = resolve(p, query)
             except UnknownRoute:
@@ -307,7 +347,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self._send(status, f"<h1>{status}</h1><p>{render_html.esc(message)}</p>",
                    "text/html; charset=utf-8")
 
-    def _build_info(self):
+    def _build_info(self) -> "BuildInfo | None":
         """The served index's build info for the live-freshness metas, or None
         when there is no index to ask (an error page served before the first
         build, or a handler built without a server): the metas then say the
@@ -348,11 +388,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self.path, type(exc).__name__, exc,
             )
 
-    def log_message(self, *args) -> None:  # keep stdout clean; telemetry is §9
+    def log_message(self, *args: object) -> None:  # keep stdout clean; telemetry is §9
         pass
 
 
-def _html(index: Index, req) -> str:
+def _html(index: Index, req: "Resolved") -> str:
     """The HTML rendering of an already-resolved request.
 
     Mirrors `render_json.payload` exactly — same views, same order, no view in
@@ -364,7 +404,7 @@ def _html(index: Index, req) -> str:
         render_html.with_site_nav(_page(index, req)))
 
 
-def _page(index: Index, req) -> str:
+def _page(index: Index, req: "Resolved") -> str:
     if req.view == "landing":
         return render_html.landing_page(index)
     if req.view == "dashboards":
@@ -372,14 +412,15 @@ def _page(index: Index, req) -> str:
     if req.view == "health":
         return render_html.health_page(index)
     if req.view == "list":
-        return render_html.list_page(index, req.kind, req.facets, req.page,
+        return render_html.list_page(index, cast("Kind", req.kind), req.facets, req.page,
                                      all_runs=req.all_runs, days=req.days,
                                      days_all=req.days_all)
     if req.view == "entity":
-        return render_html.entity_page(index, index.entity(req.entity_id),
+        return render_html.entity_page(index, cast("Entity", index.entity(req.entity_id or "")),
                                        all_runs=req.all_runs)
     if req.view == "history":
-        return render_html.history_page(index, index.entity(req.entity_id), req.window_hours or 24)
+        return render_html.history_page(index, cast("Entity", index.entity(req.entity_id or "")),
+                                        req.window_hours or 24)
     if req.view == "doctor":
         return render_html.doctor_page(index, req.query or "")
     if req.view == "planner":
@@ -437,7 +478,7 @@ class ConsoleServer(ThreadingHTTPServer):
 
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], source):
+    def __init__(self, address: tuple[str, int], source: "Index | Supervisor") -> None:
         super().__init__(address, ConsoleHandler)
         # Either an Index or a Supervisor. A Supervisor hands back whichever
         # index is current at the moment the request is served, so a rebuild is
@@ -448,10 +489,10 @@ class ConsoleServer(ThreadingHTTPServer):
     @property
     def index(self) -> Index:
         source = self._source
-        return source.current if hasattr(source, "current") else source
+        return source if isinstance(source, Index) else cast("Index", source.current)
 
 
-def serve(source, host: str = "127.0.0.1", port: int = 5180) -> ConsoleServer:
+def serve(source: "Index | Supervisor", host: str = "127.0.0.1", port: int = 5180) -> ConsoleServer:
     """Build the server. Loopback is the default and is what makes the absence
     of authentication correct rather than negligent (config.example.yaml); a
     routable bind belongs behind an edge proxy, per §1.2 — and that proxy's

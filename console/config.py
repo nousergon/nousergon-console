@@ -38,6 +38,7 @@ from .index import milestones as milestone_predicates
 from .index import actions as your_actions
 from .index import ticks as tick_lists
 from .index import planner as delivery_planner
+from .index import board as planning_board
 from .index import citations as citation_links
 from .index import home as declared_home
 from .index import pages as declared_pages
@@ -229,6 +230,9 @@ def build_index(config: dict[str, Any]) -> Index:
     # Same posture for the delivery planner (alpha-engine-config-I12152): a
     # project or milestone this build cannot evaluate fails the build by name.
     declared_plan = delivery_planner.parse(config.get("planner"))
+    # The planning board's store (`planner.board`, Brian 2026-11-09): where
+    # his ranks, dates and complete ticks are saved from the page.
+    declared_board = planning_board.parse(config.get("planner"))
     # And for Your actions (`/actions`): a block this build cannot honour is a
     # FAILED source naming the key, never a page that silently lists nothing.
     try:
@@ -342,6 +346,31 @@ def build_index(config: dict[str, Any]) -> Index:
              "_name": "planner-issues"},
         )
         index.add_result(result, elapsed_seconds=elapsed)
+
+    # The planning board: each declared epic's sub-issues (one cached read per
+    # epic, `git_host.fetch_sub_issues`) and Brian's saved inputs.
+    board_epics = None
+    if declared_board is not None and declared_plan.epics:
+        from .adapters import git_host as _git_host
+
+        epic_rows: dict[str, list[_git_host.SubIssue]] = {}
+
+        def _read_epics(cfg: dict[str, object]) -> AdapterResult:
+            rows, res = _git_host.fetch_sub_issues(cfg, declared_plan.epics)
+            epic_rows.update(rows)
+            return res
+
+        result, elapsed = _timed_fetch(
+            _read_epics, {**declared_plan.fetch, "org": declared_plan.org,
+                          "_name": "planner-epics"})
+        index.add_result(result, elapsed_seconds=elapsed)
+        board_epics = planning_board.Epics(
+            rows=epic_rows,
+            unread=tuple(e for e in declared_plan.epics if e not in epic_rows))
+    board_store, board_results = planning_board.read(declared_board, now_iso())
+    for result in board_results:
+        index.add_result(result)
+    planning_board.attach(index, board_store, board_epics)
 
     # Your actions: open issues carrying a declared label, read from the
     # tracker on every build (`index/actions.py`). Nothing is kept between

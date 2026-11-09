@@ -601,7 +601,7 @@ def _safe_tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str
                 "id": None, "absent": f"tile failed: {type(exc).__name__}: {exc}"}
 
 
-def _sort_key(sort: str, order: tuple[str, ...] = ()) -> Callable[[dict[str, Any]], tuple[Any, ...]]:
+def _sort_key(sort: str, order: tuple[str, ...] = ()) -> Callable[[dict[str, object]], tuple[object, ...]]:
     desc = sort.startswith("-")
     name = sort.lstrip("-")
     if order:

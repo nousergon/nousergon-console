@@ -1517,8 +1517,14 @@ planner:
   # PAGE (same-origin POST /planner/<id>) and saved whole to `store`, one JSON
   # object re-read before every write. Saving a rank renumbers the active rows
   # 1..n. An unreadable store renders the board read-only with the reason.
+  # Each active row also carries a status (off track / threatened / on track /
+  # no dates), a sweep position (rank, lifted 3 places when off track, 1 when
+  # threatened) and the issues closed in the last 24h. `publish`, if set,
+  # receives the whole /planner.json document once per build, for readers
+  # that cannot reach the console.
   # board:
   #   store: s3://your-bucket/dashboard/planning/board.json
+  #   publish: s3://your-bucket/dashboard/planning/planner-latest.json
   projects:
     - id: example-project
       # Optional, for the board: epics whose OPEN sub-issues are this

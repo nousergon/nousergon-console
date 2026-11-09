@@ -296,3 +296,33 @@ def test_issues_closed_in_the_last_day_show_what_the_sweep_did() -> None:
         assert b["active"][0]["closed_recent"] == []
     finally:
         SUBS[10][2].pop("closed_at")
+
+
+def test_each_build_publishes_planner_json_for_readers_off_the_console() -> None:
+    s3 = FakeS3()
+    raw = _raw()
+    raw["board"]["publish"] = "s3://alpha-engine-research/dashboard/planning/planner-latest.json"
+    decl = board.parse(raw)
+    assert decl is not None and decl.publish is not None
+    idx = _index(s3)
+    found = board.store(idx)
+    assert found is not None
+    found.declaration = decl
+    out: dict[str, bytes] = {}
+    board.publish(idx, "2026-11-09T16:10:00Z",
+                  putter=lambda b, k, body: out.__setitem__(k, body))
+    doc = json.loads(out["dashboard/planning/planner-latest.json"])
+    assert doc["view"] == "planner" and doc["board"]["sweep_order"]
+    assert doc["published_at"] == "2026-11-09T16:10:00Z"
+
+    def boom(b: str, k: str, body: bytes) -> None:
+        raise RuntimeError("AccessDenied")
+
+    board.publish(idx, "2026-11-09T16:20:00Z", putter=boom)
+    assert "AccessDenied" in (found.publish_error or "")
+    assert "last copy failed" in render_html.planner_page(idx)
+
+
+def test_publish_must_not_overwrite_the_store() -> None:
+    with pytest.raises(board.BoardConfigError, match="store itself"):
+        board.parse({"board": {"store": STORE, "publish": STORE}})

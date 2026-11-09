@@ -488,6 +488,10 @@ def build_index(config: dict[str, Any]) -> Index:
     from .index.landing import build as _build_landing_model
 
     index.set_landing_model(_build_landing_model(index))
+    # The planner, published for readers that cannot reach the console (the
+    # cloud plan and nightly sessions read the board from S3). After the
+    # landing model, so the document matches what /planner.json serves.
+    planning_board.publish(index, now_iso())
     return index
 
 

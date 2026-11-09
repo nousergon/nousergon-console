@@ -99,6 +99,11 @@ class SaveRefused(Exception):
 class Declaration:
     bucket: str
     key: str
+    #: Where each build publishes the whole /planner.json document, so readers
+    #: that cannot reach the console (the cloud plan and nightly sessions)
+    #: read the same board, ranks, statuses and sweep order (Director
+    #: 2026-11-09). (bucket, key), or None when not published.
+    publish: tuple[str, str] | None = None
 
     @property
     def uri(self) -> str:
@@ -111,6 +116,9 @@ class Store:
     entries: dict[str, Entry] = field(default_factory=lambda: dict[str, Entry]())
     read_at: str | None = None
     error: str | None = None
+    #: The last publish of /planner.json: when, or why it failed.
+    published_at: str | None = None
+    publish_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +169,9 @@ class BoardRow(TypedDict):
 
 class Board(TypedDict):
     declared: bool
+    published_to: str | None
+    published_at: str | None
+    publish_error: str | None
     store: str | None
     writable: bool
     error: str | None
@@ -182,13 +193,21 @@ def parse(planner_raw: object) -> Declaration | None:
     if not isinstance(raw, Mapping):
         raise BoardConfigError("planner.board must be a mapping with `store`")
     spec = cast(Mapping[str, object], raw)
-    unknown = sorted(set(map(str, spec)) - {"store"})
+    unknown = sorted(set(map(str, spec)) - {"store", "publish"})
     if unknown:
         raise BoardConfigError(f"planner.board: unknown key(s) {', '.join(unknown)}")
     m = _STORE.match(str(spec.get("store") or ""))
     if m is None:
         raise BoardConfigError("planner.board.store must be s3://<bucket>/<key>.json")
-    return Declaration(bucket=m["bucket"], key=m["key"])
+    publish: tuple[str, str] | None = None
+    if spec.get("publish") is not None:
+        pm = _STORE.match(str(spec.get("publish") or ""))
+        if pm is None:
+            raise BoardConfigError("planner.board.publish must be s3://<bucket>/<key>.json")
+        if (pm["bucket"], pm["key"]) == (m["bucket"], m["key"]):
+            raise BoardConfigError("planner.board.publish must not be the store itself")
+        publish = (pm["bucket"], pm["key"])
+    return Declaration(bucket=m["bucket"], key=m["key"], publish=publish)
 
 
 # ------------------------------------------------------------------ store --
@@ -448,6 +467,10 @@ def evaluate(index: object, today: date | None = None,
                      key=lambda r: r["completed_at"] or "", reverse=True)
     return Board(
         declared=found is not None,
+        published_to=(f"s3://{found.declaration.publish[0]}/{found.declaration.publish[1]}"
+                      if found and found.declaration.publish else None),
+        published_at=found.published_at if found else None,
+        publish_error=found.publish_error if found else None,
         store=found.declaration.uri if found else None,
         writable=found is not None and found.error is None,
         error=found.error if found else None,
@@ -535,3 +558,23 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
             raise SaveRefused(f"could not save {decl.uri}: {str(exc)[:160]}", 502) from None
         found.entries, found.read_at, found.error = entries, now, None
     return entries[project_id]
+
+
+def publish(index: object, now: str, putter: Putter | None = None) -> None:
+    """Write the whole /planner.json document to the declared ``publish``
+    object, once per build. Never fatal: a failure is recorded on the store
+    and shown on the page, and the console keeps serving."""
+    found = store(index)
+    if found is None or found.declaration.publish is None:
+        return
+    bucket, key = found.declaration.publish
+    try:
+        from ..render.json import dumps, payload
+        from ..server.router import resolve
+
+        doc = payload(index, resolve("/planner", ""))  # pyright: ignore[reportArgumentType]
+        doc["published_at"] = now
+        (putter or _s3_put)(bucket, key, dumps(doc).encode("utf-8"))
+        found.published_at, found.publish_error = now, None
+    except Exception as exc:  # noqa: BLE001 - recorded, shown on the page
+        found.publish_error = f"{type(exc).__name__}: {str(exc)[:160]}"

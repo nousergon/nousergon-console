@@ -426,7 +426,8 @@ def parse(raw: Any, feeds: set[str] | None = None,
             raise PagesConfigError(f"{where}: `{RANGE_PARAM}` is the time range, not a variable")
         if SORT_PARAM in variables:
             raise PagesConfigError(f"{where}: `{SORT_PARAM}` is a table's sort, not a variable")
-        default_newest = _names(p.get("default_newest"), where, "default_newest")
+        default_newest = _names(p["default_newest"] if "default_newest" in p else None,
+                                where, "default_newest")
         stray = [v for v in default_newest if v not in variables]
         if stray:
             raise PagesConfigError(f"{where}: `default_newest` names {stray}, "

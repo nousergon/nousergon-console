@@ -277,8 +277,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send(200, render_json.dumps({"ok": True, "id": project_id, "entry": entry}),
                        "application/json; charset=utf-8")
             return
+        # The anchor comes from the declared project list, never the request
+        # path, so no request byte reaches a header (the path regex already
+        # forbids CR/LF; this makes it structural, CodeQL HTTP response splitting).
+        anchor = next((p.id for p in planner.declared(index).projects if p.id == project_id), "")
         self.send_response(303)
-        self.send_header("Location", f"/planner#p-{project_id}")
+        self.send_header("Location", f"/planner#p-{anchor}" if anchor else "/planner")
         self.send_header("Content-Length", "0")
         self.end_headers()
 

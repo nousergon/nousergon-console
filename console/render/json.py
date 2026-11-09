@@ -137,7 +137,7 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
         doc = {"schema_version": SCHEMA_VERSION, "view": "doctor",
                **as_dict(doctor(index, req.query or ""))}
     elif req.view == "planner":
-        from ..index import planner
+        from ..index import board, planner
 
         projects = planner.evaluate(index)
         span = planner.axis(projects)
@@ -146,7 +146,8 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "states": list(planner.SCHEDULE_STATES),
                "axis": ({"start": span[0].isoformat(), "end": span[1].isoformat()}
                         if span else None),
-               "projects": projects}
+               "projects": projects,
+               "board": board.evaluate(index)}
     elif req.view == "reports":
         from ..index import reports
 

@@ -1510,8 +1510,22 @@ planner:
     # api_url: https://api.github.com
   thresholds: {threatened_gap: 0.15, off_track_gap: 0.40, blocker_window_days: 7}
   blocker_labels: ["gate:decision", "gate:operator", "gate:device", "blocked"]
+  # PLANNING BOARD (`console/index/board.py`): at the top of /planner, every
+  # project as a ranked row with its open issues, a next-milestone date, a
+  # final-phase date and a complete checkbox; completed projects list in an
+  # archive at the bottom. Rank, both dates and the checkbox are edited ON THE
+  # PAGE (same-origin POST /planner/<id>) and saved whole to `store`, one JSON
+  # object re-read before every write. Saving a rank renumbers the active rows
+  # 1..n. An unreadable store renders the board read-only with the reason.
+  # board:
+  #   store: s3://your-bucket/dashboard/planning/board.json
   projects:
     - id: example-project
+      # Optional, for the board: epics whose OPEN sub-issues are this
+      # project's active work (one cached REST read per epic), and further
+      # named issues that count while open. Milestone `requires` count too.
+      # epics: [example-repo-I3]
+      # issues: [example-repo-I4]
       title: Example project
       owner: example-owner
       tracker: https://example.invalid/tracker/2

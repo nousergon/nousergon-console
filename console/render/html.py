@@ -23,7 +23,7 @@ import html
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .. import calendar_cadence
 from ..freshness import NO_CADENCE, STALE
@@ -53,6 +53,16 @@ from ..server.router import path_for_entity, path_for_list
 
 if TYPE_CHECKING:
     from ..index.build import BuildInfo
+    from collections.abc import Iterable, Sequence
+    from datetime import date
+
+    from ..demo import Demo
+    from ..index import board as board_types
+    from ..index.actions import Action
+    from ..index.actions import Declaration as ActionsDeclaration
+    from ..index.baseline import TrendPoint
+    from ..index.landing import LandingModel
+    from .json import Listing as JsonListing
 
 #: Component states that mean "look at me" on the exception-first landing view
 #: (§4.3). The three DECLARED states are deliberately absent: DISABLED,
@@ -453,7 +463,7 @@ def _chart_data(key: str, labels: list[str], series: list[dict], unit: str) -> s
 
     from . import json as render_json
 
-    def finite(v):
+    def finite(v: object) -> float | None:
         return v if isinstance(v, (int, float)) and math.isfinite(v) else None
 
     payload = {"key": key, "unit": unit, "labels": labels,
@@ -1177,7 +1187,7 @@ def _filter_text(facets: dict[str, str]) -> str:
     return ", ".join(f"{k}={v}" for k, v in facets.items())
 
 
-def _shown_line(kind: Kind, facets: dict[str, str], listing, page: int,
+def _shown_line(kind: Kind, facets: dict[str, str], listing: "JsonListing", page: int,
                 visible: int) -> str:
     """What this page shows, out of what, and where the rest went (I11805).
 
@@ -1202,7 +1212,7 @@ def _shown_line(kind: Kind, facets: dict[str, str], listing, page: int,
     return f'<p class="list-shown">{esc(" · ".join(parts))}</p>'
 
 
-def _empty_line(kind: Kind, facets: dict[str, str], listing, page: int) -> str:
+def _empty_line(kind: Kind, facets: dict[str, str], listing: "JsonListing", page: int) -> str:
     """Why a list page has no rows — the source, the filter, the window or
     the page number — so an empty filter never reads as an empty source."""
     noun = f"{kind.value}s"
@@ -1219,7 +1229,7 @@ def _empty_line(kind: Kind, facets: dict[str, str], listing, page: int) -> str:
             f"on {pages} page{'' if pages == 1 else 's'}.")
 
 
-def _window_line(kind: Kind, facets: dict[str, str], listing) -> str:
+def _window_line(kind: Kind, facets: dict[str, str], listing: "JsonListing") -> str:
     """What a dated list shows, and the one link to the other view (§3.4).
 
     The window view links to the archive of every row; the archive links back
@@ -1346,7 +1356,7 @@ def index_freshness(index: Index, now: datetime | None = None, detail: bool = Fa
     )
 
 
-def _freshness_line(info, now: datetime) -> str:
+def _freshness_line(info: "BuildInfo", now: datetime) -> str:
     """The one-line form every page carries (Brian 2026-11-04: the full
     paragraph, every source and its status, was "essentially wasted space").
     It says how old the data is, why when it is stale, and names only the
@@ -1474,7 +1484,7 @@ def landing_page(index: Index) -> str:
 {home_status(index)}
 {home_notes(home.notes(index))}
 {health_strip(home.health(index, model.exceptions))}
-{exception_summary(model, index.exceptions_trend(), brief=True)}
+{exception_summary(cast("LandingModel", model), index.exceptions_trend(), brief=True)}
 {headline_groups(home.headline_groups(index))}
 {headline_tiles(home.headline(index))}
 <form action="/search" method="get"><label for="global-search">search</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
@@ -1612,7 +1622,8 @@ def health_page(index: Index) -> str:
     # (alpha-engine-config-I7107).
     unregistered_links = _member_links(
         Kind.COMPONENT, State.UNREGISTERED.value,
-        completeness.get("unregistered_ids") or ())
+        # The landing model is not typed yet (baselined); the ids are strings.
+        cast("Iterable[str]", completeness.get("unregistered_ids") or ()))  # pyright: ignore[reportUnknownMemberType]
     gap = model.gap
     gap_txt = (
         f'{gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2)'
@@ -1628,7 +1639,7 @@ def health_page(index: Index) -> str:
 {index_freshness(index, detail=True)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>
-{_collapsed_milestones(model)}
+{_collapsed_milestones(cast("LandingModel", model))}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
 {observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}
@@ -1790,7 +1801,7 @@ def _schedule_word(state: str) -> str:
     return f'<span class="schedule-word schedule-{esc(state)}">{esc(state)}</span>'
 
 
-def _planner_axis_pos(day: str, start, span_days: int) -> float:
+def _planner_axis_pos(day: str, start: "date", span_days: int) -> float:
     from datetime import date as _date
 
     offset = (_date.fromisoformat(day) - start).days
@@ -1861,7 +1872,7 @@ def _planner_timeline(projects: list[dict]) -> str:
     days = max(1, (end - start).days)
     today = _dt.now(_tz.utc).date()
 
-    def x(day) -> float:
+    def x(day: "date") -> float:
         return gutter + plot_w * (day - start).days / days
 
     def clip(text: str, n: int = 40) -> str:
@@ -2032,6 +2043,112 @@ def _planner_counts(project: dict) -> str:
                       for s, n in project["states"].items() if n)
 
 
+def _board_issue(i: "board_types.BoardIssue") -> str:
+    link = (f'<a href="{esc(i["url"])}">{esc(i["ref"])}</a>' if i.get("url")
+            else esc(i["ref"]))
+    flags = (' <strong class="board-wip">in progress</strong>' if i["in_progress"] else "")
+    flags += (f' <strong class="plan-blocker">{esc(i["blocker"])}</strong>'
+              if i.get("blocker") else "")
+    return f'<li>{link} {esc(i.get("title") or "")}{flags}</li>'
+
+
+def _board_issues(row: "board_types.BoardRow") -> str:
+    from ..index import board
+
+    counts = f'{row["n_open"]} open'
+    if row["n_in_progress"]:
+        counts += f' · {row["n_in_progress"]} in progress'
+    counts += f' · {row["n_closed"]} closed'
+    unread = "".join(f'<li class="absent">cannot read {esc(e)}</li>'
+                     for e in row["unread_epics"])
+    if not row["epics"] and not row["n_open"] and not row["n_closed"]:
+        return '<span class="absent">no epic or issues declared</span>'
+    shown = "".join(_board_issue(i) for i in row["open"][:board.SHOWN_ISSUES])
+    rest = row["open"][board.SHOWN_ISSUES:]
+    more = (f'<details><summary>{len(rest)} more open</summary><ul class="board-issues">'
+            + "".join(_board_issue(i) for i in rest) + "</ul></details>") if rest else ""
+    return (f'<span class="board-count">{counts}</span>'
+            f'<ul class="board-issues">{unread}{shown}</ul>{more}')
+
+
+def _board_date(row: "board_types.BoardRow", key: str, label: str, form: str,
+                disabled: str) -> str:
+    value = (row["next_milestone"] if key == "next_milestone" else row["final"]) or ""
+    plan = row["plan_next"] if key == "next_milestone" else row["plan_final"]
+    hint = (f'<small class="board-hint">plan {esc(plan)}</small>'
+            if plan and plan != value else "")
+    late = (' <strong class="plan-blocker">overdue</strong>'
+            if value and label in row["overdue"] else "")
+    return (f'<td><input type="date" name="{esc(key)}" value="{esc(value)}" form="{form}" '
+            f'aria-label="{esc(label)} for {esc(row["title"])}"{disabled}>{late}{hint}</td>')
+
+
+def _board_project(row: "board_types.BoardRow", org: str | None) -> str:
+    epics = " ".join(
+        (f'<a href="https://github.com/{esc(org)}/{esc(e.rsplit("-I", 1)[0])}/issues/'
+         f'{esc(e.rsplit("-I", 1)[1])}">{esc(e)}</a>') if org else esc(e)
+        for e in row["epics"])
+    return (f'<a href="{esc(row["url"])}">{esc(row["title"])}</a>'
+            + (f'<br><small>epic {epics}</small>' if epics else ""))
+
+
+def _planning_board(index: Index) -> tuple[str, str]:
+    """The planning board (Brian 2026-11-09, `index/board.py`): every active
+    project as a ranked row with its open issues, next-milestone and
+    final-phase dates and a complete checkbox, then the archive."""
+    from ..index import board, planner
+
+    b = board.evaluate(index)
+    if not b["declared"]:
+        return "", ""
+    org = planner.declared(index).org
+    disabled = "" if b["writable"] else " disabled"
+    note = ("" if b["writable"] else
+            f'<p class="absent">read-only: cannot read {esc(b["store"])} ({esc(b["error"])})</p>')
+    forms: list[str] = []
+    rows: list[str] = []
+    for r in b["active"]:
+        fid = f'pb-{r["id"]}'
+        forms.append(f'<form id="{fid}" method="post" action="/planner/{esc(r["id"])}"></form>')
+        rows.append(
+            f'<tr id="p-{esc(r["id"])}">'
+            f'<td><input type="number" name="rank" min="1" value="{r["position"]}" '
+            f'form="{fid}" class="board-rank" aria-label="rank for {esc(r["title"])}"{disabled}></td>'
+            f'<td>{_board_project(r, org)}</td>'
+            f'<td>{_board_issues(r)}</td>'
+            + _board_date(r, "next_milestone", "next milestone", fid, disabled)
+            + _board_date(r, "final", "final phase", fid, disabled)
+            + f'<td><input type="checkbox" name="complete" value="1" form="{fid}" '
+            f'aria-label="{esc(r["title"])} complete"{disabled}></td>'
+            f'<td><button type="submit" form="{fid}"{disabled}>save</button></td></tr>')
+    head = ("<tr><th>rank</th><th>project</th><th>active issues</th>"
+            "<th>next milestone</th><th>final phase</th><th>done</th><th></th></tr>")
+    active = (f'<table class="plan-table board-table">{head}{"".join(rows)}</table>'
+              if rows else '<p class="absent">no active projects</p>')
+    archived: list[str] = []
+    for r in b["archive"]:
+        fid = f'pb-{r["id"]}'
+        forms.append(
+            f'<form id="{fid}" method="post" action="/planner/{esc(r["id"])}">'
+            f'<input type="hidden" name="next_milestone" value="{esc(r["next_milestone"] or "")}">'
+            f'<input type="hidden" name="final" value="{esc(r["final"] or "")}"></form>')
+        archived.append(
+            f'<tr id="p-{esc(r["id"])}"><td>{_board_project(r, org)}</td>'
+            f'<td>{esc((r["completed_at"] or "")[:10])}</td>'
+            f'<td>{esc(r["completed_by"] or "")}</td>'
+            f'<td>{esc(r["final"] or "")}</td>'
+            f'<td>{r["n_closed"]} closed · {r["n_open"]} open</td>'
+            f'<td><button type="submit" form="{fid}"{disabled}>reopen</button></td></tr>')
+    archive = (
+        '<h2>archive</h2><table class="plan-table board-table"><tr><th>project</th>'
+        '<th>completed</th><th>by</th><th>final phase</th><th>issues</th><th></th></tr>'
+        + "".join(archived) + "</table>") if archived else (
+        '<h2>archive</h2><p class="absent">no completed projects yet</p>')
+    return (f'<section class="planning-board"><h2>projects, ranked</h2>{note}'
+            f'{"".join(forms)}{active}</section>',
+            f'<section class="planning-board">{archive}</section>')
+
+
 def planner_page(index: Index) -> str:
     """The delivery calendar (alpha-engine-config-I12152): every declared
     project's milestones side by side on one dated axis, then each project's
@@ -2039,7 +2156,10 @@ def planner_page(index: Index) -> str:
     per request, nothing stored (§5.6)."""
     from ..index import planner
 
-    projects = planner.evaluate(index)
+    every = planner.evaluate(index)
+    # A project with no dated milestone is a board row only: it has nothing to
+    # draw on the calendar, and an empty milestone table is noise.
+    projects = [p for p in every if p["milestones"] or p["alerts"]["declared"]]
     if projects:
         sections = "".join(
             f'<h2><a href="{esc(p["url"])}">{esc(p["title"])}</a></h2>'
@@ -2049,8 +2169,11 @@ def planner_page(index: Index) -> str:
             + _planner_milestone_rows(p, with_items=False)
             + _planner_alerts(p)
             for p in projects)
+    elif every:
+        sections = '<p class="absent">no project declares a dated milestone</p>'
     else:
         sections = '<p class="absent">no projects declared — the `planner:` config block is empty</p>'
+    board_html, archive_html = _planning_board(index)
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>planner</title></head><body>
@@ -2058,8 +2181,11 @@ def planner_page(index: Index) -> str:
 <h1>planner</h1>
 <p class="pane-question">{esc(planner.PLANNER_QUESTION)}</p>
 {index_freshness(index)}
+{board_html}
+<h2>calendar</h2>
 {_planner_timeline(projects)}
 {sections}
+{archive_html}
 </body></html>"""
 
 
@@ -2277,7 +2403,7 @@ def _untriaged(by_priority: dict[str, int]) -> int | None:
     return by_priority.get("untriaged", 0) if by_priority else None
 
 
-def exception_trend(points, now_total: int | None = None,
+def exception_trend(points: "Sequence[TrendPoint] | None", now_total: int | None = None,
                     now_untriaged: int | None = None) -> str:
     """The not-healthy count, one bar per published day plus today's live
     count, so "is the red going down?" is answered on the page (Brian
@@ -2342,7 +2468,8 @@ def exception_trend(points, now_total: int | None = None,
             + f'</svg><br><small class="ts-summary">{esc(text)}</small></p>')
 
 
-def exception_summary(model, trend=None, brief: bool = False) -> str:
+def exception_summary(model: "LandingModel", trend: "Sequence[TrendPoint] | None" = None,
+                      brief: bool = False) -> str:
     """Home's second element: counts of everything not HEALTHY by state, each
     linked to the full list, plus the decision queue, the transparency gap
     and population completeness. Counts only — the rows are on `/exceptions`."""
@@ -2390,7 +2517,7 @@ def headline_tiles(tiles: list[dict]) -> str:
             + "".join(_page_tile(t) for t in tiles) + "</div></section>")
 
 
-def _collapsed_milestones(model) -> str:
+def _collapsed_milestones(model: "LandingModel") -> str:
     body = milestones_section(model.milestones, model.milestone_journal)
     if not body.strip():
         return ""
@@ -2423,7 +2550,7 @@ def _since_yesterday(delta: dict | None) -> str:
                if cleared else ""))
 
 
-def _action_due(a, today: str) -> str:
+def _action_due(a: "Action", today: str) -> str:
     """The due cell: the date, how far away it is, and where it came from."""
     if not a.due:
         return '<em class="absent">no date</em>'
@@ -2442,7 +2569,7 @@ def _action_due(a, today: str) -> str:
 _ANY_TIME = '<em class="absent">any time</em>'
 
 
-def _action_row(a, decl, writable: bool, today: str) -> str:
+def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: str) -> str:
     """One action as a table row: the tick, the ask (title linking its PR when
     it has one, then its first paragraph and its command), when it is due, any bound on when it may
     happen, and how long it has waited. The tick is a form POST, so it works
@@ -2497,7 +2624,7 @@ def _action_row(a, decl, writable: bool, today: str) -> str:
             f'<span class="muted">{as_of_html(a.created_at)}</span></td></tr>')
 
 
-def _prs_to_merge(a) -> list:
+def _prs_to_merge(a: "Action") -> list[tuple[str, str, str | None]]:
     """The PRs this ask needs merged: a merge ask's own PR, and any other PR
     it names that is still open (it has to land first)."""
     out = []
@@ -2507,7 +2634,7 @@ def _prs_to_merge(a) -> list:
     return out
 
 
-def _action_ask(a) -> str:
+def _action_ask(a: "Action") -> str:
     """The ask, spelled out (Brian 2026-11-05): every PR to merge, linked,
     then every command to run, each in its own copy box. The row is one line
     until opened, so this is what an opened row shows."""
@@ -2546,7 +2673,7 @@ def _login_note(cmd: str) -> str:
     return (f'<div class="muted">If a browser sign-in opens: {esc(" · ".join(names))}.</div>')
 
 
-def _actions_table(rows, decl, today: str) -> str:
+def _actions_table(rows: "Sequence[Action]", decl: "ActionsDeclaration", today: str) -> str:
     return ('<table class="actions"><thead><tr><th aria-label="done"></th><th>action</th>'
             '<th>due</th><th>when it can happen</th><th>what · opened</th></tr></thead><tbody>'
             + "".join(_action_row(a, decl, decl.writable, today) for a in rows)
@@ -2928,7 +3055,7 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
 
 
 def page_page(index: Index, page_id: str, params: dict | None = None,
-              demo=None) -> str:
+              demo: "Demo | None" = None) -> str:
     """A declared page (`/page/<id>`): the sections its config lays out, over
     rows other adapters mint, for the URL's range and variables. Declared in
     config, evaluated per request, nothing stored (§5.6).
@@ -2978,7 +3105,7 @@ def page_page(index: Index, page_id: str, params: dict | None = None,
 </body></html>"""
 
 
-def _page_breadcrumb(pg: dict, demo) -> str:
+def _page_breadcrumb(pg: dict, demo: "Demo | None") -> str:
     if demo:
         return (f'<nav><a href="/">{esc(demo.title)}</a> &rsaquo; '
                 f'{esc(pg["title"])}</nav>')
@@ -2996,7 +3123,7 @@ def demo_freshness(index: Index) -> str:
     return f'<p class="index-freshness">data as of {as_of_html(built)}</p>'
 
 
-def demo_tour_page(index: Index, demo) -> str:
+def demo_tour_page(index: Index, demo: "Demo") -> str:
     """The demo's front page: its title, its declared introduction, and the
     tour — every page the demo shows, in order, each with the question it
     answers. Nothing else from the console is linked from here."""
@@ -3017,7 +3144,7 @@ def demo_tour_page(index: Index, demo) -> str:
 </body></html>"""
 
 
-def with_demo_nav(page: str, demo) -> str:
+def with_demo_nav(page: str, demo: "Demo") -> str:
     """The demo's one menu, in place of the site menu: the tour and its pages.
     The banner says what the reader is looking at — a view with some
     information left out — so nobody mistakes it for the whole system."""
@@ -3150,7 +3277,7 @@ def _new_tab_anchor(m: re.Match) -> str:
     return f'<a{attrs} target="_blank" rel="noopener noreferrer">'
 
 
-def _member_links(kind: Kind, state: str, member_ids) -> str:
+def _member_links(kind: Kind, state: str, member_ids: "Iterable[str]") -> str:
     """The rows behind a §9 count, as links — the count's evidence field (§5.1).
 
     Renders the filtered list URL (`/<kind>?state=<STATE>`) alongside each
@@ -3385,7 +3512,7 @@ def observation_coverage_line(index: Index) -> str:
         links = (f' — <a href="{esc(listing)}">all {esc(UNOBSERVED_VALUE)} '
                  f'{esc(Kind.ARTIFACT.value)}s</a> ({len(members)} rows)')
     else:
-        links = _member_links(Kind.ARTIFACT, UNOBSERVED_VALUE, members)
+        links = _member_links(Kind.ARTIFACT, UNOBSERVED_VALUE, cast("list[str]", members))
     return (f'<p>artifact observation coverage {cov["count"]} / {cov["of"]} '
             f'declared artifacts observed · {len(members)} declared and never '
             f'looked at{links}</p>')

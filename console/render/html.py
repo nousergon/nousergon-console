@@ -2085,7 +2085,7 @@ def _board_date(row: "board_types.BoardRow", key: str, label: str, form: str,
             if plan and plan != value else "")
     late = (' <strong class="plan-blocker">overdue</strong>'
             if value and label in row["overdue"] else "")
-    return (f'<td><input type="date" name="{esc(key)}" value="{esc(value)}" form="{form}" '
+    return (f'<td><input type="date" name="{esc(key)}.{esc(row["id"])}" value="{esc(value)}" form="{form}" '
             f'aria-label="{esc(label)} for {esc(row["title"])}"{disabled}>{late}{hint}</td>')
 
 
@@ -2111,28 +2111,35 @@ def _planning_board(index: Index) -> tuple[str, str]:
     disabled = "" if b["writable"] else " disabled"
     note = ("" if b["writable"] else
             f'<p class="absent">read-only: cannot read {esc(b["store"])} ({esc(b["error"])})</p>')
-    forms: list[str] = []
+    fid = "pb-board"
+    forms: list[str] = [f'<form id="{fid}" method="post" action="/planner"></form>']
     rows: list[str] = []
     for r in b["active"]:
-        fid = f'pb-{r["id"]}'
-        forms.append(f'<form id="{fid}" method="post" action="/planner/{esc(r["id"])}"></form>')
+        rid = esc(r["id"])
         rows.append(
-            f'<tr id="p-{esc(r["id"])}">'
-            f'<td><input type="number" name="rank" min="1" value="{r["position"]}" '
+            f'<tr id="p-{rid}">'
+            f'<td><input type="hidden" name="row.{rid}" value="{r["position"]}" form="{fid}">'
+            f'<input type="number" name="rank.{rid}" min="1" value="{r["position"]}" '
             f'form="{fid}" class="board-rank" aria-label="rank for {esc(r["title"])}"{disabled}></td>'
             f'<td class="board-sweep">{r["sweep_position"]}</td>'
             f'<td>{_board_project(r, org)}</td>'
             f'<td class="board-status board-{esc(r["status"].replace(" ", "-"))}">'
-            f'{esc(r["status"])}<small class="board-hint">{esc(r["status_reason"])}</small></td>'
+            f'{esc(r["status"])}<small class="board-hint">{esc(r["status_reason"])}</small>'
+            + (f'<strong class="board-review">ready for your review</strong>'
+               f'<small class="board-hint">{esc(r["review_reason"] or "")}: '
+               'tick done if it is finished</small>' if r["review"] else "")
+            + '</td>'
             f'<td>{_board_issues(r)}</td>'
             + _board_date(r, "next_milestone", "next milestone", fid, disabled)
             + _board_date(r, "final", "final phase", fid, disabled)
-            + f'<td><input type="checkbox" name="complete" value="1" form="{fid}" '
-            f'aria-label="{esc(r["title"])} complete"{disabled}></td>'
-            f'<td><button type="submit" form="{fid}"{disabled}>save</button></td></tr>')
+            + f'<td><input type="checkbox" name="complete.{rid}" value="1" form="{fid}" '
+            f'aria-label="{esc(r["title"])} complete"{disabled}></td></tr>')
     head = ("<tr><th>rank</th><th>sweep</th><th>project</th><th>status</th><th>active issues</th>"
-            "<th>next milestone</th><th>final phase</th><th>done</th><th></th></tr>")
-    active = (f'<table class="plan-table board-table">{head}{"".join(rows)}</table>'
+            "<th>next milestone</th><th>final phase</th><th>done</th></tr>")
+    save = (f'<div class="board-save"><button type="submit" form="{fid}"{disabled}>'
+            'save all changes</button> <small class="board-hint">ranks are positions: '
+            'typing 2 moves a project to second and shifts the rest down</small></div>')
+    active = (f'<table class="plan-table board-table">{head}{"".join(rows)}</table>{save}'
               if rows else '<p class="absent">no active projects</p>')
     archived: list[str] = []
     for r in b["archive"]:
@@ -2159,7 +2166,12 @@ def _planning_board(index: Index) -> tuple[str, str]:
     rule = (f'<p class="pane-question">sweep order: {esc(b["sweep_rule"])}; '
             f'<a href="/planner.json">/planner.json</a> <code>board</code>{copy} is what '
             'the evening sweep reads</p>')
-    return (f'<section class="planning-board"><h2>projects, ranked</h2>{rule}{note}'
+    n_review = len(b["review"])
+    review = (f'<p><strong class="board-review">{n_review} '
+              f'{"project looks" if n_review == 1 else "projects look"} finished</strong>: '
+              'review each flagged row, then tick done or leave it open</p>'
+              if n_review else "")
+    return (f'<section class="planning-board" id="board"><h2>projects, ranked</h2>{rule}{review}{note}'
             f'{"".join(forms)}{active}</section>',
             f'<section class="planning-board">{archive}</section>')
 

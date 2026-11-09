@@ -165,6 +165,8 @@ class BoardRow(TypedDict):
     n_in_progress: int
     unread_epics: list[str]
     closed_recent: list[BoardIssue]
+    review: bool
+    review_reason: str | None
 
 
 class Board(TypedDict):
@@ -181,6 +183,7 @@ class Board(TypedDict):
     archive: list[BoardRow]
     sweep_order: list[str]
     sweep_rule: str
+    review: list[str]
 
 
 def parse(planner_raw: object) -> Declaration | None:
@@ -389,6 +392,24 @@ def _status(milestones: list[Mapping[str, object]], late: list[str]) -> tuple[st
     return NO_DATES_WORD, "no open dated milestone"
 
 
+def _review(milestones: list[Mapping[str, object]], n_open: int, n_closed: int,
+            unread: list[str]) -> str | None:
+    """Why an active project looks finished and needs Brian's review before
+    he ticks done (Brian 2026-11-09 23:04Z), or ``None``. Evidence only:
+    every dated milestone met and no open issue left on its epics or named
+    refs. An unreadable epic is never evidence of done."""
+    from . import planner
+
+    if unread or n_open:
+        return None
+    met = sum(1 for m in milestones if m.get("state") == planner.MET)
+    if milestones and met == len(milestones):
+        return f"all {met} milestones met, no open issues ({n_closed} closed)"
+    if not milestones and n_closed:
+        return f"no open issues left ({n_closed} closed)"
+    return None
+
+
 def _sweep_order(active: list[BoardRow]) -> list[str]:
     def key(r: BoardRow) -> tuple[int, int]:
         lift = (OFF_TRACK_LIFT if r["status"] == OFF_TRACK_WORD else
@@ -443,6 +464,7 @@ def evaluate(index: object, today: date | None = None,
             index, epic_refs, _named_refs(epic_refs, issues, milestones), read,
             plan.blocker_labels, since)
         status, status_reason = _status(milestones, late)
+        review = None if complete else _review(milestones, len(open_items), n_closed, unread)
         rows[pid] = BoardRow(
             id=pid, title=str(p["title"]), url=str(p["url"]),
             tracker=_opt_str(p.get("tracker")), owner=_opt_str(p.get("owner")),
@@ -456,6 +478,7 @@ def evaluate(index: object, today: date | None = None,
             open=open_items, n_open=len(open_items), n_closed=n_closed,
             n_in_progress=sum(1 for i in open_items if i["in_progress"]),
             unread_epics=unread, closed_recent=recent,
+            review=review is not None, review_reason=review,
         )
     active = [rows[i] for i in _active_order(ids, entries)]
     for pos, r in enumerate(active, start=1):
@@ -477,6 +500,7 @@ def evaluate(index: object, today: date | None = None,
         read_at=found.read_at if found else None,
         unread_epics=list(read.unread),
         active=active, archive=archive, sweep_order=sweep, sweep_rule=SWEEP_RULE,
+        review=[r["id"] for r in active if r["review"]],
     )
 
 
@@ -558,6 +582,114 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
             raise SaveRefused(f"could not save {decl.uri}: {str(exc)[:160]}", 502) from None
         found.entries, found.read_at, found.error = entries, now, None
     return entries[project_id]
+
+
+#: The whole-table form (Brian 2026-11-09 23:02Z: one Save for the table, not
+#: one per row). Each shown row posts ``row.<id>`` (its shown position) beside
+#: ``rank.<id>``, ``next_milestone.<id>``, ``final.<id>`` and, when ticked,
+#: ``complete.<id>``.
+ROW_FIELDS = ("row", "rank", "next_milestone", "final", "complete")
+
+
+def _rank_field(raw: str | None, title: str) -> int | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if not value.isdigit() or not 1 <= int(value) <= 999:
+        raise SaveRefused(f"rank for {title} must be a whole number from 1, not {value!r}")
+    return int(value)
+
+
+def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str,
+             getter: Getter | None = None, putter: Putter | None = None) -> list[str]:
+    """Save every row the table posted, in one write. All or nothing: any
+    bad field refuses the whole save and nothing is written.
+
+    Ranks are positions. Rows whose rank was not changed keep their order;
+    each changed row is then put at the place it asks for (lowest rank
+    first), so typing "2" on a row moves it to second and shifts the rest. A
+    blank rank keeps the row where it was. Rows ticked complete leave the order
+    (to the archive), and the rest are renumbered 1..n. Returns the ids
+    whose entry changed."""
+    from . import planner
+
+    found = store(index)
+    if found is None:
+        raise SaveRefused("the planning board is not configured on this console", 404)
+    ids = [p.id for p in planner.declared(index).projects]
+    titles = {p.id: p.title for p in planner.declared(index).projects}
+    posted: dict[str, dict[str, str]] = {}
+    for name, value in form.items():
+        field, _, pid = name.partition(".")
+        if field not in ROW_FIELDS or not pid:
+            continue
+        if not PROJECT_ID.match(pid) or pid not in ids:
+            raise SaveRefused(f"{pid!r} is not a declared planner project", 404)
+        posted.setdefault(pid, {})[field] = value
+    rows = {pid: f for pid, f in posted.items() if "row" in f}
+    if not rows:
+        raise SaveRefused("nothing to save: the form carried no board rows")
+    parsed: dict[str, tuple[int | None, int | None, str | None, str | None, bool]] = {}
+    for pid, f in rows.items():
+        title = titles.get(pid, pid)
+        shown = _rank_field(f.get("row"), title)
+        parsed[pid] = (_rank_field(f.get("rank"), title), shown,
+                       _form_date(f.get("next_milestone"), f"next milestone for {title}"),
+                       _form_date(f.get("final"), f"final phase date for {title}"),
+                       f.get("complete", "0") not in {"", "0"})
+    decl = found.declaration
+    with _LOCK:
+        try:
+            entries = _entries((getter or _s3_get)(decl.bucket, decl.key), decl)
+        except Exception as exc:  # noqa: BLE001 - nothing was written
+            raise SaveRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
+        prior = _active_order(ids, entries)
+        changed: list[str] = []
+        for pid, (_, _, nxt, fin, complete) in parsed.items():
+            before: Entry = dict(entries.get(pid) or {})
+            entry: Entry = {**before, "next_milestone": nxt, "final": fin}
+            if complete and not before.get("complete"):
+                entry.update(complete=True, completed_at=now, by=actor)
+            elif not complete and before.get("complete"):
+                entry.update(complete=False, completed_at=None, by=None)
+            if any(entry.get(k) != before.get(k)
+                   for k in ("next_milestone", "final", "complete")):
+                entry.update(updated_at=now, updated_by=actor)
+                changed.append(pid)
+            entries[pid] = entry
+
+        keep = [pid for pid in prior if not (entries.get(pid) or {}).get("complete")]
+        moved: list[tuple[int, int, str]] = []
+        for slot, pid in enumerate(keep):
+            if pid in parsed:
+                rank, shown = parsed[pid][0], parsed[pid][1]
+                if rank is not None and rank != (shown or slot + 1):
+                    moved.append((rank, slot, pid))
+        order = [pid for pid in keep if pid not in {m[2] for m in moved}]
+        last: tuple[int, int] | None = None  # (rank, index) of the last insert
+        for rank, _, pid in sorted(moved):
+            at = last[1] + 1 if last and last[0] == rank else rank - 1
+            at = min(at, len(order))
+            order.insert(at, pid)
+            last = (rank, at)
+        order += [pid for pid in ids if pid not in prior
+                  and not (entries.get(pid) or {}).get("complete")]  # reopened: bottom
+        for pid in ids:
+            e = entries.setdefault(pid, {})
+            rank = order.index(pid) + 1 if pid in order else None
+            if e.get("rank") != rank and pid not in changed and pid in parsed:
+                changed.append(pid)
+            e["rank"] = rank
+        doc: dict[str, object] = {"schema_version": SCHEMA_VERSION, "updated_at": now,
+                                  "projects": entries}
+        try:
+            from ..render.json import dumps
+
+            (putter or _s3_put)(decl.bucket, decl.key, dumps(doc).encode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - nothing was written
+            raise SaveRefused(f"could not save {decl.uri}: {str(exc)[:160]}", 502) from None
+        found.entries, found.read_at, found.error = entries, now, None
+    return changed
 
 
 def publish(index: object, now: str, putter: Putter | None = None) -> None:

@@ -68,8 +68,8 @@ def _raw() -> dict[str, Any]:
     ]}
 
 
-def _index(s3: FakeS3) -> Index:
-    raw = _raw()
+def _index(s3: FakeS3, raw: dict[str, Any] | None = None) -> Index:
+    raw = raw or _raw()
     plan = planner.parse(raw)
     idx = Index()
     idx.add_result(git_host.fetch_refs(
@@ -212,7 +212,7 @@ def test_the_planner_json_carries_the_board() -> None:
 def test_sub_issues_page_until_a_short_page() -> None:
     calls: list[str] = []
 
-    def get_json(path: str) -> Any:
+    def get_json(path: str) -> list[dict[str, object]]:
         calls.append(path)
         return [{"number": n, "state": "open"} for n in range(100 if path.endswith("&page=1") else 3)]
 
@@ -227,6 +227,100 @@ def test_an_epic_read_failure_is_unavailable_with_its_reason() -> None:
     assert any("repo-I99" in u and "404" in u for u in result.unavailable)
 
 
+# ------------------------------------------------------- ready for review --
+
+def test_a_project_with_nothing_left_open_is_flagged_for_review() -> None:
+    raw = _raw()
+    raw["projects"].append({"id": "delta", "title": "Delta", "issues": ["repo-I5"]})
+    raw["projects"].append({"id": "eps", "title": "Eps", "milestones": [
+        {"id": "m", "title": "M", "start": "2026-11-01", "target": "2026-11-05",
+         "requires": ["repo-I5"]}]})
+    s3 = FakeS3()
+    idx = _index(s3, raw)
+    b = board.evaluate(idx, date(2026, 11, 9))
+    flagged = {r["id"]: r["review_reason"] for r in b["active"] if r["review"]}
+    assert set(flagged) == {"delta", "eps"} and b["review"] == ["delta", "eps"]
+    assert "no open issues" in (flagged["delta"] or "")
+    assert "milestones met" in (flagged["eps"] or "")
+    # Open work (alpha, beta) or an unreadable epic (gamma) is never flagged.
+    page = render_html.planner_page(idx)
+    assert "2 projects look finished" in page and page.count("ready for your review") == 2
+    # Ticking done clears the flag: an archived project is not up for review.
+    _save(idx, s3, "delta", complete="1")
+    assert board.evaluate(idx, date(2026, 11, 9))["review"] == ["eps"]
+
+
+# ------------------------------------------------------ whole-table save --
+
+def _save_all(idx: Index, s3: FakeS3, **form: str) -> list[str]:
+    return board.save_all(idx, {k.replace("__", "."): v for k, v in form.items()},
+                          "brian@example", "2026-11-09T23:10:00Z", getter=s3.get, putter=s3.put)
+
+
+def _table(**ranks: str) -> dict[str, str]:
+    """The whole table as shown (alpha, beta, gamma at 1, 2, 3), with edits."""
+    shown = {"alpha": "1", "beta": "2", "gamma": "3"}
+    out = {f"row__{p}": n for p, n in shown.items()}
+    out.update({f"rank__{p}": ranks.get(p, n) for p, n in shown.items()})
+    return out
+
+
+def test_one_save_applies_every_row_in_one_write() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    changed = _save_all(idx, s3, **_table(gamma="1"), final__beta="2027-01-31",
+                        next_milestone__alpha="2026-11-20")
+    assert len(s3.puts) == 1
+    assert _order(idx) == ["gamma", "alpha", "beta"]
+    doc = json.loads(s3.body or b"{}")
+    assert doc["projects"]["beta"]["final"] == "2027-01-31"
+    assert doc["projects"]["alpha"]["next_milestone"] == "2026-11-20"
+    assert set(changed) == {"alpha", "beta", "gamma"}
+
+
+def test_a_changed_rank_takes_the_place_and_shifts_the_rest() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    _save_all(idx, s3, **_table(alpha="3"))  # move first to last
+    assert _order(idx) == ["beta", "gamma", "alpha"]
+    _save_all(idx, s3, **{**_table(), "rank__gamma": "1", "rank__alpha": "2",
+                          "row__beta": "1", "row__gamma": "2", "row__alpha": "3",
+                          "rank__beta": "1"})
+    assert _order(idx) == ["gamma", "alpha", "beta"]
+
+
+def test_ticking_done_in_the_table_archives_and_renumbers() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    _save_all(idx, s3, **_table(), complete__alpha="1")
+    b = board.evaluate(idx, date(2026, 11, 9))
+    assert [r["id"] for r in b["active"]] == ["beta", "gamma"]
+    assert [r["id"] for r in b["archive"]] == ["alpha"]
+    doc = json.loads(s3.body or b"{}")
+    assert doc["projects"]["beta"]["rank"] == 1 and doc["projects"]["alpha"]["rank"] is None
+
+
+@pytest.mark.parametrize("form, status", [
+    ({"row__alpha": "1", "rank__alpha": "x"}, 400),
+    ({"row__alpha": "1", "final__alpha": "soon"}, 400),
+    ({"row__nope": "1"}, 404),
+    ({"rank__alpha": "1"}, 400),  # no row marker: nothing to save
+])
+def test_one_bad_field_refuses_the_whole_table(form: dict[str, str], status: int) -> None:
+    s3 = FakeS3()
+    with pytest.raises(board.SaveRefused) as exc:
+        _save_all(_index(s3), s3, **form)
+    assert exc.value.status == status and s3.puts == []
+
+
+def test_the_page_has_one_save_for_the_table() -> None:
+    page = render_html.planner_page(_index(FakeS3()))
+    assert page.count('action="/planner"') == 1
+    assert page.count(">save all changes</button>") == 1
+    assert 'name="rank.alpha"' in page and 'name="final.gamma"' in page
+    assert ">save</button>" not in page
+
+
 # ------------------------------------------------------------------- POST --
 
 @pytest.fixture()
@@ -236,6 +330,9 @@ def live(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
     real = board.save
     monkeypatch.setattr(board, "save", lambda index, pid, form, actor, now, **_:
                         real(index, pid, form, actor, now, getter=s3.get, putter=s3.put))
+    real_all = board.save_all
+    monkeypatch.setattr(board, "save_all", lambda index, form, actor, now, **_:
+                        real_all(index, form, actor, now, getter=s3.get, putter=s3.put))
     server = serve(idx, host="127.0.0.1", port=0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server.server_address[1], s3
@@ -259,6 +356,17 @@ def test_a_same_origin_save_returns_to_the_row(live: tuple[int, FakeS3]) -> None
     status, headers, _ = _post(port, "/planner/beta", "rank=1&next_milestone=2026-11-30",
                                {"Origin": f"http://127.0.0.1:{port}"})
     assert status == 303 and headers["Location"] == "/planner#p-beta" and len(s3.puts) == 1
+
+
+def test_one_post_saves_the_whole_table(live: tuple[int, FakeS3]) -> None:
+    port, s3 = live
+    body = ("row.alpha=1&rank.alpha=1&row.beta=2&rank.beta=2&final.beta=2026-12-31"
+            "&row.gamma=3&rank.gamma=1")
+    status, headers, _ = _post(port, "/planner", body, {"Origin": f"http://127.0.0.1:{port}"})
+    assert status == 303 and headers["Location"] == "/planner#board" and len(s3.puts) == 1
+    doc = json.loads(s3.body or b"{}")
+    assert {k: v["rank"] for k, v in doc["projects"].items()} == {"gamma": 1, "alpha": 2, "beta": 3}
+    assert doc["projects"]["beta"]["final"] == "2026-12-31"
 
 
 def test_a_cross_site_save_is_refused(live: tuple[int, FakeS3]) -> None:

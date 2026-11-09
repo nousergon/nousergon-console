@@ -14344,14 +14344,6 @@
             {
                 "code": "reportUnknownParameterType",
                 "range": {
-                    "startColumn": 4,
-                    "endColumn": 13,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownParameterType",
-                "range": {
                     "startColumn": 12,
                     "endColumn": 18,
                     "lineCount": 1
@@ -15370,22 +15362,6 @@
                 "range": {
                     "startColumn": 34,
                     "endColumn": 35,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownArgumentType",
-                "range": {
-                    "startColumn": 23,
-                    "endColumn": 82,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownArgumentType",
-                "range": {
-                    "startColumn": 23,
-                    "endColumn": 54,
                     "lineCount": 1
                 }
             },

@@ -42,7 +42,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ..model.entity import LABEL_DETAIL
 from ..model.fields import Render, format_value, parse as parse_fields, series_points
@@ -601,7 +601,7 @@ def _safe_tile(index: Any, tile: Tile, variables: Mapping[str, str]) -> dict[str
                 "id": None, "absent": f"tile failed: {type(exc).__name__}: {exc}"}
 
 
-def _sort_key(sort: str, order: tuple[str, ...] = ()):
+def _sort_key(sort: str, order: tuple[str, ...] = ()) -> Callable[[dict[str, Any]], tuple[Any, ...]]:
     desc = sort.startswith("-")
     name = sort.lstrip("-")
     if order:

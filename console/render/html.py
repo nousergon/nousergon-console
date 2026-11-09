@@ -2153,9 +2153,12 @@ def _planning_board(index: Index) -> tuple[str, str]:
         '<th>completed</th><th>by</th><th>final phase</th><th>issues</th><th></th></tr>'
         + "".join(archived) + "</table>") if archived else (
         '<h2>archive</h2><p class="absent">no completed projects yet</p>')
+    copy = (f' (copied each build to <code>{esc(b["published_to"])}</code>'
+            + (f', <strong class="plan-blocker">last copy failed: {esc(b["publish_error"])}</strong>'
+               if b["publish_error"] else "") + ")") if b["published_to"] else ""
     rule = (f'<p class="pane-question">sweep order: {esc(b["sweep_rule"])}; '
-            '<a href="/planner.json">/planner.json</a> <code>board</code> is what the '
-            'evening sweep reads</p>')
+            f'<a href="/planner.json">/planner.json</a> <code>board</code>{copy} is what '
+            'the evening sweep reads</p>')
     return (f'<section class="planning-board"><h2>projects, ranked</h2>{rule}{note}'
             f'{"".join(forms)}{active}</section>',
             f'<section class="planning-board">{archive}</section>')

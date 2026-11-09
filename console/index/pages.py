@@ -170,6 +170,11 @@ class Page:
     sections: tuple[Section, ...]
     range: str = "all"
     variables: tuple[str, ...] = ()
+    #: Variables that open on their NEWEST value rather than on all values
+    #: (`default_newest:`), for a page that reads one day at a time: an order
+    #: book opened with no day picked would mix every saved day in one table.
+    #: The newest value is the last of the sorted options.
+    default_newest: tuple[str, ...] = ()
     #: Declared links shown under the question (the source of truth a page's
     #: numbers come from, the definitions behind them).
     links: tuple[Link, ...] = ()
@@ -421,6 +426,11 @@ def parse(raw: Any, feeds: set[str] | None = None,
             raise PagesConfigError(f"{where}: `{RANGE_PARAM}` is the time range, not a variable")
         if SORT_PARAM in variables:
             raise PagesConfigError(f"{where}: `{SORT_PARAM}` is a table's sort, not a variable")
+        default_newest = _names(p.get("default_newest"), where, "default_newest")
+        stray = [v for v in default_newest if v not in variables]
+        if stray:
+            raise PagesConfigError(f"{where}: `default_newest` names {stray}, "
+                                   "which are not in `variables`")
         section = str(p.get("section") or "other").strip().lower()
         if not _SECTION.match(section):
             raise PagesConfigError(f"{where}: `section` must be a short lowercase name "
@@ -433,7 +443,8 @@ def parse(raw: Any, feeds: set[str] | None = None,
             section=section, product=product,
             sections=tuple(_section(s, f"{where} section #{n}", feeds, ticks)
                            for n, s in enumerate(sections, start=1)),
-            range=rng, variables=variables, links=_links(p.get("links"), where)))
+            range=rng, variables=variables, default_newest=default_newest,
+            links=_links(p.get("links"), where)))
     return tuple(pages)
 
 
@@ -925,6 +936,9 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
     variables = {v: params[v] for v in p.variables if params.get(v)}
     requested_sort = str(params.get(SORT_PARAM) or "").strip() or None
     options = _variable_options(index, p)
+    for v in p.default_newest:
+        if v not in variables and options[v]:
+            variables[v] = options[v][-1]
     # The page's own state minus the sort, for a header's link to carry over.
     query = {**({RANGE_PARAM: rng} if rng != p.range else {}), **variables}
     return {
@@ -932,7 +946,8 @@ def evaluate(index: Any, p: Page, params: Mapping[str, str] | None = None,
         "links": [{"title": link.title, "url": link.url} for link in p.links],
         "range": {"value": rng, "default": p.range, "options": list(RANGES),
                   "since": since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None},
-        "variables": [{"name": v, "value": variables.get(v), "options": options[v]}
+        "variables": [{"name": v, "value": variables.get(v), "options": options[v],
+                       "all": v not in p.default_newest}
                       for v in p.variables],
         "query": query,
         SORT_PARAM: requested_sort,

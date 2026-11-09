@@ -403,6 +403,7 @@ class SubIssue(TypedDict):
     url: str | None
     labels: list[str]
     updated_at: str | None
+    closed_at: str | None
 
 
 def _objects(value: object) -> list[JsonObject]:
@@ -472,6 +473,7 @@ def sub_issue_row(row: Mapping[str, object], repo: str) -> SubIssue:
         url=_opt_str(row.get("html_url")),
         labels=sorted(labels),
         updated_at=_opt_str(row.get("updated_at")),
+        closed_at=_opt_str(row.get("closed_at")),
     )
 
 

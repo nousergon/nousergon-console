@@ -2059,6 +2059,8 @@ def _board_issues(row: "board_types.BoardRow") -> str:
     if row["n_in_progress"]:
         counts += f' · {row["n_in_progress"]} in progress'
     counts += f' · {row["n_closed"]} closed'
+    if row["closed_recent"]:
+        counts += f' · <strong>{len(row["closed_recent"])} closed in {board.RECENT_HOURS}h</strong>'
     unread = "".join(f'<li class="absent">cannot read {esc(e)}</li>'
                      for e in row["unread_epics"])
     if not row["epics"] and not row["n_open"] and not row["n_closed"]:
@@ -2067,6 +2069,10 @@ def _board_issues(row: "board_types.BoardRow") -> str:
     rest = row["open"][board.SHOWN_ISSUES:]
     more = (f'<details><summary>{len(rest)} more open</summary><ul class="board-issues">'
             + "".join(_board_issue(i) for i in rest) + "</ul></details>") if rest else ""
+    if row["closed_recent"]:
+        more += (f'<details><summary>closed in the last {board.RECENT_HOURS}h</summary>'
+                 '<ul class="board-issues">'
+                 + "".join(_board_issue(i) for i in row["closed_recent"]) + "</ul></details>")
     return (f'<span class="board-count">{counts}</span>'
             f'<ul class="board-issues">{unread}{shown}</ul>{more}')
 
@@ -2114,14 +2120,17 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<tr id="p-{esc(r["id"])}">'
             f'<td><input type="number" name="rank" min="1" value="{r["position"]}" '
             f'form="{fid}" class="board-rank" aria-label="rank for {esc(r["title"])}"{disabled}></td>'
+            f'<td class="board-sweep">{r["sweep_position"]}</td>'
             f'<td>{_board_project(r, org)}</td>'
+            f'<td class="board-status board-{esc(r["status"].replace(" ", "-"))}">'
+            f'{esc(r["status"])}<small class="board-hint">{esc(r["status_reason"])}</small></td>'
             f'<td>{_board_issues(r)}</td>'
             + _board_date(r, "next_milestone", "next milestone", fid, disabled)
             + _board_date(r, "final", "final phase", fid, disabled)
             + f'<td><input type="checkbox" name="complete" value="1" form="{fid}" '
             f'aria-label="{esc(r["title"])} complete"{disabled}></td>'
             f'<td><button type="submit" form="{fid}"{disabled}>save</button></td></tr>')
-    head = ("<tr><th>rank</th><th>project</th><th>active issues</th>"
+    head = ("<tr><th>rank</th><th>sweep</th><th>project</th><th>status</th><th>active issues</th>"
             "<th>next milestone</th><th>final phase</th><th>done</th><th></th></tr>")
     active = (f'<table class="plan-table board-table">{head}{"".join(rows)}</table>'
               if rows else '<p class="absent">no active projects</p>')
@@ -2144,7 +2153,10 @@ def _planning_board(index: Index) -> tuple[str, str]:
         '<th>completed</th><th>by</th><th>final phase</th><th>issues</th><th></th></tr>'
         + "".join(archived) + "</table>") if archived else (
         '<h2>archive</h2><p class="absent">no completed projects yet</p>')
-    return (f'<section class="planning-board"><h2>projects, ranked</h2>{note}'
+    rule = (f'<p class="pane-question">sweep order: {esc(b["sweep_rule"])}; '
+            '<a href="/planner.json">/planner.json</a> <code>board</code> is what the '
+            'evening sweep reads</p>')
+    return (f'<section class="planning-board"><h2>projects, ranked</h2>{rule}{note}'
             f'{"".join(forms)}{active}</section>',
             f'<section class="planning-board">{archive}</section>')
 

@@ -27,6 +27,16 @@ token, never a person's API limit), plus its named `issues:` and its
 milestones' required items while open. An epic that cannot be read is named
 as unread, never shown as "no issues".
 
+**The evening sweep reads this board** (Brian 2026-11-09: "projects and
+priorities should come from the planner, priority should be assigned both by
+project importance as well as how behind it is"). Each active row carries a
+``status`` (off track / threatened / on track / no dates) and a
+``sweep_position``: the row's rank, moved up `OFF_TRACK_LIFT` places when it is
+off track or past a board date and `THREATENED_LIFT` when threatened. The rule
+is deliberately small so a reader can redo it from the two numbers shown. In
+return the board shows what the sweep did: each row's issues closed in the
+last `RECENT_HOURS` hours.
+
 **Ranks are a total order.** Saving a row with rank N moves it to position N
 and renumbers every active project 1..n, so two projects never share a rank
 and a rank never has a gap. A completed project leaves the order and is
@@ -39,7 +49,7 @@ import json
 import re
 import threading
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Mapping, TypedDict, cast
 
 from ..adapters.git_host import SubIssue
@@ -56,6 +66,16 @@ PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 IN_PROGRESS_LABEL = "in-progress"
 #: Open issues a board row lists before folding the rest.
 SHOWN_ISSUES = 4
+#: Places an off-track (or past-date) project moves up in the sweep order.
+OFF_TRACK_LIFT = 3
+#: Places a threatened project moves up in the sweep order.
+THREATENED_LIFT = 1
+#: The "what the sweep did" window: issues closed this recently.
+RECENT_HOURS = 24
+OFF_TRACK_WORD = "off track"
+THREATENED_WORD = "threatened"
+ON_TRACK_WORD = "on track"
+NO_DATES_WORD = "no dates"
 
 #: One saved row: rank, dates, complete and who/when, as raw JSON.
 Entry = dict[str, object]
@@ -119,6 +139,9 @@ class BoardRow(TypedDict):
     epics: list[str]
     rank: int | None
     position: int
+    sweep_position: int
+    status: str
+    status_reason: str
     next_milestone: str | None
     final: str | None
     plan_next: str | None
@@ -133,6 +156,7 @@ class BoardRow(TypedDict):
     n_closed: int
     n_in_progress: int
     unread_epics: list[str]
+    closed_recent: list[BoardIssue]
 
 
 class Board(TypedDict):
@@ -144,6 +168,8 @@ class Board(TypedDict):
     unread_epics: list[str]
     active: list[BoardRow]
     archive: list[BoardRow]
+    sweep_order: list[str]
+    sweep_rule: str
 
 
 def parse(planner_raw: object) -> Declaration | None:
@@ -275,17 +301,31 @@ def _named_refs(epic_refs: list[str], issues: list[str],
     return list(dict.fromkeys(named))
 
 
+def _recent(closed_at: str | None, since: datetime) -> bool:
+    if not closed_at:
+        return False
+    try:
+        at = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)) >= since
+
+
 def _project_issues(index: object, epic_refs: list[str], named: list[str],
-                    read: Epics, blocker_labels: tuple[str, ...]
-                    ) -> tuple[list[BoardIssue], int, list[str]]:
+                    read: Epics, blocker_labels: tuple[str, ...], since: datetime
+                    ) -> tuple[list[BoardIssue], int, list[str], list[BoardIssue]]:
     from . import planner
 
     open_items: dict[str, BoardIssue] = {}
     closed: set[str] = set()
+    recent: dict[str, BoardIssue] = {}
     for epic in epic_refs:
         for row in read.rows.get(epic, []):
             if row["closed"]:
                 closed.add(row["ref"])
+                if _recent(row["closed_at"], since):
+                    recent[row["ref"]] = _issue(row["ref"], row["title"], row["url"],
+                                                [], [], blocker_labels)
             else:
                 open_items.setdefault(row["ref"], _issue(
                     row["ref"], row["title"], row["url"], row["labels"], [], blocker_labels))
@@ -296,6 +336,9 @@ def _project_issues(index: object, epic_refs: list[str], named: list[str],
             continue
         if item.get("closed"):
             closed.add(ref)
+            if _recent(_opt_str(item.get("closed_at")), since):
+                recent.setdefault(ref, _issue(ref, _opt_str(item.get("title")),
+                                              _opt_str(item.get("url")), [], [], blocker_labels))
         elif ref not in open_items:
             open_items[ref] = _issue(
                 ref, _opt_str(item.get("title")), _opt_str(item.get("url")),
@@ -305,7 +348,39 @@ def _project_issues(index: object, epic_refs: list[str], named: list[str],
     ordered = sorted(open_items.values(),
                      key=lambda i: (not i["in_progress"], i["blocker"] is None))
     closed -= set(open_items)
-    return ordered, len(closed), [e for e in epic_refs if e not in read.rows]
+    return (ordered, len(closed), [e for e in epic_refs if e not in read.rows],
+            [i for r, i in recent.items() if r not in open_items])
+
+
+def _status(milestones: list[Mapping[str, object]], late: list[str]) -> tuple[str, str]:
+    """The row's schedule status and why: the worst unmet milestone state on
+    the calendar, and any board date already past."""
+    from . import planner
+
+    states = {str(m.get("state")): str(m.get("title")) for m in milestones
+              if m.get("state") != planner.MET}
+    if planner.OFF_TRACK in states or late:
+        why = ([f"milestone {states[planner.OFF_TRACK]!r} off track"]
+               if planner.OFF_TRACK in states else []) + [f"{x} date passed" for x in late]
+        return OFF_TRACK_WORD, "; ".join(why)
+    if planner.THREATENED in states:
+        return THREATENED_WORD, f"milestone {states[planner.THREATENED]!r} threatened"
+    if planner.ON_TRACK in states or planner.UNREPORTED in states:
+        return ON_TRACK_WORD, "dated milestones on track"
+    return NO_DATES_WORD, "no open dated milestone"
+
+
+def _sweep_order(active: list[BoardRow]) -> list[str]:
+    def key(r: BoardRow) -> tuple[int, int]:
+        lift = (OFF_TRACK_LIFT if r["status"] == OFF_TRACK_WORD else
+                THREATENED_LIFT if r["status"] == THREATENED_WORD else 0)
+        return (r["position"] - lift, r["position"])
+
+    return [r["id"] for r in sorted(active, key=key)]
+
+
+SWEEP_RULE = (f"rank, moved up {OFF_TRACK_LIFT} places when off track or past a "
+              f"board date and {THREATENED_LIFT} when threatened")
 
 
 def _plan_dates(milestones: list[Mapping[str, object]]) -> tuple[str | None, str | None]:
@@ -317,12 +392,15 @@ def _plan_dates(milestones: list[Mapping[str, object]]) -> tuple[str | None, str
     return (pending[0] if pending else None), (finals[-1] if finals else None)
 
 
-def evaluate(index: object, today: date | None = None) -> Board:
+def evaluate(index: object, today: date | None = None,
+             now: datetime | None = None) -> Board:
     """The board: active projects in rank order, then the archive. Pure over
     the built index and the store read with it."""
     from . import planner
 
-    today = today or date.today()
+    now = now or datetime.now(timezone.utc)
+    today = today or now.date()
+    since = now - timedelta(hours=RECENT_HOURS)
     plan = planner.declared(index)
     projects = cast(list[Mapping[str, object]], planner.evaluate(index, now=today))
     found = store(index)
@@ -342,13 +420,15 @@ def evaluate(index: object, today: date | None = None) -> Board:
         complete = bool(e.get("complete"))
         late = [label for label, d in (("next milestone", nxt), ("final phase", fin))
                 if d and not complete and d < today.isoformat()]
-        open_items, n_closed, unread = _project_issues(
+        open_items, n_closed, unread, recent = _project_issues(
             index, epic_refs, _named_refs(epic_refs, issues, milestones), read,
-            plan.blocker_labels)
+            plan.blocker_labels, since)
+        status, status_reason = _status(milestones, late)
         rows[pid] = BoardRow(
             id=pid, title=str(p["title"]), url=str(p["url"]),
             tracker=_opt_str(p.get("tracker")), owner=_opt_str(p.get("owner")),
-            epics=epic_refs, rank=_rank(e.get("rank")), position=0,
+            epics=epic_refs, rank=_rank(e.get("rank")), position=0, sweep_position=0,
+            status=status, status_reason=status_reason,
             next_milestone=nxt, final=fin, plan_next=plan_next, plan_final=plan_final,
             overdue=late, complete=complete,
             completed_at=_opt_str(e.get("completed_at")) if complete else None,
@@ -356,11 +436,14 @@ def evaluate(index: object, today: date | None = None) -> Board:
             updated_at=_opt_str(e.get("updated_at")),
             open=open_items, n_open=len(open_items), n_closed=n_closed,
             n_in_progress=sum(1 for i in open_items if i["in_progress"]),
-            unread_epics=unread,
+            unread_epics=unread, closed_recent=recent,
         )
     active = [rows[i] for i in _active_order(ids, entries)]
     for pos, r in enumerate(active, start=1):
         r["position"] = pos
+    sweep = _sweep_order(active)
+    for r in active:
+        r["sweep_position"] = sweep.index(r["id"]) + 1
     archive = sorted((r for r in rows.values() if r["complete"]),
                      key=lambda r: r["completed_at"] or "", reverse=True)
     return Board(
@@ -370,7 +453,7 @@ def evaluate(index: object, today: date | None = None) -> Board:
         error=found.error if found else None,
         read_at=found.read_at if found else None,
         unread_epics=list(read.unread),
-        active=active, archive=archive,
+        active=active, archive=archive, sweep_order=sweep, sweep_rule=SWEEP_RULE,
     )
 
 

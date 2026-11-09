@@ -197,6 +197,12 @@ input, select, textarea { max-width: 100%; }
 .board-count { font-size: .9rem; font-variant-numeric: tabular-nums; }
 .board-hint { display: block; opacity: .7; font-size: .8rem; }
 .board-wip { color: var(--plan-on-track); font-weight: 600; }
+.board-sweep { font-variant-numeric: tabular-nums; text-align: center; }
+.board-status { white-space: nowrap; font-weight: 600; }
+.board-status .board-hint { font-weight: 400; white-space: normal; max-width: 14rem; }
+.board-off-track { color: var(--plan-off-track); }
+.board-threatened { color: var(--plan-threatened); }
+.board-on-track { color: var(--plan-on-track); }
 @media (max-width: 40rem) {
   .plan-table th { display: none; }
   .plan-table tr { display: block; margin-bottom: .7rem; }

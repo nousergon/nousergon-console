@@ -24,8 +24,8 @@ that project to validate that it's complete."
 **Issues are read live.** A project's active work is every OPEN sub-issue of
 its declared epics (one REST call per epic per cache window, on the box's App
 token, never a person's API limit), plus its named `issues:` and its
-milestones' required items while open. An epic that cannot be read is named
-as unread, never shown as "no issues".
+milestones' required items while open. An epic or named issue that cannot be
+read is named as unread, never shown as "no issues".
 
 **The evening sweep reads this board** (Brian 2026-11-09: "projects and
 priorities should come from the planner, priority should be assigned both by
@@ -164,6 +164,7 @@ class BoardRow(TypedDict):
     n_open: int
     n_closed: int
     n_in_progress: int
+    #: Unreadable epics and named issues.
     unread_epics: list[str]
     closed_recent: list[BoardIssue]
     review: bool
@@ -342,6 +343,7 @@ def _project_issues(index: object, epic_refs: list[str], named: list[str],
     open_items: dict[str, BoardIssue] = {}
     closed: set[str] = set()
     recent: dict[str, BoardIssue] = {}
+    unread_named: list[str] = []
     for epic in epic_refs:
         for row in read.rows.get(epic, []):
             if row["closed"]:
@@ -356,6 +358,7 @@ def _project_issues(index: object, epic_refs: list[str], named: list[str],
         item = cast(Mapping[str, object],
                     planner._item(index, ref, blocker_labels))  # pyright: ignore[reportPrivateUsage]
         if not item.get("readable"):
+            unread_named.append(ref)
             continue
         if item.get("closed"):
             closed.add(ref)
@@ -371,7 +374,8 @@ def _project_issues(index: object, epic_refs: list[str], named: list[str],
     ordered = sorted(open_items.values(),
                      key=lambda i: (not i["in_progress"], i["blocker"] is None))
     closed -= set(open_items)
-    return (ordered, len(closed), [e for e in epic_refs if e not in read.rows],
+    unread = [e for e in epic_refs if e not in read.rows]
+    return (ordered, len(closed), unread + [r for r in unread_named if r not in unread],
             [i for r, i in recent.items() if r not in open_items])
 
 
@@ -404,7 +408,7 @@ def _review(milestones: list[Mapping[str, object]], n_open: int, n_closed: int,
     """Why an active project looks finished and needs Brian's review before
     he ticks done (Brian 2026-11-09 23:04Z), or ``None``. Evidence only:
     every dated milestone met and no open issue left on its epics or named
-    refs. An unreadable epic is never evidence of done."""
+    refs. An unreadable epic or named issue is never evidence of done."""
     from . import planner
 
     if unread or n_open:

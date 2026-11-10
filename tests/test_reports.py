@@ -195,6 +195,28 @@ def test_other_feeds_are_linked_and_addressable():
     assert "<h1>Weekly</h1>" in weekly and 'href="/reports/daily">Daily report</a>' in weekly
 
 
+def test_landing_page_lists_the_newest_report_of_every_feed():
+    # Brian 2026-11-10: /reports carries several reports a day (Director,
+    # console operator), so the landing page shows each feed's newest first.
+    from console.server.app import _html
+
+    feeds = {"feeds": FEEDS["feeds"] + [
+        {"id": "operator", "title": "Operator report", "facets": {"report": "operator"}}]}
+    index = _index(feeds=feeds)
+    landing = _html(index, resolve("/reports"))
+    assert "latest from every feed (2)" in landing
+    assert "Daily report · Thu 10/15 daily report" in landing
+    assert "Operator report</a>: no report yet — no row matches" in landing
+    assert landing.index("latest from every feed") < landing.index("<h2>last 14 days")
+    # A single feed's own page, and a one-feed console, carry no such block.
+    assert "latest from every feed" not in _html(index, resolve("/reports/daily"))
+    assert "latest from every feed" not in _html(_index(), resolve("/reports"))
+    doc = render_json.payload(index, resolve("/reports"))
+    assert [(r["id"], (r["latest"] or {}).get("id")) for r in doc["latest_by_feed"]] == [
+        ("daily", "report:2026-10-15:daily"), ("operator", None)]
+    assert "latest_by_feed" not in render_json.payload(index, resolve("/reports/daily"))
+
+
 # ------------------------------------------------- routes and representations --
 
 def test_routes_resolve():

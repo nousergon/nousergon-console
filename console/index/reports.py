@@ -34,6 +34,13 @@ decision before scrolling through the rest. The report itself is never edited:
 the section is shown twice, once on its own and once in place. A source with no
 row, no readable text, or no matching heading says which.
 
+**`/reports` opens on the newest report of EVERY feed.** Brian, 2026-11-10:
+the reports page carries several reports a day (the Director's morning report,
+the console operator's report, ...). With more than one feed declared, the
+landing page lists each feed's newest report as one collapsed row, feed title
+first, above the first feed's own view — so a reader sees every report that
+landed today without knowing which feed to open (`latest_by_feed`).
+
 **Absence renders as itself.** A selector that matches no row says so, naming
 the selector; a row whose text could not be carried says that, with a link to
 its row — never an empty article.
@@ -363,3 +370,15 @@ def evaluate(index: Any, f: Feed, now: datetime | None = None) -> dict[str, Any]
         "matched": len(rows), "lead": _lead_block(index, f),
         "latest": latest, "recent": recent, "older": older,
     }
+
+
+def latest_by_feed(index: Any) -> list[dict[str, Any]]:
+    """Every declared feed's newest report (with its text), in declaration
+    order; `latest` is None for a feed whose selector matches no row, so the
+    absence renders named rather than dropped. Pure over the built index."""
+    out = []
+    for f in declared(index):
+        rows = _newest_first(index, f)
+        out.append({"id": f.id, "title": f.title, "url": f.url, "selector": f.selector,
+                    "latest": _row(rows[0][1], rows[0][0], True) if rows else None})
+    return out

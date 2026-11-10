@@ -159,6 +159,9 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
                "feeds": [{"id": f.id, "title": f.title, "url": f.url}
                          for f in reports.declared(index)],
                "feed": reports.evaluate(index, found) if found else None}
+        if req.feed_id is None:
+            # The landing page's "latest from every feed" (Brian 2026-11-10).
+            doc["latest_by_feed"] = reports.latest_by_feed(index)
     elif req.view == "planner-project":
         from ..index import planner
 

@@ -30,6 +30,13 @@ touched, every generated href passes the same scheme check above, and the link
 text is the text as written. Nothing is stored, so a document already in the
 source gets links the next time it is rendered.
 
+**Headings carry GitHub's anchor ids.** ``## Notes, part 2`` gets
+``id=notes-part-2`` (lower case, punctuation dropped, spaces to
+hyphens, a repeat suffixed ``-1``, ``-2``…), so a report's in-page links such as
+``[see](#notes-part-2)`` work on the console exactly as they do on GitHub. The id
+is derived from the heading's text, never taken from the author, and is
+attribute-escaped like every other value.
+
 GFM tables and strikethrough are on, because the reports this was built for
 use tables throughout. ``markdown-it-py`` is a CommonMark-compliant parser
 with no runtime dependencies beyond ``mdurl``; when it is not importable the
@@ -41,7 +48,7 @@ from __future__ import annotations
 import html
 import re
 from functools import lru_cache
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 
 from ..index.citations import Citations
 
@@ -67,6 +74,36 @@ def _table_close(self: Any, tokens: list, idx: int, options: Any, env: Any) -> s
     return self.renderToken(tokens, idx, options, env) + "</div>"
 
 
+#: Characters GitHub drops from a heading when it makes the anchor.
+_NOT_SLUG = re.compile(r"[^\w\- ]", re.UNICODE)
+
+
+def heading_slug(text: str) -> str:
+    """GitHub's anchor for a heading's plain text: lower case, punctuation
+    other than ``-`` and ``_`` removed, each space a hyphen."""
+    return _NOT_SLUG.sub("", text.strip().lower()).replace(" ", "-")
+
+
+def _heading_ids(state: Any) -> None:  # pyright: ignore[reportExplicitAny] -- markdown-it's StateCore
+    """Core rule: give every heading an ``id`` from its inline text, made
+    unique within the document the way GitHub does (``x``, ``x-1``, ``x-2``)."""
+    from markdown_it.token import Token
+
+    tokens = cast(list[Token], state.tokens)
+    seen: dict[str, int] = {}
+    for i, tok in enumerate(tokens):
+        if tok.type != "heading_open" or i + 1 >= len(tokens):
+            continue
+        children = tokens[i + 1].children or []
+        text = "".join(c.content for c in children if c.type in ("text", "code_inline"))
+        base = heading_slug(text)
+        if not base:
+            continue
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        tok.attrSet("id", base if n == 0 else f"{base}-{n}")
+
+
 @lru_cache(maxsize=1)
 def _parser() -> Any:
     from markdown_it import MarkdownIt
@@ -80,6 +117,7 @@ def _parser() -> Any:
     # After `text_join`, so escaped characters and entities are already one
     # text run with their neighbours.
     md.core.ruler.push("citation_links", _link_citations)
+    md.core.ruler.push("heading_ids", _heading_ids)
     return md
 
 

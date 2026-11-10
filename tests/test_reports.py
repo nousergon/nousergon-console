@@ -135,7 +135,7 @@ def test_page_renders_one_collapsed_row_per_report_and_archive_links():
     # the newest first; the full text sits inside the row.
     latest = html.split('<details class="report report-row report-latest">', 1)[1]
     latest = latest.split("</details>", 1)[0]
-    assert "<h1>Report 2026-10-15</h1>" in latest and "<strong>green</strong>" in latest
+    assert '<h1 id="report-2026-10-15">Report 2026-10-15</h1>' in latest and "<strong>green</strong>" in latest
     assert html.count('<details class="report report-row') == 13
     assert "<details open" not in html and "<article" not in html.split("report-rows", 1)[1]
     assert html.index("report-latest") < html.index('<details class="report report-row">')

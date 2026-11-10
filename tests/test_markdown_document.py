@@ -61,8 +61,8 @@ def test_a_markdown_document_renders_headings_lists_tables_and_code():
     page = _page(REPORT)
     assert '<div class="document markdown">' in page
     assert '<pre class="document">' not in page
-    assert "<h1>Evening plan 2026-10-05</h1>" in page
-    assert "<h2>Steps</h2>" in page
+    assert '<h1 id="evening-plan-2026-10-05">Evening plan 2026-10-05</h1>' in page
+    assert '<h2 id="steps">Steps</h2>' in page
     assert "<strong>tomorrow</strong>" in page
     assert "<li>one with <code>code</code></li>" in page
     assert "<s>dropped</s>" in page
@@ -160,7 +160,7 @@ def test_a_cut_markdown_document_says_so_and_still_renders():
     page = _page("## Head\n\n| a |\n|---|\n| 1 |", truncated=True, bytes=900000)
     assert "document cut" in page and "900000 bytes" in page
     assert page.index("document cut") < page.index('<div class="document markdown">')
-    assert "<h2>Head</h2>" in page
+    assert '<h2 id="head">Head</h2>' in page
 
 
 def test_without_a_markdown_renderer_the_text_is_shown_escaped_and_says_so(monkeypatch):
@@ -181,4 +181,36 @@ def test_without_a_markdown_renderer_the_text_is_shown_escaped_and_says_so(monke
         markdown._parser.cache_clear()
     assert "markdown renderer unavailable" in page
     assert '<pre class="document"># x &lt;script&gt;</pre>' in page
-    assert markdown.render("# x") == "<h1>x</h1>\n"
+    assert markdown.render("# x") == '<h1 id="x">x</h1>\n'
+
+
+# ----------------------------------------------------------- heading anchors --
+
+def test_headings_get_github_anchor_ids_so_in_page_links_work():
+    out = markdown.render("## Appendix D. Every number, traced\n\n"
+                          "### D1. Summary and trial table\n\n"
+                          "See [D1](#d1-summary-and-trial-table).\n")
+    assert out is not None
+    assert '<h2 id="appendix-d-every-number-traced">' in out
+    assert '<h3 id="d1-summary-and-trial-table">' in out
+    assert '<a href="#d1-summary-and-trial-table">D1</a>' in out
+
+
+def test_repeated_headings_are_suffixed_like_github():
+    out = markdown.render("## Notes\n\n## Notes\n\n## Notes\n")
+    assert out is not None
+    assert out.count('id="notes"') == 1
+    assert 'id="notes-1"' in out and 'id="notes-2"' in out
+
+
+def test_a_heading_id_cannot_carry_markup():
+    out = markdown.render('## a"><script>x</script> `b`\n')
+    assert out is not None
+    assert "<script>" not in out
+    assert 'id="ascriptxscript-b"' in out
+
+
+def test_heading_slug_matches_github():
+    assert markdown.heading_slug("E3. Beta correlation") == "e3-beta-correlation"
+    assert markdown.heading_slug("Appendix G. Where everything is stored") == "appendix-g-where-everything-is-stored"
+    assert markdown.heading_slug("2.1 Trials against the bars") == "21-trials-against-the-bars"

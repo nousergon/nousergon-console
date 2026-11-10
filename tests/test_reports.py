@@ -214,7 +214,7 @@ def test_landing_page_lists_the_newest_report_of_every_feed():
     doc = render_json.payload(index, resolve("/reports"))
     assert [(r["id"], (r["latest"] or {}).get("id")) for r in doc["latest_by_feed"]] == [
         ("daily", "report:2026-10-15:daily"), ("operator", None)]
-    assert "latest_by_feed" not in render_json.payload(index, resolve("/reports/daily"))
+    assert render_json.payload(index, resolve("/reports/daily"))["latest_by_feed"] is None
 
 
 # ------------------------------------------------- routes and representations --

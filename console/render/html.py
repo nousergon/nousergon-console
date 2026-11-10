@@ -2081,12 +2081,22 @@ def _board_issues(row: "board_types.BoardRow") -> str:
 
 def _board_date(row: "board_types.BoardRow", key: str, label: str, form: str,
                 disabled: str) -> str:
-    value = (row["next_milestone"] if key == "next_milestone" else row["final"]) or ""
-    plan = row["plan_next"] if key == "next_milestone" else row["plan_final"]
-    hint = (f'<small class="board-hint">plan {esc(plan)}</small>'
-            if plan and plan != value else "")
+    """One date box. Brian's own date when he set one; otherwise the planned
+    milestone date pre-filled and marked "from plan" (saving leaves an
+    untouched plan date unstored, so it keeps following the calendar)."""
+    mine = (row["next_milestone"] if key == "next_milestone" else row["final"]) or ""
+    plan = (row["plan_next"] if key == "next_milestone" else row["plan_final"]) or ""
+    value = mine or plan
+    if not mine and plan:
+        hint = '<small class="board-hint">from plan</small>'
+    elif plan and plan != mine:
+        hint = f'<small class="board-hint">plan {esc(plan)}</small>'
+    elif not value:
+        hint = '<small class="board-hint">no dated milestone</small>'
+    else:
+        hint = ""
     late = (' <strong class="plan-blocker">overdue</strong>'
-            if value and label in row["overdue"] else "")
+            if mine and label in row["overdue"] else "")
     return (f'<td><input type="date" name="{esc(key)}.{esc(row["id"])}" value="{esc(value)}" form="{form}" '
             f'aria-label="{esc(label)} for {esc(row["title"])}"{disabled}>{late}{hint}</td>')
 

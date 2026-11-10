@@ -648,6 +648,8 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
                        _form_date(f.get("next_milestone"), f"next milestone for {title}"),
                        _form_date(f.get("final"), f"final phase date for {title}"),
                        f.get("complete", "0") not in {"", "0"})
+    plans = {str(p["id"]): _plan_dates(cast(list[Mapping[str, object]], p.get("milestones") or []))
+             for p in cast(list[Mapping[str, object]], planner.evaluate(index))}
     decl = found.declaration
     with _LOCK:
         try:
@@ -658,6 +660,14 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
         changed: list[str] = []
         for pid, (_, _, nxt, fin, complete) in parsed.items():
             before: Entry = dict(entries.get(pid) or {})
+            # The page pre-fills an unset box with the planned date. Posting it
+            # back unchanged is not Brian setting a date: keep it unstored so
+            # it keeps following the calendar.
+            plan_next, plan_final = plans.get(pid, (None, None))
+            if nxt is not None and nxt == plan_next and not before.get("next_milestone"):
+                nxt = None
+            if fin is not None and fin == plan_final and not before.get("final"):
+                fin = None
             entry: Entry = {**before, "next_milestone": nxt, "final": fin}
             if complete and not before.get("complete"):
                 entry.update(complete=True, completed_at=now, by=actor)

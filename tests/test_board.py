@@ -262,6 +262,28 @@ def test_a_project_with_nothing_left_open_is_flagged_for_review() -> None:
     assert board.evaluate(idx, date(2026, 11, 9))["review"] == ["eps"]
 
 
+# ------------------------------------------------------ planned dates --
+
+def test_an_unset_date_box_shows_the_planned_date() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    page = render_html.planner_page(idx)
+    # alpha's next unmet milestone is m2 (2026-12-15); its last is also 12-15.
+    assert 'name="next_milestone.alpha" value="2026-12-15"' in page
+    assert 'name="final.alpha" value="2026-12-15"' in page
+    assert "from plan" in page and "no dated milestone" in page  # beta has none
+
+
+def test_saving_a_prefilled_plan_date_does_not_store_it() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    _save_all(idx, s3, **_table(), next_milestone__alpha="2026-12-15",
+              final__alpha="2027-01-31")
+    doc = json.loads(s3.body or b"{}")
+    assert doc["projects"]["alpha"]["next_milestone"] is None  # still follows the plan
+    assert doc["projects"]["alpha"]["final"] == "2027-01-31"  # Brian's own date
+
+
 # ------------------------------------------------------ whole-table save --
 
 def _save_all(idx: Index, s3: FakeS3, **form: str) -> list[str]:

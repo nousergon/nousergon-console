@@ -25,10 +25,11 @@ rather than an old one softened away.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, cast
 
 from ..diagnose import doctor
 from ..index.graph import Index
+from ..model.entity import Entity
 from ..model.kinds import Kind
 from ..render.html import is_exception
 from ..search.resolve import search
@@ -61,7 +62,7 @@ class Question:
         return BUDGETS[self.budget_class]
 
 
-def _first(index: Index, kind: Kind):
+def _first(index: Index, kind: Kind) -> Entity | None:
     entities = index.of_kind(kind)
     return entities[0] if entities else None
 
@@ -227,7 +228,8 @@ def _q_provenance_on_an_artifact(index: Index) -> int | None:
 
 
 def _q_provenance_on_the_index_itself(index: Index) -> int:
-    return 0 if index.build_info is not None else _BROKEN
+    # Preserve the runtime presence check even though Index initializes BuildInfo.
+    return 0 if cast(object, index.build_info) is not None else _BROKEN
 
 
 def _q_provenance_on_a_merged_field(index: Index) -> int | None:
@@ -274,7 +276,7 @@ def measure(index: Index) -> dict[str, object]:
     is excluded from the denominator (§5.3) rather than counted either way —
     the number states what it actually checked this pass.
     """
-    results = []
+    results: list[dict[str, object]] = []
     for q in QUESTIONS:
         cost = q.run(index)
         if cost is None:

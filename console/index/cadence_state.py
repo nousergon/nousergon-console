@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime, timezone
+from typing import SupportsFloat, SupportsIndex, cast
 
 from ..model.entity import Entity
 from ..model.kinds import COMPONENT_STATE_KINDS, State
@@ -119,7 +120,7 @@ def _observer_cadence_seconds(ent: Entity) -> float:
     return float(cadence) if cadence else 0.0
 
 
-def _is_observed_silent(detail: dict) -> bool:
+def _is_observed_silent(detail: dict[str, object]) -> bool:
     """Did a source actually READ a window and find zero, or is this a bare row?
 
     A registry-only row has neither key. Requiring both is what stops a
@@ -130,20 +131,23 @@ def _is_observed_silent(detail: dict) -> bool:
     if _INVOCATIONS not in detail or _WINDOW not in detail:
         return False
     try:
-        return float(detail[_INVOCATIONS]) == 0.0
+        # Detail is free-form; float performs the existing runtime validation.
+        return float(cast("str | bytes | bytearray | SupportsFloat | SupportsIndex",
+                          detail[_INVOCATIONS])) == 0.0
     except (TypeError, ValueError):
         return False
 
 
-def _positive(value) -> float | None:
+def _positive(value: object) -> float | None:
     try:
-        out = float(value)
+        # Keep float's conversion and exception handling for free-form detail.
+        out = float(cast("str | bytes | bytearray | SupportsFloat | SupportsIndex", value))
     except (TypeError, ValueError):
         return None
     return out if out > 0 else None
 
 
-def _silence_minutes(last_invocation, now: datetime | None) -> float | None:
+def _silence_minutes(last_invocation: object, now: datetime | None) -> float | None:
     if not last_invocation:
         return None
     try:

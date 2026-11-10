@@ -29,8 +29,10 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta, timezone
+from collections.abc import Mapping
+from typing import Any, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .model.kinds import COMPONENT_STATE_KINDS, Kind, State
 
@@ -382,12 +384,23 @@ def format_shape(value: Any, spec: dict[str, Any]) -> Any:
     - ``pairs``: a list of mappings becomes ``"a: x · b: y"``, each item's
       ``key`` key then its ``value`` key; ``value_format: cents`` writes each
       value as money (a journal entry's postings). An empty list is ``"none"``.
+    - ``day``: an ISO timestamp becomes the calendar DATE it fell on in the
+      declared ``tz`` (an IANA zone, default UTC), written with
+      ``date_format`` (a ``strftime`` spec, default ISO). A bare ISO date is
+      already a calendar date and is only reformatted. A list of mappings
+      takes each item's ``item`` key and keeps the EARLIEST instant, so a
+      document that carries only per-order stamps still names the day its
+      first order went out. ``2026-11-09T16:36:45Z`` with
+      ``tz: America/New_York`` and ``date_format: "%a %m-%d"`` is
+      ``"Mon 11-09"``.
 
     A value of the wrong shape, or an unknown `format`, is returned unchanged,
     so it still renders as itself rather than vanishing. A null never reaches
     here: `absent` (or the page's own "no value") is what a null renders as.
     """
     fmt = spec.get("format")
+    if fmt == "day":
+        return _day(value, spec)
     if fmt == "length" and isinstance(value, (list, dict)):
         return len(value)
     if fmt == "cents" and _is_int(value):
@@ -441,8 +454,12 @@ def build_fields(path_root: dict, fields_config: dict[str, Any] | None,
     for fname, spec in (fields_config or {}).items():
         # `path` defaults to the field's own name (nousergon-console#79): the
         # overwhelmingly common case is a field named after the key it reads.
-        val = get_path(path_root, spec.get("path", fname))
-        if val is None and spec.get("absent") is not None:
+        # A LIST of paths is an ordered fallback: the first non-null wins.
+        val = _first_present(path_root, spec.get("path", fname))
+        override = _override(cast(Mapping[str, object], path_root), spec.get("overrides"))
+        if override is not None:
+            val = override
+        elif val is None and spec.get("absent") is not None:
             val = str(spec["absent"])
         elif spec.get("format") is not None:
             val = format_shape(val, spec)
@@ -668,3 +685,89 @@ def _cents(v: int) -> float:
     """Exact cents to currency units: Decimal, so 10 cents is 0.1, never 0.1000000001."""
     from decimal import Decimal
     return float(Decimal(v) / 100)
+
+
+def _instant(raw: object) -> datetime | date | None:
+    """An ISO timestamp as an aware datetime (naive reads as UTC), a bare ISO
+    date as a date, anything else None."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    text = raw.strip()
+    if len(text) == 10:
+        try:
+            return date.fromisoformat(text)
+        except ValueError:
+            return None
+    try:
+        ts = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
+def _day(value: object, spec: Mapping[str, object]) -> object:
+    """`format: day` (see `format_shape`). Unchanged when nothing parses or
+    the zone is unknown, so a malformed stamp still renders as itself."""
+    try:
+        zone = ZoneInfo(str(spec.get("tz") or "UTC"))
+    except (ZoneInfoNotFoundError, ValueError):
+        return value
+    found: datetime | date | None
+    original = value
+    if isinstance(value, list):
+        item = str(spec.get("item", "at"))
+        rows = cast(list[object], value)
+        stamps = [_instant(cast(dict[str, object], row).get(item))
+                  for row in rows if isinstance(row, dict)]
+        moments = [t for t in stamps if isinstance(t, datetime)]
+        days = [t for t in stamps if t is not None]
+        found = min(moments) if moments else (min(days) if days else None)
+    else:
+        found = _instant(value)
+    if found is None:
+        return original
+    day = found.astimezone(zone).date() if isinstance(found, datetime) else found
+    try:
+        return day.strftime(str(spec.get("date_format") or "%Y-%m-%d"))
+    except ValueError:
+        return day.isoformat()
+
+
+def _is_empty(v: object) -> bool:
+    if v is None or v == "":
+        return True
+    if isinstance(v, (list, dict)):
+        return len(cast(list[object] | dict[object, object], v)) == 0
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0
+
+
+def _override(path_root: Mapping[str, object], overrides: object) -> str | None:
+    """A field's declared `overrides`: an ordered list of
+    ``{path, empty: true | equals: <value or list>, text}``; the FIRST entry
+    whose condition holds replaces the field's value with its `text`.
+
+    It exists so a value that would be read as one fact is shown as the fact
+    the source says it is: a trading session that placed no orders still
+    carries the date it ran, and without this the page would label that date
+    a trading day (``{path: summary.n_orders, empty: true, text: held}``).
+    ``empty`` matches null, ``""``, ``0`` and an empty list or mapping;
+    ``equals`` compares as text. An entry naming no condition never matches.
+    """
+    if not isinstance(overrides, list):
+        return None
+    for raw in cast(list[object], overrides):
+        if not isinstance(raw, dict):
+            continue
+        entry = cast(dict[str, object], raw)
+        text = entry.get("text")
+        if text is None:
+            continue
+        v: object = get_path(path_root, str(entry.get("path", "")))
+        if entry.get("empty") is True and _is_empty(v):
+            return str(text)
+        if "equals" in entry:
+            want = entry["equals"]
+            wanted = cast(list[object], want) if isinstance(want, list) else [want]
+            if v is not None and str(v) in {str(w) for w in wanted}:
+                return str(text)
+    return None

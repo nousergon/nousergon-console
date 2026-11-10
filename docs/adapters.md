@@ -846,7 +846,14 @@ a unit. `format: cents` writes an integer count of cents as currency units
 currency `unit`. `format: pairs` writes a list of mappings as
 `"a: x · b: y"` (each row's `key`, then its `value`), with
 `value_format: cents` writing each value as money; use it with `render: text`.
-`absent` is the
+`format: day` writes an ISO timestamp as the calendar date it fell on in
+`tz` (an IANA zone, default UTC), in `date_format` (`strftime`, default ISO);
+a bare ISO date is only reformatted, and a list of mappings keeps the
+earliest of each row's `item` stamp. `path` may be a list, first non-null
+wins (`[calendar_date, orders]`). `overrides` is an ordered list of
+`{path, empty: true | equals: <value or list>, text}`; the first that holds
+replaces the value with `text`, so a session that placed no orders reads
+`held` rather than as a dated trading day. `absent` is the
 text a null renders as (`"not recorded"`), so a night the source never
 recorded does not read as zero. A value of the wrong shape renders unchanged.
 

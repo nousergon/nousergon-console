@@ -50,9 +50,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, TypedDict
 
 from ..model.entity import DOCUMENT_DETAIL, LABEL_DETAIL
+
+if TYPE_CHECKING:
+    from .graph import Index
 
 #: The question the reports panes answer, rendered on them (§4.4) and held
 #: here so the pane registry, the HTML heading and the JSON cannot drift.
@@ -121,6 +124,15 @@ class Feed:
 
 
 EMPTY: tuple[Feed, ...] = ()
+
+
+class FeedLatest(TypedDict):
+    """One feed's newest report, as `/reports` lists it (`latest_by_feed`)."""
+    id: str
+    title: str
+    url: str
+    selector: str
+    latest: dict[str, object] | None
 
 
 # ------------------------------------------------------------- declaration --
@@ -372,13 +384,15 @@ def evaluate(index: Any, f: Feed, now: datetime | None = None) -> dict[str, Any]
     }
 
 
-def latest_by_feed(index: Any) -> list[dict[str, Any]]:
+def latest_by_feed(index: Index) -> list[FeedLatest]:
     """Every declared feed's newest report (with its text), in declaration
     order; `latest` is None for a feed whose selector matches no row, so the
     absence renders named rather than dropped. Pure over the built index."""
-    out = []
+    out: list[FeedLatest] = []
     for f in declared(index):
         rows = _newest_first(index, f)
-        out.append({"id": f.id, "title": f.title, "url": f.url, "selector": f.selector,
-                    "latest": _row(rows[0][1], rows[0][0], True) if rows else None})
+        latest: dict[str, object] | None = (
+            _row(rows[0][1], rows[0][0], True) if rows else None)
+        out.append(FeedLatest(id=f.id, title=f.title, url=f.url, selector=f.selector,
+                              latest=latest))
     return out

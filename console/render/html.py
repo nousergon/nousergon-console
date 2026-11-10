@@ -2372,14 +2372,15 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
     today = ""
     if feed_id is None and len(feeds) > 1:
         # Brian 2026-11-10: the landing page carries every report of the day.
-        rows = []
+        rows: list[str] = []
         for item in reports.latest_by_feed(index):
-            if item["latest"] is None:
+            newest = item["latest"]
+            if newest is None:
                 rows.append(f'<p class="absent"><a href="{esc(item["url"])}">'
                             f'{esc(item["title"])}</a>: no report yet — no row matches '
                             f'<code>{esc(item["selector"])}</code></p>')
                 continue
-            row = dict(item["latest"], label=f'{item["title"]} · {item["latest"]["label"]}')
+            row = {**newest, "label": f'{item["title"]} · {newest["label"]}'}
             rows.append(_report_row(row, links))
         today = (f'<h2>latest from every feed ({len(feeds)})</h2>'
                  f'<div class="report-rows report-today">{"".join(rows)}</div>')

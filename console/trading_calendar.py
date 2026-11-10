@@ -15,11 +15,20 @@ callable instead of relying on this default.
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Sized
+from typing import Callable, Protocol, cast
 
 #: date string (YYYY-MM-DD) -> is this a trading day. Injectable so tests run
 #: hermetically with no live calendar library (groom-sweep §8.1).
 TradingDayChecker = Callable[[str], bool]
+
+
+class _Calendar(Protocol):
+    def valid_days(self, *, start_date: str, end_date: str) -> Sized: ...
+
+
+class _CalendarModule(Protocol):
+    def get_calendar(self, name: str) -> _Calendar: ...
 
 
 def default_trading_day_checker() -> TradingDayChecker | None:
@@ -29,11 +38,13 @@ def default_trading_day_checker() -> TradingDayChecker | None:
     is a trading day (the same refusal `pipeline_reliability` already makes).
     """
     try:
-        import pandas_market_calendars as mcal  # type: ignore
+        import pandas_market_calendars as mcal
     except ImportError:
         return None
 
-    calendar = mcal.get_calendar("XNYS")
+    # The optional library has no local typing information; describe only
+    # the calendar API used here.
+    calendar = cast(_CalendarModule, mcal).get_calendar("XNYS")
     _cache: dict[str, bool] = {}
 
     def checker(date_str: str) -> bool:

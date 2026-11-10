@@ -1109,8 +1109,10 @@ def history_page(index: Index, ent: Entity, window_hours: int,
     else:
         bound = (f' requested {result["requested_hours"]}h, bounded to {result["effective_hours"]}h by source retention'
                  if result["bounded"] else f' {result["effective_hours"]}h retained window')
-        count = len(result["points"])
-        table = (_history_table(result["points"], now) if count
+        # history.query() returns a free-form result dict (dict[str, object]); "points" is its list of observation dicts.
+        points = cast("list[dict[str, object]]", result["points"])
+        count = len(points)
+        table = (_history_table(points, now) if count
                  else '<p class="absent">no observations in this retained window</p>')
         body = (f'<p>history window:{esc(bound)} · {count} observation{"" if count == 1 else "s"}'
                 f'</p><p>window: {windows}</p>{table}')

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from console.adapters import yaml_directory
 from console.model.envelope import AdapterStatus
@@ -26,6 +27,28 @@ def test_facets_mapped_from_identity_fields():
     alpha = next(e for e in result.entities if e.id == "comp-alpha")
     assert alpha.facets.get("substrate") == "lambda"
     assert alpha.facets.get("repo") == "example-repo"
+
+
+def test_pipeline_mapped_to_facet(tmp_path: Path) -> None:
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-x\nowner: x\npipeline: weekly-freshness-preflight\n"
+    )
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert result.entities[0].facets["pipeline"] == "weekly-freshness-preflight"
+
+
+def test_missing_pipeline_has_no_facet(tmp_path: Path) -> None:
+    (tmp_path / "c.yaml").write_text("component_id: comp-x\nowner: x\n")
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert "pipeline" not in result.entities[0].facets
+
+
+def test_unknown_pipeline_has_no_facet(tmp_path: Path) -> None:
+    (tmp_path / "c.yaml").write_text(
+        "component_id: comp-x\nowner: x\npipeline: unknown\n"
+    )
+    result = yaml_directory.fetch({"path": str(tmp_path), "id_field": "component_id"})
+    assert "pipeline" not in result.entities[0].facets
 
 
 def test_missing_directory_is_failed_state_not_exception():

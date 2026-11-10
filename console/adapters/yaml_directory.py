@@ -272,6 +272,7 @@ def _facets(row: dict[str, Any]) -> dict[str, str]:
         ("owning_repo", "repo"),
         ("lifecycle", "lifecycle"),
         ("authority_tier", "authority_tier"),
+        ("pipeline", "pipeline"),
     ):
         val = row.get(field_name)
         if isinstance(val, str) and val and val != "unknown":

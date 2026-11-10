@@ -2369,6 +2369,21 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
               f'{f["recent_days"]} days are shown here, newest first; every older '
               f'report is listed by date below and opens on its own page. '
               f'Nothing is deleted.</p>')
+    today = ""
+    if feed_id is None and len(feeds) > 1:
+        # Brian 2026-11-10: the landing page carries every report of the day.
+        rows: list[str] = []
+        for item in reports.latest_by_feed(index):
+            newest = item["latest"]
+            if newest is None:
+                rows.append(f'<p class="absent"><a href="{esc(item["url"])}">'
+                            f'{esc(item["title"])}</a>: no report yet — no row matches '
+                            f'<code>{esc(item["selector"])}</code></p>')
+                continue
+            row = {**newest, "label": f'{item["title"]} · {newest["label"]}'}
+            rows.append(_report_row(row, links))
+        today = (f'<h2>latest from every feed ({len(feeds)})</h2>'
+                 f'<div class="report-rows report-today">{"".join(rows)}</div>')
     latest = f["latest"]
     if latest is None:
         body = (f'<p class="absent">no report yet — no row matches '
@@ -2396,6 +2411,7 @@ def reports_page(index: Index, feed_id: str | None = None) -> str:
 {index_freshness(index)}
 {switcher}
 {window}
+{today}
 {_report_lead(f.get("lead"), links)}
 {body}
 </body></html>"""

@@ -229,6 +229,18 @@ def test_an_epic_read_failure_is_unavailable_with_its_reason() -> None:
 
 # ------------------------------------------------------- ready for review --
 
+def test_an_unreadable_named_issue_prevents_review() -> None:
+    raw = _raw()
+    raw["projects"].append({"id": "zeta", "title": "Zeta",
+                            "issues": ["repo-I5", "repo-I98"]})
+    b = board.evaluate(_index(FakeS3(), raw), date(2026, 11, 9))
+    row = next(r for r in b["active"] if r["id"] == "zeta")
+    assert row["review"] is False
+    assert row["review_reason"] is None
+    assert "zeta" not in b["review"]
+    assert "repo-I98" in row["unread_epics"]
+
+
 def test_a_project_with_nothing_left_open_is_flagged_for_review() -> None:
     raw = _raw()
     raw["projects"].append({"id": "delta", "title": "Delta", "issues": ["repo-I5"]})

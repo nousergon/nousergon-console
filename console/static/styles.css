@@ -203,6 +203,7 @@ input, select, textarea { max-width: 100%; }
 .board-status { white-space: nowrap; font-weight: 600; }
 .board-status .board-hint { font-weight: 400; white-space: normal; max-width: 14rem; }
 .board-off-track { color: var(--plan-off-track); }
+.board-unreported { color: var(--plan-unreported); }
 .board-threatened { color: var(--plan-threatened); }
 .board-on-track { color: var(--plan-on-track); }
 @media (max-width: 40rem) {

@@ -30,12 +30,12 @@ as unread, never shown as "no issues".
 **The evening sweep reads this board** (Brian 2026-11-09: "projects and
 priorities should come from the planner, priority should be assigned both by
 project importance as well as how behind it is"). Each active row carries a
-``status`` (off track / threatened / on track / no dates) and a
+``status`` (off track / unreported / threatened / on track / no dates) and a
 ``sweep_position``: the row's rank, moved up `OFF_TRACK_LIFT` places when it is
-off track or past a board date and `THREATENED_LIFT` when threatened. The rule
-is deliberately small so a reader can redo it from the two numbers shown. In
-return the board shows what the sweep did: each row's issues closed in the
-last `RECENT_HOURS` hours.
+off track or past a board date and `THREATENED_LIFT` when unreported or
+threatened. The rule is deliberately small so a reader can redo it from the
+two numbers shown. In return the board shows what the sweep did: each row's
+issues closed in the last `RECENT_HOURS` hours.
 
 **Ranks are a total order.** Saving a row with rank N moves it to position N
 and renumbers every active project 1..n, so two projects never share a rank
@@ -73,6 +73,7 @@ THREATENED_LIFT = 1
 #: The "what the sweep did" window: issues closed this recently.
 RECENT_HOURS = 24
 OFF_TRACK_WORD = "off track"
+UNREPORTED_WORD = "unreported"
 THREATENED_WORD = "threatened"
 ON_TRACK_WORD = "on track"
 NO_DATES_WORD = "no dates"
@@ -385,9 +386,15 @@ def _status(milestones: list[Mapping[str, object]], late: list[str]) -> tuple[st
         why = ([f"milestone {states[planner.OFF_TRACK]!r} off track"]
                if planner.OFF_TRACK in states else []) + [f"{x} date passed" for x in late]
         return OFF_TRACK_WORD, "; ".join(why)
+    if planner.UNREPORTED in states:
+        milestone = next(m for m in reversed(milestones)
+                         if m.get("state") == planner.UNREPORTED)
+        reason = milestone.get("reason")
+        why = f"milestone {states[planner.UNREPORTED]!r} unreported"
+        return UNREPORTED_WORD, f"{why}: {reason}" if reason else why
     if planner.THREATENED in states:
         return THREATENED_WORD, f"milestone {states[planner.THREATENED]!r} threatened"
-    if planner.ON_TRACK in states or planner.UNREPORTED in states:
+    if planner.ON_TRACK in states:
         return ON_TRACK_WORD, "dated milestones on track"
     return NO_DATES_WORD, "no open dated milestone"
 
@@ -413,14 +420,14 @@ def _review(milestones: list[Mapping[str, object]], n_open: int, n_closed: int,
 def _sweep_order(active: list[BoardRow]) -> list[str]:
     def key(r: BoardRow) -> tuple[int, int]:
         lift = (OFF_TRACK_LIFT if r["status"] == OFF_TRACK_WORD else
-                THREATENED_LIFT if r["status"] == THREATENED_WORD else 0)
+                THREATENED_LIFT if r["status"] in (UNREPORTED_WORD, THREATENED_WORD) else 0)
         return (r["position"] - lift, r["position"])
 
     return [r["id"] for r in sorted(active, key=key)]
 
 
 SWEEP_RULE = (f"rank, moved up {OFF_TRACK_LIFT} places when off track or past a "
-              f"board date and {THREATENED_LIFT} when threatened")
+              f"board date and {THREATENED_LIFT} when unreported or threatened")
 
 
 def _plan_dates(milestones: list[Mapping[str, object]]) -> tuple[str | None, str | None]:

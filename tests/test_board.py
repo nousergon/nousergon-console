@@ -392,6 +392,32 @@ def test_status_and_sweep_order_lift_projects_that_are_behind() -> None:
     assert "next milestone date passed" in b["active"][2]["status_reason"]
 
 
+def test_unreported_milestone_is_not_on_track_and_gets_a_sweep_lift() -> None:
+    from datetime import datetime, timezone
+
+    raw = _raw()
+    raw["projects"].append({
+        "id": "theta", "title": "Theta", "milestones": [
+            {"id": "t1", "title": "T1", "start": "2026-11-01", "target": "2026-12-20",
+             "requires": ["repo-I98"]}]})
+    idx = _index(FakeS3(), raw)
+    now = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
+    b = board.evaluate(idx, now=now)
+    theta = next(r for r in b["active"] if r["id"] == "theta")
+    assert theta["status"] == "unreported"
+    assert "T1" in theta["status_reason"]
+    assert "cannot read repo-I98" in theta["status_reason"]
+    assert theta["position"] == 4
+    # A one-place lift ties gamma at 3; the existing rank breaks the tie.
+    assert b["sweep_order"] == ["alpha", "beta", "gamma", "theta"]
+    assert "unreported" in b["sweep_rule"]
+    # The lift also keeps theta ahead of an off-track row lifted from sixth.
+    gamma = b["active"][2]
+    gamma["position"] = 6
+    gamma["status"] = board.OFF_TRACK_WORD
+    assert board._sweep_order([gamma, theta]) == ["theta", "gamma"]  # pyright: ignore[reportPrivateUsage]
+
+
 def test_issues_closed_in_the_last_day_show_what_the_sweep_did() -> None:
     from datetime import datetime, timezone
 

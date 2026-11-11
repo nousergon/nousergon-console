@@ -45,6 +45,7 @@ import logging
 import re
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -169,6 +170,9 @@ class Listing:
     declaration: Declaration
     actions: tuple[Action, ...] = ()
     read_at: str | None = None
+    #: When the tracker read behind this list began (`time.monotonic`): a
+    #: tick accepted after it is not in the list yet (`listing`).
+    read_started: float = 0.0
     error: str | None = None
     #: Recently closed actions, newest first: the done archive. A failed read
     #: of it says so (``archive_error``) and never fails the open list.
@@ -759,6 +763,7 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     "nothing to do"."""
     call = request or _http
     base = decl.api_url.rstrip("/")
+    started = time.monotonic()
     try:
         tok = token or _mint(decl.token_command, decl)
         seen: dict[int, Action] = {}
@@ -796,7 +801,7 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     actions = tuple(sorted(seen.values(), key=lambda a: (
         not a.actionable, a.due is None, a.due or "", a.created_at or "", a.number)))
     archive, archive_error = _archive(decl, call, tok, base)
-    return (Listing(declaration=decl, actions=actions, read_at=now,
+    return (Listing(declaration=decl, actions=actions, read_at=now, read_started=started,
                     archive=archive, archive_error=archive_error, truncated=truncated),
             AdapterResult(name=SOURCE_NAME, status=AdapterStatus.OK,
                           claim_class=ClaimClass.OBSERVATION, fetched_at=now))
@@ -841,8 +846,39 @@ def attach(index: Any, listing: Listing | None) -> None:
     setattr(index, _ATTR, listing)
 
 
+#: Ticks the tracker accepted, as {issue number: (done, monotonic time)}. A
+#: rebuild reads the tracker for seconds before its index replaces the live
+#: one, so a tick made in that window is missing from the new list and the
+#: ruled row came back (Brian 2026-11-11: "decisions I've already decided on
+#: have reappeared"). `listing` re-applies every tick newer than the read
+#: behind the list it returns; entries older than an hour are dropped.
+_ACCEPTED: dict[int, tuple[bool, float]] = {}
+_ACCEPTED_TTL = 3600.0
+
+
+def _remember(number: int, done: bool) -> None:
+    now = time.monotonic()
+    with _MARK_LOCK:
+        for n in [n for n, (_, t) in _ACCEPTED.items() if now - t > _ACCEPTED_TTL]:
+            del _ACCEPTED[n]
+        _ACCEPTED[number] = (done, now)
+
+
 def listing(index: Any) -> Listing | None:
-    return getattr(index, _ATTR, None)
+    found: Listing | None = getattr(index, _ATTR, None)
+    if found is None or not _ACCEPTED:
+        return found
+    with _MARK_LOCK:
+        later = {n: d for n, (d, t) in _ACCEPTED.items() if t >= found.read_started}
+        if later and any(a.number in later and a.done != later[a.number] for a in found.actions):
+            labels_done = found.declaration.done_label
+            found.actions = tuple(
+                replace(a, done=later[a.number],
+                        labels=tuple(sorted(set(a.labels) - {labels_done}
+                                            | ({labels_done} if later[a.number] else set()))))
+                if a.number in later else a
+                for a in found.actions)
+    return found
 
 
 # ------------------------------------------------------------------ write ---
@@ -959,6 +995,7 @@ def mark(index: Any, number: int, done: bool) -> Action:
     """Reflect a tick the tracker accepted in the list already read, so the
     page answering the POST shows it. The next rebuild re-reads the tracker
     and replaces this list whole; nothing here outlives that."""
+    _remember(number, done)
     found = listing(index)
     assert found is not None
     labels_done = found.declaration.done_label

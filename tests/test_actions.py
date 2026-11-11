@@ -898,3 +898,25 @@ def test_a_decision_without_a_brief_says_so():
     idx, _ = _index(issues=[_issue(7, body=_RULING)])
     page = render_html.actions_page(idx)
     assert "No brief written for this one yet" in page
+
+
+# ------------------------------------------- a tick racing a rebuild ---
+
+def test_a_tick_made_while_a_rebuild_reads_is_not_undone_by_it():
+    d = actions.parse(DECL)
+    # The rebuild's read begins, and only then is the tick accepted.
+    stale, result = actions.read(d, "2026-11-04T12:00:00Z",
+                                 request=FakeHost([_issue(1), _issue(2)]))
+    idx, _ = _index(issues=[_issue(1), _issue(2)])
+    actions.tick(idx, 1, True, None, request=FakeHost([]))
+    rebuilt = Index()
+    rebuilt.add_result(result)
+    actions.attach(rebuilt, stale)
+    rebuilt.finalize()
+    found = actions.listing(rebuilt)
+    assert [a.number for a in found.todo] == [2]
+    # A read that began after the tick is the tracker's word, untouched.
+    fresh, _ = actions.read(d, "2026-11-04T12:01:00Z", request=FakeHost([_issue(1)]))
+    later = Index()
+    actions.attach(later, fresh)
+    assert [a.number for a in actions.listing(later).todo] == [1]

@@ -594,6 +594,70 @@
   // still, brings the rest (Brian 2026-11-06: a re-read right after a tick
   // undid what he had done in the seconds since).
 
+  // A ruling (Brian 2026-11-11): the pick saves in the background like a
+  // tick. The card stays where it is and only its own buttons lock; the
+  // reader keeps scrolling to the next decision. Confirmed, the card says
+  // which option was saved; refused, it says why and the buttons come back.
+  function optionUi(form) {
+    var card = form.closest("article.decision");
+    var btn = form.querySelector("button");
+    var buttons = card ? card.querySelectorAll(".decision-options button") : [btn];
+    var choice = form.querySelector('input[name="choice"]');
+    var letter = choice ? choice.value : "";
+    var text = btn.querySelector(".decision-text");
+    function clearError() {
+      var old = card && card.querySelector(".tick-error");
+      if (old) old.parentNode.removeChild(old);
+    }
+    function lock(on) {
+      for (var i = 0; i < buttons.length; i++) buttons[i].disabled = on;
+    }
+    return {
+      optimistic: function () {
+        clearError();
+        lock(true);
+        btn.setAttribute("aria-busy", "true");
+        btn.classList.add("decision-picked");
+        if (card) card.classList.add("decision-pending");
+      },
+      confirm: function () {
+        btn.removeAttribute("aria-busy");
+        if (!card) return;
+        card.classList.remove("decision-pending");
+        card.classList.add("decision-ruled");
+        var done = document.createElement("p");
+        done.className = "decision-saved";
+        done.setAttribute("role", "status");
+        done.textContent = "Ruled " + letter + (text ? ": " + text.firstChild.textContent.trim() : "") +
+          ". Saved to the issue.";
+        var opts = card.querySelector(".decision-options");
+        if (opts) opts.parentNode.insertBefore(done, opts);
+      },
+      rollback: function (message) {
+        btn.removeAttribute("aria-busy");
+        btn.classList.remove("decision-picked");
+        if (card) card.classList.remove("decision-pending");
+        lock(false);
+        clearError();
+        var err = document.createElement("p");
+        err.className = "tick-error";
+        err.setAttribute("role", "alert");
+        err.textContent = message;
+        (card || form).appendChild(err);
+      }
+    };
+  }
+
+  document.addEventListener("submit", function (ev) {
+    var form = ev.target;
+    if (!form.classList || !form.classList.contains("action-option")) return;
+    if (!window.fetch || !window.URLSearchParams || !window.FormData) return;  // plain post
+    ev.preventDefault();
+    var btn = form.querySelector("button");
+    if (!btn || btn.disabled) return;
+    tickFlow(optionUi(form), function () { return sendTick(form); }, ticks);
+  });
+
   document.addEventListener("submit", function (ev) {
     var form = ev.target;
     if (!form.classList || !form.classList.contains("action-tick")) return;

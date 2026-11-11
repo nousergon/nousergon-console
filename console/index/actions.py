@@ -136,6 +136,15 @@ class Action:
     #: filer recommends, or None.
     options: tuple[tuple[str, str], ...] = ()
     recommended: str | None = None
+    #: Everything the reader needs to decide, in 2-4 sentences (`brief`), and
+    #: whether the filer wrote it as a ``**Brief:**`` (else it is the Ask or
+    #: the first paragraph, which may not be enough on its own).
+    brief: str = ""
+    brief_declared: bool = False
+    #: Why the recommended option, from the Recommendation line.
+    rec_reason: str = ""
+    #: Where to read more, as (url, label): the ``**Links:**`` paragraph.
+    links: tuple[tuple[str, str], ...] = ()
 
     @property
     def has_step(self) -> bool:
@@ -556,6 +565,74 @@ def recommended(body: str | None) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+#: The most a brief shows: four sentences is about this long.
+BRIEF_CHARS = 700
+_FIELD = r"^\s*(?:\*\*{name}:?\*\*:?|#+\s*{name}\s*$)\s*(?P<rest>.*)$"
+_URL = re.compile(r"https://[^\s)>\]]+")
+_MD_LINK = re.compile(r"\[(?P<t>[^\]]+)\]\((?P<u>https://[^\s)]+)\)")
+
+
+def _field(body: str, name: str) -> str | None:
+    """One bold-labelled (``**Name:**``) or headed (``## Name``) paragraph:
+    the label's own line plus what follows up to a blank line or the next
+    bold label. None when the issue has no such field."""
+    m = re.search(_FIELD.format(name=name), body, re.MULTILINE | re.IGNORECASE)
+    if not m:
+        return None
+    text = m.group("rest")
+    for line in body[m.end():].splitlines()[1:]:
+        if not line.strip():
+            if text.strip():
+                break
+            continue
+        if line.lstrip().startswith(("**", "#")):
+            break
+        text += " " + line.strip()
+    return " ".join(text.split()) or None
+
+
+def _plain(text: str, limit: int) -> str:
+    text = _MD_LINK.sub(lambda m: m.group("t"), text)
+    text = " ".join(_MD_NOISE.sub("", text).split())
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0] + "…"
+    return text
+
+
+def brief(body: str | None) -> tuple[str, bool]:
+    """What the reader needs to decide (Brian 2026-11-11: "a 2-4 sentence
+    description of everything I need to know"): the ``**Brief:**`` the filer
+    wrote, else the ``**Ask:**``, else the first paragraph. The flag is True
+    only for a declared brief."""
+    b = str(body or "")
+    declared = _field(b, "Brief")
+    if declared:
+        return _plain(declared, BRIEF_CHARS), True
+    ask = _field(b, "Ask")
+    return (_plain(ask, BRIEF_CHARS) if ask else summary(b)), False
+
+
+def rec_reason(body: str | None) -> str:
+    """The Recommendation line after its letter: why that option."""
+    text = _field(str(body or ""), "Recommendation") or ""
+    text = re.sub(r"^\(?[A-H]\)?\b\s*[—–:.,-]*\s*", "", text)
+    return _plain(text, 300)
+
+
+def links(body: str | None) -> tuple[tuple[str, str], ...]:
+    """Where to read more: every link in the ``**Links:**`` paragraph, named
+    by its markdown text or else by its path."""
+    text = _field(str(body or ""), "Links") or ""
+    out: list[tuple[str, str]] = []
+    for m in _MD_LINK.finditer(text):
+        out.append((m.group("u"), m.group("t")))
+    bare = _MD_LINK.sub("", text)
+    for m in _URL.finditer(bare):
+        u = m.group(0).rstrip(".,;")
+        out.append((u, u.split("://", 1)[1].split("/", 1)[-1][:60]))
+    return tuple(out[:8])
+
+
 def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
@@ -578,6 +655,10 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         command_labels=tuple(lab for lab, _ in command_steps(issue.get("body"))),
         options=options(issue.get("body")),
         recommended=recommended(issue.get("body")),
+        brief=brief(issue.get("body"))[0],
+        brief_declared=brief(issue.get("body"))[1],
+        rec_reason=rec_reason(issue.get("body")),
+        links=links(issue.get("body")),
     )
 
 
@@ -639,12 +720,12 @@ _TRUSTED_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 def _comment_options(decl: Declaration, actions: list[Action], call: Request,
-                     tok: str, base: str) -> dict[int, tuple[tuple[tuple[str, str], ...], str | None]]:
+                     tok: str, base: str) -> dict[int, Action]:
     """Options for open actions whose BODY gives no step, read from the newest
     trusted comment that offers them (a ruling restated as lettered options in
     a comment, aec 2026-11-11). One read per such action; an unreadable one
     keeps its "no step" warning rather than guessing."""
-    out: dict[int, tuple[tuple[tuple[str, str], ...], str | None]] = {}
+    out: dict[int, Action] = {}
     for a in actions:
         if a.has_step or not a.actionable:
             continue
@@ -661,7 +742,12 @@ def _comment_options(decl: Declaration, actions: list[Action], call: Request,
             body = str(c.get("body") or "")
             opts = options(body)
             if opts:
-                out[a.number] = (opts, recommended(body))
+                text, declared = brief(body)
+                out[a.number] = replace(
+                    a, options=opts, recommended=recommended(body), rec_reason=rec_reason(body),
+                    brief=text if declared else a.brief,
+                    brief_declared=declared or a.brief_declared,
+                    links=links(body) or a.links)
                 break
     return out
 
@@ -703,7 +789,7 @@ def read(decl: Declaration, now: str, request: Request | None = None,
                        prs=tuple((u, r, states.get(u)) for u, r, _ in a.prs))
             for n, a in seen.items()}
     ruled = _comment_options(decl, list(seen.values()), call, tok, base)
-    seen = {n: (replace(a, options=ruled[n][0], recommended=ruled[n][1]) if n in ruled else a)
+    seen = {n: ruled.get(n, a)
             for n, a in seen.items()}
     # Actionable first; within that, the soonest due date first, undated
     # after, oldest first among equals.

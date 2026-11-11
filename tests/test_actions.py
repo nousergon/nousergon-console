@@ -863,3 +863,38 @@ def test_options_from_an_outside_commenter_put_no_buttons_on_the_page():
 def test_an_unreadable_comment_list_keeps_the_no_step_warning():
     a = _read_with_comments(RuntimeError("HTTP 502"))
     assert a.options == () and not a.has_step
+
+
+# ------------------------------------------------------- decision cards ---
+
+_BRIEFED = """Context the filer wrote.
+
+**Brief:** The trader refused a session because two pointers disagreed. Option A keeps paging; B retries once. Retrying costs nothing when the forecast already exists.
+
+**Links:** [the incident](https://example.test/inc) https://example.test/runbook
+
+**Options:**
+- A) Keep paging.
+- B) Retry once, then page.
+
+**Recommendation:** B — it saves the session and still pages when the retry fails.
+"""
+
+
+def test_a_decision_is_a_card_with_its_brief_links_and_why():
+    idx, _ = _index(issues=[_issue(9, body=_BRIEFED)])
+    a = actions.listing(idx).decisions[0]
+    assert a.brief_declared and a.brief.startswith("The trader refused")
+    assert a.rec_reason.startswith("it saves the session")
+    assert [u for u, _ in a.links] == ["https://example.test/inc", "https://example.test/runbook"]
+    page = render_html.actions_page(idx)
+    card = page[page.index('<article id="a9"'):page.index("</article>")]
+    assert "The trader refused" in card and "No brief written" not in card
+    assert 'href="https://example.test/inc">the incident</a>' in card
+    assert "Why B:" in card and 'class="decision-option decision-rec"' in card
+
+
+def test_a_decision_without_a_brief_says_so():
+    idx, _ = _index(issues=[_issue(7, body=_RULING)])
+    page = render_html.actions_page(idx)
+    assert "No brief written for this one yet" in page

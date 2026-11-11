@@ -323,3 +323,21 @@ tr.tick-arrived > td { background: var(--off); transition: background 1.5s; }
 .tick-error { display: block; margin-top: 0.2rem; font-size: 0.75rem; color: var(--bad); white-space: normal; }
 .notice { background: var(--surface); border: 1px solid var(--border); border-radius: .5rem; padding: .5rem .8rem; }
 .muted { color: var(--muted); font-size: .85rem; }
+
+/* Decisions on /actions (Brian 2026-11-11: readable cards, a brief, links). */
+article.decision { border: 1px solid var(--border); border-radius: .6rem; background: var(--surface);
+  padding: .9rem 1rem; margin: 0 0 1rem; max-width: 52rem; }
+.decision-title { font-size: 1.05rem; margin: 0 0 .2rem; line-height: 1.35; }
+.decision-brief { margin: .6rem 0 .4rem; line-height: 1.5; }
+.decision-links { margin: .3rem 0 .7rem; font-size: .9rem; overflow-wrap: anywhere; }
+.decision-options { display: flex; flex-direction: column; gap: .45rem; }
+.decision-options form { margin: 0; }
+.decision-option { display: flex; gap: .7rem; align-items: flex-start; width: 100%; text-align: left;
+  font: inherit; color: inherit; background: var(--bg, transparent); border: 1px solid var(--border);
+  border-radius: .5rem; padding: .55rem .75rem; line-height: 1.45; }
+button.decision-option { cursor: pointer; }
+button.decision-option:hover, button.decision-option:focus-visible { border-color: var(--focus); }
+.decision-rec { border-width: 2px; border-color: var(--good, var(--focus)); }
+.decision-letter { font-weight: 700; min-width: 1.2rem; }
+.decision-text { flex: 1; }
+.decision-why { margin: .6rem 0 0; font-size: .9rem; line-height: 1.45; }

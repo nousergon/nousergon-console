@@ -2708,6 +2708,44 @@ def _action_options(a: "Action", writable: bool) -> str:
     return '<div class="action-run">Decide:<ul class="action-options">' + "".join(items) + "</ul></div>"
 
 
+def _decision_card(a: "Action", writable: bool, today: str) -> str:
+    """One ruling as a readable card (Brian 2026-11-11: the table was
+    unreadable): the question, a 2-4 sentence brief, where to read more, then
+    one full-width button per option with the recommended one marked and why."""
+    head = (f'<h3 class="decision-title"><a href="{esc(a.url)}">{esc(a.title)}</a></h3>'
+            f'<div class="muted">{esc(a.ref)} · opened {as_of_html(a.created_at)}'
+            + (f" · due {_action_due(a, today)}" if a.due else "") + "</div>")
+    if a.brief:
+        body = f'<p class="decision-brief">{esc(a.brief)}</p>'
+        if not a.brief_declared:
+            body += ('<p class="muted">No brief written for this one yet; this is the '
+                     'issue\'s own opening. Agents are adding briefs.</p>')
+    else:
+        body = '<p class="muted">No brief yet: read the issue.</p>'
+    more = [(a.url, "the issue")] + [(u, r) for u, r, _ in a.prs] + list(a.links)
+    body += ('<p class="decision-links">More: '
+             + " · ".join(f'<a href="{esc(u)}">{esc(t)}</a>' for u, t in more) + "</p>")
+    opts: list[str] = []
+    for letter, text in a.options:
+        rec = letter == a.recommended
+        label = (f'<span class="decision-letter">{esc(letter)}</span>'
+                 f'<span class="decision-text">{esc(text.replace("`", ""))}'
+                 + (' <span class="chip state-healthy">recommended</span>' if rec else "")
+                 + "</span>")
+        cls = "decision-option" + (" decision-rec" if rec else "")
+        if writable:
+            opts.append(f'<form method="post" action="/actions/{a.number}" class="action-option">'
+                        '<input type="hidden" name="done" value="1">'
+                        f'<input type="hidden" name="choice" value="{esc(letter)}">'
+                        f'<button type="submit" class="{cls}">{label}</button></form>')
+        else:
+            opts.append(f'<div class="{cls}">{label}</div>')
+    why = (f'<p class="decision-why"><strong>Why {esc(a.recommended)}:</strong> '
+           f'{esc(a.rec_reason)}</p>' if a.recommended and a.rec_reason else "")
+    return (f'<article id="a{a.number}" class="decision">{head}{body}'
+            f'<div class="decision-options">{"".join(opts)}</div>{why}</article>')
+
+
 def _action_ask(a: "Action", writable: bool = False) -> str:
     """The ask, spelled out (Brian 2026-11-05): every PR to merge, linked,
     then every command to run, each in its own copy box. The row is one line
@@ -2809,8 +2847,8 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             # with neither is off the list and shown apart, with agents.
             if decisions:
                 body += ("<h2>Decisions</h2>"
-                         '<p class="muted">Pick one option; the ruling is written to the issue.</p>'
-                         + _actions_table(decisions, decl, today))
+                         '<p class="muted">Tap one option; the ruling is written to the issue.</p>'
+                         + "".join(_decision_card(a, decl.writable, today) for a in decisions))
             if steps:
                 body += ("<h2>Commands and PRs</h2>"
                          + _actions_table(steps, decl, today))

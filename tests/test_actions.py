@@ -807,7 +807,22 @@ def test_a_row_with_no_command_pr_or_options_says_so_on_the_page():
     idx, _ = _index(issues=[_issue(8, body="Something broke.\n\nMore.")])
     assert not actions.listing(idx).actions[0].has_step
     page = render_html.actions_page(idx)
-    assert "No command, PR or options on this issue" in page
+    assert "No command, PR or options yet: agents are working it" in page
+    # Off the to-do list, listed apart so it never falls off the map.
+    assert "0 to do · 0 done · 1 with agents" in page
+    assert page.index('class="actions-waiting"') < page.index("/8")
+
+
+def test_decisions_come_first_then_commands_and_prs():
+    idx, _ = _index(issues=[_issue(1, body="Run:\n\n```\necho hi\n```"),
+                            _issue(7, body=_RULING), _issue(8, body="Nothing yet.")])
+    found = actions.listing(idx)
+    assert [a.number for a in found.decisions] == [7]
+    assert [a.number for a in found.steps] == [1]
+    assert [a.number for a in found.not_ready] == [8]
+    page = render_html.actions_page(idx)
+    assert page.index("<h2>Decisions</h2>") < page.index("<h2>Commands and PRs</h2>")
+    assert "2 to do · 0 done · 1 with agents" in page
 
 
 def test_options_render_as_one_button_each_with_the_recommendation_marked():
@@ -815,3 +830,36 @@ def test_options_render_as_one_button_each_with_the_recommendation_marked():
     page = render_html.actions_page(idx)
     assert 'name="choice" value="A"' in page and 'name="choice" value="B"' in page
     assert "recommended" in page
+
+
+# ------------------------------------------- options restated in a comment ---
+
+def _ruling_comment(assoc="MEMBER"):
+    return {"author_association": assoc, "body": (
+        "Restated.\n\n**Options:**\n- A) Ship it.\n- B) Leave it.\n\n"
+        "**Recommendation:** A, it is reversible.")}
+
+
+def _read_with_comments(comments):
+    d = actions.parse(DECL)
+    host = FakeHost([_issue(7, body="Decide the thing.")],
+                    prs={"/issues/7/comments?per_page=100": comments})
+    found, _ = actions.read(d, "2026-11-04T12:00:00Z", request=host)
+    return found.actions[0]
+
+
+def test_a_step_less_ask_takes_its_options_from_a_member_comment():
+    a = _read_with_comments([{"author_association": "NONE", "body": "bot noise"},
+                             _ruling_comment()])
+    assert [x for x, _ in a.options] == ["A", "B"] and a.recommended == "A"
+    assert a.has_step
+
+
+def test_options_from_an_outside_commenter_put_no_buttons_on_the_page():
+    a = _read_with_comments([_ruling_comment("NONE")])
+    assert a.options == () and not a.has_step
+
+
+def test_an_unreadable_comment_list_keeps_the_no_step_warning():
+    a = _read_with_comments(RuntimeError("HTTP 502"))
+    assert a.options == () and not a.has_step

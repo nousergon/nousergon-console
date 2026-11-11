@@ -561,7 +561,8 @@
     var todo = 0, done = 0;
     for (var i = 0; i < tables.length; i++) {
       var n = tables[i].tBodies[0] ? tables[i].tBodies[0].rows.length : 0;
-      if (tables[i].closest("details.actions-done")) done += n; else todo += n;
+      if (tables[i].closest("details.actions-done")) done += n;
+      else if (!tables[i].closest("details.actions-waiting")) todo += n;
     }
     var h = document.querySelector("details.actions-done > summary > h2");
     if (h) h.textContent = "Done \u00b7 " + done;

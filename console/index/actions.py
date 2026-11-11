@@ -50,7 +50,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
 
@@ -171,6 +171,24 @@ class Listing:
     @property
     def todo(self) -> tuple[Action, ...]:
         return tuple(a for a in self.actions if a.actionable)
+
+    @property
+    def decisions(self) -> tuple[Action, ...]:
+        """To do and asking for a ruling: pick one of its lettered options
+        (Brian 2026-11-11: decision cards first, then commands and PRs)."""
+        return tuple(a for a in self.todo if a.options)
+
+    @property
+    def steps(self) -> tuple[Action, ...]:
+        """To do with a command to run or a PR to merge, and no ruling."""
+        return tuple(a for a in self.todo if a.has_step and not a.options)
+
+    @property
+    def not_ready(self) -> tuple[Action, ...]:
+        """Open but giving the reader nothing to do: no command, PR or
+        options. Off the to-do list (Brian 2026-11-11), listed apart so it
+        never falls off the map while agents work it to a concrete step."""
+        return tuple(a for a in self.todo if not a.has_step)
 
     @property
     def done(self) -> tuple[Action, ...]:
@@ -615,6 +633,39 @@ def _pr_states(decl: Declaration, actions: list[Action], call: Request,
     return out
 
 
+#: Comment authors whose lettered options count: people with write access to
+#: the tracker. A drive-by comment cannot put buttons on the page.
+_TRUSTED_AUTHORS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def _comment_options(decl: Declaration, actions: list[Action], call: Request,
+                     tok: str, base: str) -> dict[int, tuple[tuple[tuple[str, str], ...], str | None]]:
+    """Options for open actions whose BODY gives no step, read from the newest
+    trusted comment that offers them (a ruling restated as lettered options in
+    a comment, aec 2026-11-11). One read per such action; an unreadable one
+    keeps its "no step" warning rather than guessing."""
+    out: dict[int, tuple[tuple[tuple[str, str], ...], str | None]] = {}
+    for a in actions:
+        if a.has_step or not a.actionable:
+            continue
+        try:
+            got: object = call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues/{a.number}"
+                            f"/comments?per_page=100", tok, None)
+        except Exception:  # noqa: BLE001 - unreadable: the row keeps its warning
+            continue
+        listed = cast("list[object]", got) if isinstance(got, list) else []
+        rows = [cast("Mapping[str, object]", c) for c in listed if isinstance(c, Mapping)]
+        for c in reversed(rows):
+            if c.get("author_association") not in _TRUSTED_AUTHORS:
+                continue
+            body = str(c.get("body") or "")
+            opts = options(body)
+            if opts:
+                out[a.number] = (opts, recommended(body))
+                break
+    return out
+
+
 def read(decl: Declaration, now: str, request: Request | None = None,
          token: str | None = None) -> tuple[Listing, AdapterResult]:
     """List every open issue carrying any declared label. A failed read is a
@@ -650,6 +701,9 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     states = _pr_states(decl, list(seen.values()), call, tok)
     seen = {n: replace(a, pr_state=states.get(a.pr_url or ""),
                        prs=tuple((u, r, states.get(u)) for u, r, _ in a.prs))
+            for n, a in seen.items()}
+    ruled = _comment_options(decl, list(seen.values()), call, tok, base)
+    seen = {n: (replace(a, options=ruled[n][0], recommended=ruled[n][1]) if n in ruled else a)
             for n, a in seen.items()}
     # Actionable first; within that, the soonest due date first, undated
     # after, oldest first among equals.
@@ -845,6 +899,8 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "labels": list(decl.labels), "done_label": decl.done_label,
         "writable": decl.writable, "read_at": found.read_at, "error": found.error,
         "open": len(found.todo),
+        "decisions": len(found.decisions),
+        "with_agents": len(found.not_ready),
         "done": len(found.done),
         "actions": [_action_json(a) for a in found.actions],
         "archive": [_action_json(a) for a in found.archive],

@@ -2727,9 +2727,8 @@ def _action_ask(a: "Action", writable: bool = False) -> str:
     if a.options:
         out += _action_options(a, writable)
     elif not a.has_step:
-        out += ('<p class="state-degraded">No command, PR or options on this issue, '
-                f'so there is nothing to do from here yet. <a href="{esc(a.url)}">Open the issue</a>; '
-                'its filer owes a step.</p>')
+        out += ('<p class="muted">No command, PR or options yet: agents are working it. '
+                f'<a href="{esc(a.url)}">Open the issue</a>.</p>')
     if a.commands:
         lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
         out += (f'<div class="action-run">{lead}<ol class="action-cmds">'
@@ -2785,13 +2784,16 @@ def actions_page(index: Index, notice: str | None = None) -> str:
     else:
         decl = found.declaration
         title = decl.title
-        todo, done = list(found.todo), list(found.done)
+        done = list(found.done)
         if found.error:
             body = (f'<p class="absent">could not read the actions from '
                     f'{esc(decl.org)}/{esc(decl.repo)}: {esc(found.error)}</p>')
         else:
             where = " or ".join(f"<code>{esc(lab)}</code>" for lab in decl.labels)
-            body = (f'<p>{len(todo)} to do · {len(done)} done · '
+            decisions, steps, waiting = (list(found.decisions), list(found.steps),
+                                         list(found.not_ready))
+            body = (f'<p>{len(decisions) + len(steps)} to do · {len(done)} done · '
+                    f'{len(waiting)} with agents · '
                     f'issues labelled {where} in '
                     f'<a href="https://github.com/{esc(decl.org)}/{esc(decl.repo)}/issues">'
                     f'{esc(decl.org)}/{esc(decl.repo)}</a></p>')
@@ -2803,10 +2805,24 @@ def actions_page(index: Index, notice: str | None = None) -> str:
                 body += ('<p class="absent">ticking is off on this console (no '
                          'write_token_command) — tick on the issue instead</p>')
             today = render_now().date().isoformat()
-            if todo:
-                body += "<h2>To do</h2>" + _actions_table(todo, decl, today)
-            else:
+            # Brian 2026-11-11: decisions first, then commands and PRs; a row
+            # with neither is off the list and shown apart, with agents.
+            if decisions:
+                body += ("<h2>Decisions</h2>"
+                         '<p class="muted">Pick one option; the ruling is written to the issue.</p>'
+                         + _actions_table(decisions, decl, today))
+            if steps:
+                body += ("<h2>Commands and PRs</h2>"
+                         + _actions_table(steps, decl, today))
+            if not decisions and not steps:
                 body += '<p class="absent">Nothing to do.</p>'
+            if waiting:
+                body += ('<details class="actions-waiting"><summary><h2>With agents · '
+                         f'{len(waiting)}</h2></summary>'
+                         '<p class="muted">No command, PR or options yet, so nothing for you. '
+                         'Agents work these until each needs one specific step from you, '
+                         'then it moves up.</p>'
+                         + _actions_table(waiting, decl, today) + "</details>")
             # Brian 2026-11-05: the list is actionable only; everything else
             # is an archive, ticked.
             if done:

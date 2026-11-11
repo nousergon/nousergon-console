@@ -341,3 +341,10 @@ button.decision-option:hover, button.decision-option:focus-visible { border-colo
 .decision-letter { font-weight: 700; min-width: 1.2rem; }
 .decision-text { flex: 1; }
 .decision-why { margin: .6rem 0 0; font-size: .9rem; line-height: 1.45; }
+/* A pick saving in the background, then saved: the card stays put. */
+article.decision.decision-pending .decision-options { opacity: .6; }
+.decision-option.decision-picked { border-color: var(--focus); border-width: 2px; }
+button.decision-option[aria-busy="true"] { cursor: progress; }
+article.decision.decision-ruled .decision-options, article.decision.decision-ruled .decision-why { display: none; }
+article.decision.decision-ruled { opacity: .75; }
+.decision-saved { margin: .4rem 0 0; font-weight: 600; color: var(--good); }

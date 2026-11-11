@@ -204,7 +204,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         try:
             # The comment follows on the server's comment worker: the reader
             # waits for the label, which is the record, and nothing else.
-            act = actions.tick(index, number, done, actor, defer=actions.in_background)
+            act = actions.tick(index, number, done, actor, defer=actions.in_background,
+                               choice=form.get("choice") or None)
         except actions.TickRefused as exc:
             if as_json:
                 self._refuse(exc.status, f"Not saved: {exc}", True)

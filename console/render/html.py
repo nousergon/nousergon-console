@@ -2659,14 +2659,16 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
     # (Brian 2026-11-05: atlas#656, merged long ago, headed the list).
     title = (f'<a href="{esc(a.pr_url)}">{esc(a.title)}</a>' if a.pr_url and a.merge_ask
              else f"<strong>{esc(a.title)}</strong>")
-    ask = _action_ask(a)
+    ask = _action_ask(a, writable)
     to_merge = _prs_to_merge(a)
-    parts = []
+    parts: list[str] = []
     if to_merge:
         parts.append(" · ".join(f'<a href="{esc(u)}">merge {esc(r)}</a>' for u, r, _ in to_merge))
     if a.commands:
         n = len(a.commands)
         parts.append(f"run {n} command{'s' if n != 1 else ''}")
+    if a.options:
+        parts.append("pick an option")
     what = " · ".join(parts) or "step"
     return (f'<tr id="a{a.number}" class="action{" action-done" if checked else ""}">'
             f'<td class="action-cell">{control}</td>'
@@ -2689,7 +2691,24 @@ def _prs_to_merge(a: "Action") -> list[tuple[str, str, str | None]]:
     return out
 
 
-def _action_ask(a: "Action") -> str:
+def _action_options(a: "Action", writable: bool) -> str:
+    """The ruling an issue asks for, one button per option (Brian 2026-11-11).
+    A pick ticks the action and writes the chosen option on the issue."""
+    items: list[str] = []
+    for letter, text in a.options:
+        rec = (' <span class="chip state-healthy">recommended</span>'
+               if letter == a.recommended else "")
+        if writable:
+            items.append(f'<li><form method="post" action="/actions/{a.number}" class="action-option">'
+                         '<input type="hidden" name="done" value="1">'
+                         f'<input type="hidden" name="choice" value="{esc(letter)}">'
+                         f'<button type="submit">{esc(letter)}</button> {esc(text)}{rec}</form></li>')
+        else:
+            items.append(f"<li><strong>{esc(letter)}</strong> {esc(text)}{rec}</li>")
+    return '<div class="action-run">Decide:<ul class="action-options">' + "".join(items) + "</ul></div>"
+
+
+def _action_ask(a: "Action", writable: bool = False) -> str:
     """The ask, spelled out (Brian 2026-11-05): every PR to merge, linked,
     then every command to run, each in its own copy box. The row is one line
     until opened, so this is what an opened row shows."""
@@ -2705,6 +2724,12 @@ def _action_ask(a: "Action") -> str:
             lines.append(f'<li class="muted">Related <a href="{esc(u)}">{esc(r)}</a>'
                          + (f" ({esc(st)})" if st else "") + "</li>")
     out = f'<ul class="action-prs">{"".join(lines)}</ul>' if lines else ""
+    if a.options:
+        out += _action_options(a, writable)
+    elif not a.has_step:
+        out += ('<p class="state-degraded">No command, PR or options on this issue, '
+                f'so there is nothing to do from here yet. <a href="{esc(a.url)}">Open the issue</a>; '
+                'its filer owes a step.</p>')
     if a.commands:
         lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
         out += (f'<div class="action-run">{lead}<ol class="action-cmds">'

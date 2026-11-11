@@ -131,6 +131,18 @@ class Action:
     commands: tuple[str, ...] = ()
     #: The prose line before each command (where and why it runs), parallel to `commands`.
     command_labels: tuple[str, ...] = ()
+    #: The ruling asked for, when the issue offers lettered options instead of
+    #: a command (`options`): ``(letter, text)`` in order, and the letter its
+    #: filer recommends, or None.
+    options: tuple[tuple[str, str], ...] = ()
+    recommended: str | None = None
+
+    @property
+    def has_step(self) -> bool:
+        """The reader can act on it from the page: a PR to merge, a command to
+        run, or options to pick (Brian 2026-11-11: a row with none of these
+        gave him nothing to do)."""
+        return bool(self.pr_url or self.prs or self.commands or self.options)
 
     @property
     def actionable(self) -> bool:
@@ -464,6 +476,68 @@ def pull_requests(body: str | None) -> tuple[tuple[str, str], ...]:
     return tuple(out[:MAX_PRS])
 
 
+_OPTIONS_HEAD = re.compile(r"^\s*\*\*Options:?\*\*:?\s*(?P<rest>.*)$", re.MULTILINE)
+_OPTION = re.compile(r"(?:^|\s)(?P<l>[A-H])\)\s+")
+_RECOMMEND = re.compile(r"^\s*\*\*Recommendation:?\*\*:?\s*\(?(?P<l>[A-H])\b", re.MULTILINE)
+_REC_TAIL = re.compile(r"\s*(?:[—–-]+\s*recommended\.?|\((?:recommended|default)\))\s*\.?$",
+                       re.IGNORECASE)
+#: An option's text as shown on a button.
+OPTION_CHARS = 200
+
+
+def _options_paragraph(body: str, m: re.Match[str]) -> str:
+    """The Options header's own line plus every following line up to a blank
+    line or the next bold heading (options may sit on one line or as bullets)."""
+    para = m.group("rest")
+    # splitlines()[0] is the rest of the header's own line, already in `para`.
+    for line in body[m.end():].splitlines()[1:]:
+        if not line.strip() or line.lstrip().startswith("**"):
+            break
+        para += " " + line.strip()
+    return para
+
+
+def options(body: str | None) -> tuple[tuple[str, str], ...]:
+    """The lettered choices of an issue that asks for a ruling: the
+    ``**Options:** A) ... B) ...`` paragraph the fleet's filers write. Empty
+    when there is none, or fewer than two, or the letters are not A, B, C...
+    in order (a stray "A)" in prose is not a choice)."""
+    m = _OPTIONS_HEAD.search(body or "")
+    if not m:
+        return ()
+    para = _options_paragraph(body or "", m)
+    marks = list(_OPTION.finditer(para))
+    letters = [mk.group("l") for mk in marks]
+    if len(marks) < 2 or letters != [chr(ord("A") + i) for i in range(len(marks))]:
+        return ()
+    out: list[tuple[str, str]] = []
+    for i, mk in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(para)
+        text = " ".join(para[mk.end():end].split()).rstrip(" -")
+        text = _REC_TAIL.sub("", text).rstrip(" .")
+        if len(text) > OPTION_CHARS:
+            text = text[:OPTION_CHARS - 1].rstrip() + "…"
+        out.append((mk.group("l"), text))
+    return tuple(out)
+
+
+def recommended(body: str | None) -> str | None:
+    """The option letter the filer recommends: ``**Recommendation:** A``, else
+    the one option marked "— recommended" or "(recommended)"."""
+    m = _RECOMMEND.search(body or "")
+    if m:
+        return m.group("l")
+    m = _OPTIONS_HEAD.search(body or "")
+    if not m:
+        return None
+    para = _options_paragraph(body or "", m)
+    marks = list(_OPTION.finditer(para))
+    hits = [mk.group("l") for i, mk in enumerate(marks)
+            if _REC_TAIL.search(" ".join(para[mk.end():(marks[i + 1].start() if i + 1 < len(marks)
+                                                      else len(para))].split()).rstrip(" -"))]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
     labels = tuple(sorted(str(lab.get("name", "")) for lab in issue.get("labels", [])
                           if isinstance(lab, Mapping)))
@@ -484,6 +558,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         prs=tuple((u, r, None) for u, r in pull_requests(issue.get("body"))),
         commands=tuple(complete(c) for _, c in command_steps(issue.get("body"))),
         command_labels=tuple(lab for lab, _ in command_steps(issue.get("body"))),
+        options=options(issue.get("body")),
+        recommended=recommended(issue.get("body")),
     )
 
 
@@ -635,13 +711,17 @@ class TickRefused(Exception):
     """A tick the handler will not send, with the reason shown to the reader.
     ``status`` is the HTTP status the refusal is answered with."""
 
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
 
 
-def comment_text(decl: Declaration, done: bool, actor: str | None) -> str:
+def comment_text(decl: Declaration, done: bool, actor: str | None,
+                 choice: tuple[str, str] | None = None) -> str:
     who = actor or "the console's reader"
+    if done and choice is not None:
+        return (f"Ruling on the console by {who}: option {choice[0]}) {choice[1]}\n\n"
+                "Next: carry out that option, check it landed, then close this with a note.")
     if done:
         return (f"Marked done on the console by {who}. "
                 f"Next: check it deployed and looks good, then close this with a note.")
@@ -687,7 +767,7 @@ def _say(call: Request, url: str, tok: str, body: str, number: int) -> None:
 
 def tick(index: Any, number: int, done: bool, actor: str | None,
          request: Request | None = None, token: str | None = None,
-         defer: Defer | None = None) -> Action:
+         defer: Defer | None = None, choice: str | None = None) -> Action:
     """Add (``done``) or remove the done label on one LISTED action, and say
     so on the issue. Returns the action as it now stands.
 
@@ -703,6 +783,11 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     current = next((a for a in found.actions if a.number == number), None)
     if current is None:
         raise TickRefused(f"#{number} is not on the actions list", 404)
+    picked: tuple[str, str] | None = None
+    if choice is not None:
+        picked = next((o for o in current.options if o[0] == choice), None)
+        if picked is None or not done:
+            raise TickRefused(f"#{number} offers no option {choice[:3]!r}", 400)
     call = request or _http
     base = f"{decl.api_url.rstrip('/')}/repos/{decl.org}/{decl.repo}/issues/{number}"
     try:
@@ -721,7 +806,7 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     except Exception as exc:  # noqa: BLE001 - shown to the reader, nothing changed here
         raise TickRefused(f"the tracker refused the write: {str(exc)[:200]}", 502) from None
     act = mark(index, number, done)
-    text = comment_text(decl, done, actor)
+    text = comment_text(decl, done, actor, picked)
     say = lambda: _say(call, f"{base}/comments", tok, text, number)  # noqa: E731
     if defer is None:
         say()

@@ -15,6 +15,7 @@ import pytest
 from console.index import actions
 from console.index.graph import Index
 from console.model.envelope import AdapterStatus
+from console.render import html as render_html
 from console.render import json as render_json
 from console.server.app import _html, serve
 from console.server.router import resolve
@@ -760,3 +761,57 @@ def test_each_command_carries_the_line_that_says_where_it_runs():
     idx.finalize()
     html = _html(idx, resolve("/actions"))
     assert '<div class="action-step">Step 2. In that box shell: run the sign-in script.</div>' in html
+
+
+# ---------------------------------------------------------------- rulings ---
+_RULING = ("**Ask:** keep today's session?\n\n"
+           "**Options:**\n- A) Leave it; pull at next boot. — recommended.\n"
+           "- B) Stop, pull, restart.\n\n**SOTA:** x")
+
+
+def test_options_are_read_from_a_bulleted_or_inline_options_paragraph():
+    assert actions.options(_RULING) == (("A", "Leave it; pull at next boot"),
+                                        ("B", "Stop, pull, restart"))
+    assert actions.recommended(_RULING) == "A"
+    inline = "**Options:** A) one B) two (recommended)\n\n**Recommendation:** B — because"
+    assert actions.options(inline) == (("A", "one"), ("B", "two"))
+    assert actions.recommended(inline) == "B"
+
+
+def test_prose_with_a_stray_letter_is_not_a_choice():
+    assert actions.options("We chose A) earlier.") == ()
+    assert actions.options("**Options:** B) only\n") == ()
+    assert actions.options(None) == ()
+
+
+def test_a_ruling_pick_ticks_and_writes_the_chosen_option():
+    idx, _ = _index(issues=[_issue(7, body=_RULING)])
+    act = actions.listing(idx).actions[0]
+    assert act.has_step and act.options[1][0] == "B"
+    host = FakeHost([])
+    actions.tick(idx, 7, True, "brian@example.test", request=host, choice="B")
+    assert host.calls[0][3] == {"labels": ["operator-done"]}
+    note = host.calls[1][3]["body"]
+    assert "option B) Stop, pull, restart" in note and "brian@example.test" in note
+
+
+def test_a_pick_the_issue_does_not_offer_is_refused_before_any_write():
+    idx, _ = _index(issues=[_issue(7, body=_RULING)])
+    host = FakeHost([])
+    with pytest.raises(actions.TickRefused) as exc:
+        actions.tick(idx, 7, True, None, request=host, choice="Z")
+    assert exc.value.status == 400 and host.calls == []
+
+
+def test_a_row_with_no_command_pr_or_options_says_so_on_the_page():
+    idx, _ = _index(issues=[_issue(8, body="Something broke.\n\nMore.")])
+    assert not actions.listing(idx).actions[0].has_step
+    page = render_html.actions_page(idx)
+    assert "No command, PR or options on this issue" in page
+
+
+def test_options_render_as_one_button_each_with_the_recommendation_marked():
+    idx, _ = _index(issues=[_issue(7, body=_RULING)])
+    page = render_html.actions_page(idx)
+    assert 'name="choice" value="A"' in page and 'name="choice" value="B"' in page
+    assert "recommended" in page

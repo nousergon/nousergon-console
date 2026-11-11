@@ -345,6 +345,9 @@ button.decision-option:hover, button.decision-option:focus-visible { border-colo
 article.decision.decision-pending .decision-options { opacity: .6; }
 .decision-option.decision-picked { border-color: var(--focus); border-width: 2px; }
 button.decision-option[aria-busy="true"] { cursor: progress; }
-article.decision.decision-ruled .decision-options, article.decision.decision-ruled .decision-why { display: none; }
-article.decision.decision-ruled { opacity: .75; }
-.decision-saved { margin: .4rem 0 0; font-weight: 600; color: var(--good); }
+article.decision { position: relative; }
+article.decision.decision-ruled .decision-options { opacity: .55; }
+.decision-saved, .decision-error { position: absolute; bottom: -.75rem; right: .8rem; font-size: .85rem;
+  font-weight: 600; padding: .15rem .55rem; border-radius: .4rem; background: var(--surface); }
+.decision-saved { color: var(--good); border: 1px solid var(--good); }
+.decision-error { margin: 0; max-width: 60%; border: 1px solid var(--bad); }

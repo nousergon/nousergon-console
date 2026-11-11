@@ -249,6 +249,64 @@
     return "t:" + (td ? td.textContent.replace(/\s+/g, " ").trim() : "");
   }
 
+  // What the reader is looking at stays exactly where it was across a
+  // refresh, even when something above it left the page (Brian 2026-11-11:
+  // a ruled decision leaving the list must not move the next one). The
+  // anchor is the first element with an id still in view, skipping cards the
+  // reader has just ruled, since those are the ones that leave.
+  function topAnchor() {
+    var els = document.querySelectorAll("body [id]");
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.closest(".decision-ruled") || el.id === "live-status") continue;
+      var r = el.getBoundingClientRect();
+      if (r.height > 0 && r.bottom > 0) return {id: el.id, top: r.top};
+    }
+    return null;
+  }
+  // A decision ruled on this page stays where it was, as it was, until the
+  // reader reloads: the refreshed list no longer carries it, and dropping it
+  // would pull everything below it up under the reader's eyes.
+  function ruledCards() {
+    var out = [];
+    var cards = document.querySelectorAll("article.decision.decision-ruled");
+    for (var i = 0; i < cards.length; i++) {
+      var next = cards[i].nextElementSibling;
+      while (next && next.classList.contains("decision-ruled")) next = next.nextElementSibling;
+      var prev = cards[i].previousElementSibling;
+      while (prev && prev.classList.contains("decision-ruled")) prev = prev.previousElementSibling;
+      out.push({node: cards[i], next: next && next.id, prev: prev && prev.id});
+    }
+    return out;
+  }
+  function keepRuledCards(ruled) {
+    for (var i = 0; i < ruled.length; i++) {
+      var r = ruled[i], card = r.node;
+      if (card.id) {
+        var same = document.getElementById(card.id);
+        if (same && same.tagName === "ARTICLE") continue;  // still listed: the server's copy wins
+        card.setAttribute("data-ruled", card.id);
+        card.removeAttribute("id");  // the Done row carries the id now
+      }
+      var next = r.next && document.getElementById(r.next);
+      var prev = r.prev && document.getElementById(r.prev);
+      if (next && next.tagName === "ARTICLE") next.parentNode.insertBefore(card, next);
+      else if (prev && prev.tagName === "ARTICLE") prev.parentNode.insertBefore(card, prev.nextSibling);
+      else if (i > 0 && ruled[i - 1].node.parentNode) {
+        var before = ruled[i - 1].node;
+        before.parentNode.insertBefore(card, before.nextSibling);
+      }
+    }
+  }
+
+  function holdAnchor(anchor) {
+    if (!anchor) return;
+    var el = document.getElementById(anchor.id);
+    if (!el) return;
+    var shift = el.getBoundingClientRect().top - anchor.top;
+    if (shift) window.scrollBy(0, shift);
+  }
+
   function refresh() {
     if (document.hidden) { due = true; return; }
     if (busy()) { retrySoon(); return; }  // never undo what the reader is doing
@@ -270,7 +328,10 @@
         var opened = document.querySelectorAll("tr.row-open");
         for (var k = 0; k < opened.length; k++) openRows[rowKey(opened[k])] = true;
         var x = window.scrollX, y = window.scrollY;
+        var anchor = topAnchor();
+        var ruled = ruledCards();
         document.body.replaceWith(document.adoptNode(doc.body));
+        keepRuledCards(ruled);
         var now = document.querySelectorAll("details");
         var keep = carryOpen(was, describe(now));
         for (var j = 0; j < now.length; j++) {
@@ -281,6 +342,7 @@
           if (openRows[rowKey(rows[r])]) rows[r].classList.add("row-open");
         }
         window.scrollTo(x, y);
+        holdAnchor(anchor);
         // /charts.js re-draws its interactive layer over the new SVGs.
         document.dispatchEvent(new CustomEvent("console:refreshed"));
         builtAt = stamp;
@@ -604,7 +666,6 @@
     var buttons = card ? card.querySelectorAll(".decision-options button") : [btn];
     var choice = form.querySelector('input[name="choice"]');
     var letter = choice ? choice.value : "";
-    var text = btn.querySelector(".decision-text");
     function clearError() {
       var old = card && card.querySelector(".tick-error");
       if (old) old.parentNode.removeChild(old);
@@ -621,17 +682,18 @@
         if (card) card.classList.add("decision-pending");
       },
       confirm: function () {
+        // Nothing here changes the card's size (Brian 2026-11-11: the page
+        // must not shift when a pick lands): the buttons stay, locked, and
+        // the saved note floats over the card's corner.
         btn.removeAttribute("aria-busy");
         if (!card) return;
         card.classList.remove("decision-pending");
         card.classList.add("decision-ruled");
-        var done = document.createElement("p");
+        var done = document.createElement("span");
         done.className = "decision-saved";
         done.setAttribute("role", "status");
-        done.textContent = "Ruled " + letter + (text ? ": " + text.firstChild.textContent.trim() : "") +
-          ". Saved to the issue.";
-        var opts = card.querySelector(".decision-options");
-        if (opts) opts.parentNode.insertBefore(done, opts);
+        done.textContent = "Saved: " + letter;
+        card.appendChild(done);
       },
       rollback: function (message) {
         btn.removeAttribute("aria-busy");
@@ -639,8 +701,8 @@
         if (card) card.classList.remove("decision-pending");
         lock(false);
         clearError();
-        var err = document.createElement("p");
-        err.className = "tick-error";
+        var err = document.createElement("span");
+        err.className = "tick-error decision-error";
         err.setAttribute("role", "alert");
         err.textContent = message;
         (card || form).appendChild(err);

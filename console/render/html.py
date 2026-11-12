@@ -23,6 +23,7 @@ import html
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
 
 from .. import calendar_cadence
@@ -3091,6 +3092,8 @@ def _page_chart(index: Index, sec: dict) -> str:
     if "absent" in sec:
         note = _empty_note(sec) if sec.get("id") is None else ""
         return f'<p class="absent">{note}{esc(sec["absent"])} — <code>{esc(sec.get("selector", ""))}</code></p>'
+    if "x" in sec:
+        return _page_across(cast("Mapping[str, object]", sec))
     if "fields" in sec:
         return _page_overlay(sec)
     ent = index.entity(sec["id"])
@@ -3110,6 +3113,67 @@ def _page_chart(index: Index, sec: dict) -> str:
     return (f'<figure class="page-chart">{chart}{note}{_chart_marks_html(sec)}<figcaption>'
             f'<a href="{esc(sec["url"])}">{esc(sec["id"])}</a> · {as_of_html(sec.get("as_of"))}'
             f'</figcaption></figure>')
+
+
+def _page_across(sec: Mapping[str, object]) -> str:
+    """A chart across rows (`x`): lines over dates, else one bar group per row."""
+    if "absent" in sec:
+        return (f'<p class="absent">{esc(str(sec["absent"]))} — '
+                f'<code>{esc(str(sec.get("selector", "")))}</code></p>')
+    labels = [str(v) for v in cast("list[object]", sec["labels"])]
+    urls = [str(v) for v in cast("list[object]", sec["urls"])]
+    series = cast("list[dict[str, object]]", sec["series"])
+    unit = cast("str | None", sec.get("unit"))
+    key = "+".join(str(f) for f in cast("list[object]", sec["fields"]))
+    chart = (_overlay_html(labels, series, unit, key) if sec["layout"] == "lines"
+             else _bars_html(labels, urls, series, unit, key))
+    counts = f'{sec["shown"]} of {sec["matched"]} rows'
+    if sec.get("unplaced"):
+        counts += f' · {sec["unplaced"]} without {sec["x"]}'
+    return (f'<figure class="page-chart">{chart}<figcaption>{esc(counts)} · '
+            f'{as_of_html(cast("str | None", sec.get("as_of")))}</figcaption></figure>')
+
+
+def _bars_html(labels: list[str], urls: list[str], series: list[dict[str, object]],
+               unit: str | None, key: str) -> str:
+    """One labelled group of horizontal bars per row, one bar per series in
+    its colour token, each with its value printed (nothing carried by length
+    or colour alone, §5.7). Bars start at zero, so a negative value extends
+    left of the zero line. A gap (no value) prints as a dash, never zero."""
+    u = f" {unit}" if unit else ""
+    columns: list[tuple[str, list[float | None]]] = [
+        (str(s["field"]), [float(v) if isinstance(v, (int, float)) else None
+                           for v in cast("list[object]", s["values"])])
+        for s in series]
+    ys = [v for _, vals in columns for v in vals if v is not None]
+    lo, hi = min([0.0, *ys]), max([0.0, *ys])
+    span = (hi - lo) or 1.0
+    zero = (0.0 - lo) / span * 100
+
+    def bar(k: int, v: float | None, name: str) -> str:
+        if v is None:
+            return (f'<div class="bar-row" title="{esc(name)}"><span class="bar-track"></span>'
+                    f'<span class="bar-value"><span class="visually-hidden">{esc(name)} </span>'
+                    f'—</span></div>')
+        left = min(zero, (v - lo) / span * 100)
+        width = max(abs(v) / span * 100, 0.4)
+        return (f'<div class="bar-row" title="{esc(name)}"><span class="bar-track">'
+                f'<span class="bar ts-trace-{k}" style="left:{left:.2f}%;width:{width:.2f}%">'
+                f'</span></span><span class="bar-value"><span class="visually-hidden">'
+                f'{esc(name)} </span>{esc(_num(v))}{esc(u)}</span></div>')
+
+    rows: list[str] = []
+    for i, (label, url) in enumerate(zip(labels, urls, strict=True)):
+        bars = "".join(bar(k, vals[i], name) for k, (name, vals) in enumerate(columns, start=1))
+        rows.append(f'<li><a class="bar-label" href="{esc(url)}">{esc(label)}</a>'
+                    f'<div class="bar-set">{bars}</div></li>')
+    legend = "".join(f'<li><span class="ts-swatch ts-trace-{k}" aria-hidden="true"></span>'
+                     f'{esc(name)}</li>' for k, (name, _) in enumerate(columns, start=1))
+    data = _chart_data(key, labels, [
+        {"label": name, "kind": "bar", "values": vals} for name, vals in columns
+    ], unit or "")
+    return (f'<ul class="ts-legend">{legend}</ul>'
+            f'<ol class="bars"{data}>{"".join(rows)}</ol>')
 
 
 def _page_overlay(sec: dict) -> str:

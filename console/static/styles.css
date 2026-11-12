@@ -232,6 +232,17 @@ svg.ts-chart line.ts-zero { stroke: var(--border); stroke-width: 1; vector-effec
 .ts-trace-4 { stroke: var(--chart-4); color: var(--chart-4); }
 .ts-trace-5 { stroke: var(--chart-5); color: var(--chart-5); }
 .ts-trace-6 { stroke: var(--chart-6); color: var(--chart-6); }
+/* A chart across rows (`x`, non-date): one labelled group of horizontal
+   bars per row, each bar's value printed beside it (Brian 2026-11-12:
+   the optimizer's per-name weights). */
+ol.bars { list-style: none; padding: 0; margin: .3rem 0; font-size: .85rem; font-variant-numeric: tabular-nums; }
+ol.bars > li { display: grid; grid-template-columns: minmax(4rem, 8rem) 1fr; gap: .5rem; align-items: center; padding: .15rem 0; border-bottom: 1px solid var(--border); }
+.bar-set { display: grid; gap: .1rem; }
+.bar-row { display: grid; grid-template-columns: 1fr minmax(4rem, auto); gap: .5rem; align-items: center; }
+.bar-track { position: relative; height: .55rem; }
+.bar { position: absolute; top: 0; bottom: 0; background: currentColor; border-radius: .1rem; }
+.bar-value { color: var(--muted); white-space: nowrap; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .ts-legend { list-style: none; padding: 0; margin: .3rem 0; display: flex; flex-wrap: wrap; gap: .2rem 1.2rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
 .ts-swatch { display: inline-block; width: 1rem; height: .2rem; margin-right: .35rem; vertical-align: middle; background: currentColor; border-radius: .1rem; }
 

@@ -825,6 +825,23 @@ def test_decisions_come_first_then_commands_and_prs():
     assert "2 to do · 0 done · 1 with agents" in page
 
 
+def test_a_merged_pr_named_for_context_is_not_a_step():
+    """Brian 2026-11-12: rows whose only PRs had merged sat under Commands and
+    PRs with nothing to run, merge or pick. A merged PR is context; an open one
+    is still a step."""
+    merged = {"state": "closed", "pull_request": {"merged_at": "2026-11-05T09:00:00Z"}}
+    found, _ = _read(
+        [_issue(1, "Backfill the QQQ close",
+                body="Related: https://github.com/acme/atlas/pull/7 (the capture fix)."),
+         _issue(2, "Land the follow-up",
+                body="Needs https://github.com/acme/atlas/pull/8 merged first.")],
+        prs={"/repos/acme/atlas/issues/7": merged,
+             "/repos/acme/atlas/issues/8": {"state": "open", "pull_request": {}}})
+    assert [a.number for a in found.not_ready] == [1]
+    assert [a.number for a in found.steps] == [2]
+    assert found.steps[0].prs_to_merge[0][1] == "atlas#8"
+
+
 def test_options_render_as_one_button_each_with_the_recommendation_marked():
     idx, _ = _index(issues=[_issue(7, body=_RULING)])
     page = render_html.actions_page(idx)

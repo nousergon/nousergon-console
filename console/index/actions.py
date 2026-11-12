@@ -78,6 +78,10 @@ class ActionsConfigError(ValueError):
     """An `actions:` block this build cannot honour, named by key."""
 
 
+#: PR states that mean nothing is left to merge.
+_SETTLED = ("merged", "closed")
+
+
 @dataclass(frozen=True)
 class Declaration:
     org: str
@@ -152,7 +156,17 @@ class Action:
         """The reader can act on it from the page: a PR to merge, a command to
         run, or options to pick (Brian 2026-11-11: a row with none of these
         gave him nothing to do)."""
-        return bool(self.pr_url or self.prs or self.commands or self.options)
+        return bool(self.commands or self.options or self.prs_to_merge
+                    or (self.pr_url and self.pr_state not in _SETTLED))
+
+    @property
+    def prs_to_merge(self) -> tuple[tuple[str, str, str | None], ...]:
+        """The PRs this ask needs merged: a merge ask's own PR, and any other
+        PR it names that is not known to have merged or closed. A merged PR
+        named for context is not a step (Brian 2026-11-12: rows whose only
+        PRs were merged showed as steps with nothing to do)."""
+        return tuple(p for i, p in enumerate(self.prs)
+                     if (self.merge_ask and i == 0) or p[2] not in _SETTLED)
 
     @property
     def actionable(self) -> bool:

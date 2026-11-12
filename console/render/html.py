@@ -2682,13 +2682,8 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
 
 
 def _prs_to_merge(a: "Action") -> list[tuple[str, str, str | None]]:
-    """The PRs this ask needs merged: a merge ask's own PR, and any other PR
-    it names that is still open (it has to land first)."""
-    out = []
-    for i, (u, r, st) in enumerate(a.prs):
-        if (a.merge_ask and i == 0) or st == "open":
-            out.append((u, r, st))
-    return out
+    """The PRs this ask needs merged (`Action.prs_to_merge`)."""
+    return list(a.prs_to_merge)
 
 
 def _action_options(a: "Action", writable: bool) -> str:

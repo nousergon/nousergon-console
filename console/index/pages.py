@@ -42,10 +42,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence, cast
 
-from ..model.entity import LABEL_DETAIL
-from ..model.fields import Render, format_value, parse as parse_fields, series_points
+from ..model.entity import LABEL_DETAIL, Entity
+from ..model.fields import Field, Render, format_value, parse as parse_fields, series_points
 
 _ATTR = "_console_pages"
 _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -149,6 +149,12 @@ class Section:
     body: str | None = None
     #: chart only: event marks drawn on the chart's dates and listed under it.
     annotations: tuple[Annotation, ...] = ()
+    #: chart only: draw ACROSS the matched rows, one point per row at this
+    #: declared field's value, rather than one row's timeseries (Brian
+    #: 2026-11-12: the optimizer charts the old dashboard drew per name and
+    #: per day). Dates draw as lines in date order; anything else as bars,
+    #: in `sort` order, `limit` of them.
+    x: str | None = None
     #: table only: the fields a reader may sort by from the URL (`?sort=`).
     sortable: tuple[str, ...] = ()
     #: table only: a declared `ticks:` list and the row field keying it, so each
@@ -366,12 +372,21 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     annotations = _annotations(raw.get("annotations"), where)
     if annotations and kind != "chart":
         raise PagesConfigError(f"{where}: only a chart takes `annotations`")
+    x_raw: object = cast("Mapping[str, object]", raw).get("x")
+    x = str(x_raw).strip() if x_raw else None
+    if x is not None and kind != "chart":
+        raise PagesConfigError(f"{where}: only a chart takes `x`")
+    if x is not None and annotations:
+        raise PagesConfigError(f"{where}: a chart across rows (`x`) takes no `annotations`")
+    if x is not None and x in fields:
+        raise PagesConfigError(f"{where}: `x` names a field that is also a series")
     limit = raw.get("limit", DEFAULT_LIMIT)
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         raise PagesConfigError(f"{where}: `limit` must be an integer 1..{MAX_LIMIT}")
     sort = str(raw["sort"]).strip() if raw.get("sort") else None
-    if sort is not None and kind != "table":
-        raise PagesConfigError(f"{where}: only a table takes `sort`")
+    if sort is not None and kind != "table" and x is None:
+        raise PagesConfigError(f"{where}: only a table, or a chart across rows (`x`), "
+                               "takes `sort`")
     sort_order = _names(raw.get("sort_order"), where, "sort_order")
     if sort_order and (sort is None or sort.startswith("-")):
         raise PagesConfigError(
@@ -391,7 +406,7 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     tick = _tick(raw.get("tick"), where, kind, ticks)
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
-                   annotations=annotations, sortable=sortable, tick=tick)
+                   annotations=annotations, sortable=sortable, tick=tick, x=x)
 
 
 def parse(raw: Any, feeds: set[str] | None = None,
@@ -766,6 +781,78 @@ def _overlay(ent: Any, fields: tuple[str, ...], since: datetime | None) -> dict[
             "unit": units[0] or None, "outside_range": dropped}
 
 
+def _as_number(v: object) -> float | None:
+    """A numeric value as a float; anything else (text, a bool, None) is None."""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _across(rows: Sequence[Entity], s: Section) -> dict[str, object]:
+    """A chart ACROSS rows (`x`): one point per matched row, at the row's own
+    `x` value, for each declared numeric field.
+
+    When every `x` value is a date or instant the points are a time axis: in
+    date order, drawn as lines, and two rows on one date keep the newest (the
+    rows arrive newest first). Otherwise each row is a bar group, in `sort`
+    order (the declared order of the rows otherwise), at most `limit`. A row
+    without an `x` value is counted, never placed. A value that is not a
+    number is a gap, never zero. Series in different units share no axis."""
+    x = s.x or ""
+    units: set[str] = set()
+    sort_name = s.sort.lstrip("-") if s.sort else None
+    points: list[tuple[str, dict[str, object], Entity]] = []
+    unplaced = 0
+    for e in rows:
+        raw_fields = cast("Mapping[str, object] | None", e.detail.get("fields"))
+        by_name: dict[str, Field] = {f.name: f for f in parse_fields(raw_fields)}
+        xf = by_name.get(x)
+        xv: object = xf.value if xf is not None else None
+        if xv is None or xv == "":
+            unplaced += 1
+            continue
+        values: dict[str, object] = {}
+        for name in (*s.fields, *((sort_name,) if sort_name else ())):
+            f = by_name.get(name)
+            v: object = f.value if f is not None else None
+            values[name] = v
+            if f is not None and name in s.fields and _as_number(v) is not None:
+                units.add(f.unit or "")
+        points.append((str(xv), {"fields": values}, e))
+    if not points:
+        return {"absent": f"no matched row carries {x!r}", "unplaced": unplaced}
+    if len(units) > 1:
+        return {"absent": "the fields carry different units ("
+                + ", ".join(repr(u) for u in sorted(units)) + "); one chart needs one axis"}
+    timed = all(_instant(label) is not None for label, _, _ in points)
+    chosen: list[tuple[str, dict[str, object], Entity]]
+    if timed:
+        newest: dict[str, tuple[str, dict[str, object], Entity]] = {}
+        for p in points:
+            newest.setdefault(p[0], p)
+        chosen = sorted(newest.values(), key=lambda p: (_instant(p[0]), p[0]))
+    else:
+        ordered = list(points)
+        if s.sort:
+            key = _sort_key(s.sort)
+            ordered.sort(key=lambda p: key(p[1]))
+        chosen = ordered[:s.limit]
+
+    def value(row: dict[str, object], name: str) -> float | None:
+        fields = cast("dict[str, object]", row["fields"])
+        return _as_number(fields.get(name))
+
+    series = [{"field": name, "values": [value(r, name) for _, r, _ in chosen]}
+              for name in s.fields]
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    newest_row = max((e for _, _, e in chosen),
+                     key=lambda e: _instant(e.provenance.as_of) or floor)
+    return {"layout": "lines" if timed else "bars",
+            "labels": [label for label, _, _ in chosen],
+            "urls": [e.route for _, _, e in chosen],
+            "series": series, "unit": (next(iter(units)) if units else "") or None,
+            "matched": len(rows), "shown": len(chosen), "unplaced": unplaced,
+            "as_of": newest_row.provenance.as_of}
+
+
 def _day(value: Any) -> str | None:
     """The UTC calendar day of a date or instant, or None when it is neither."""
     when = _instant(value)
@@ -843,6 +930,11 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
     assert s.select is not None
     doc["selector"] = s.select.text
     rows = _select(index, s.select, variables)
+    if s.type == "chart" and s.x is not None:
+        matched = cast("list[Entity]", rows)
+        across = [e for e in matched if _in_range(e, since)]
+        doc.update(x=s.x, fields=list(s.fields), **_across(across, s))
+        return doc
     if s.type == "chart":
         overlay = len(s.fields) > 1
         if overlay:

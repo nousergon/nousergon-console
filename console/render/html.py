@@ -3007,7 +3007,7 @@ def _page_tile(t: dict, empty: str = "") -> str:
             f'<div class="tile-meta">{as_of_html(t.get("as_of"))}</div></div>')
 
 
-def _sort_header(col: str, sec: dict, pg: dict | None) -> str:
+def _sort_header(col: str, sec: dict, pg: dict | None, label: str | None = None) -> str:
     """A column header; a link to sort by it when the table lists it sortable.
 
     Clicking the active column flips its direction; any other sortable column
@@ -3015,8 +3015,9 @@ def _sort_header(col: str, sec: dict, pg: dict | None) -> str:
     from urllib.parse import urlencode
 
     sort = sec.get("sort")
+    shown = label or col
     if not sort or col not in sort["sortable"] or pg is None:
-        return f"<th>{esc(col)}</th>"
+        return f"<th>{esc(shown)}</th>"
     active = sort.get("value") or ""
     nxt = f"-{col}" if active == col else col
     mark = " ▲" if active == col else " ▼" if active == f"-{col}" else ""
@@ -3024,7 +3025,69 @@ def _sort_header(col: str, sec: dict, pg: dict | None) -> str:
     aria = (' aria-sort="ascending"' if active == col else
             ' aria-sort="descending"' if active == f"-{col}" else "")
     return (f'<th{aria}><a class="sort" href="{esc(href)}" title="sort by {esc(col)}">'
-            f'{esc(col)}{mark}</a></th>')
+            f'{esc(shown)}{mark}</a></th>')
+
+
+def _plain_value(f: Field | None, signed: bool) -> tuple[str, str]:
+    """A value written for a reader, and its tone class: 12.03%, $45,730,
+    891, #19, 1.3 bps. A missing value is a dash. A signed value carries
+    its sign in the text (+891, -$31,518); the tone only repeats it."""
+    if f is None or f.value is None or f.value == "":
+        return "—", ""
+    v = f.value
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return str(v), ""
+    x = float(v)
+    unit = (f.unit or "").lower()
+    sign = ("+" if x > 0 else "-" if x < 0 else "") if signed else ("-" if x < 0 else "")
+    a = abs(x)
+    if unit in ("pct", "%", "percent"):
+        text = f"{a:,.2f}%"
+    elif unit in ("usd", "$"):
+        text = f"${a:,.0f}"
+    elif unit == "rank":
+        text = f"#{a:,.0f}"
+    elif unit == "bps":
+        text = f"{a:,.1f} bps"
+    elif f.render is Render.COUNT or unit in ("shares", "count", "names"):
+        text = f"{a:,.0f}"
+    else:
+        text = f"{a:.4g}"
+    tone = (" num-pos" if x > 0 else " num-neg" if x < 0 else "") if signed else ""
+    return sign + text, tone
+
+
+def _plain_table(ents: list[Entity], sec: Mapping[str, object],
+                 pg: dict[str, object] | None) -> str:
+    """A plain table (`plain: true`): the declared labels as headers, values
+    written for a reader, the first column linking each row's own page, and
+    no provenance columns (they stay on the row's page)."""
+    cols = cast("list[str]", sec["columns"])
+    labels = cast("dict[str, str]", sec.get("labels") or {})
+    signed = set(cast("list[str]", sec.get("signed") or []))
+    head = "".join(_sort_header(c, cast("dict[str, object]", sec), pg, labels.get(c, c))
+                   for c in cols)
+    body: list[str] = []
+    for e in ents:
+        raw_fields = cast("Mapping[str, object] | None", e.detail.get("fields"))
+        by_name = {f.name: f for f in parse_fields(raw_fields)}
+        cells: list[str] = []
+        for i, c in enumerate(cols):
+            text, tone = _plain_value(by_name.get(c), c in signed)
+            numeric = by_name.get(c) is not None and _is_num(by_name[c].value)
+            cls = ("num" if numeric else "txt") + tone
+            inner = f'<a href="{esc(e.route)}">{esc(text)}</a>' if i == 0 else esc(text)
+            cells.append(f'<td class="{cls}">{inner}</td>')
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    total = cast("int", sec["total"])
+    more = (f'<p class="list-window">showing {len(ents)} of {total}</p>'
+            if total > len(ents) else "")
+    return (f'<div class="table-wrap"><table class="plain"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>{more}')
+
+
+def _is_num(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _page_rows(index: Index, sec: dict, links: Citations | None, pg: dict | None = None) -> str:
@@ -3036,6 +3099,9 @@ def _page_rows(index: Index, sec: dict, links: Citations | None, pg: dict | None
                 if not sec["matched"] else "no row inside the selected range")
         return f'<p class="absent">{what}</p>'
     cols = sec["columns"]
+    if cast("Mapping[str, object]", sec).get("plain"):
+        return _plain_table(ents, cast("Mapping[str, object]", sec),
+                            cast("dict[str, object] | None", pg))
     labels = {r["id"]: r["label"] for r in sec["rows"]}
     tick = sec.get("tick")
     if tick:
@@ -3254,7 +3320,7 @@ def _page_grid(sec: Mapping[str, object]) -> str:
             shade = min(abs(float(v)) / hi, 1.0)
             tone = "grid-neg" if v < 0 else "grid-pos"
             tds.append(f'<td{cls}><span class="grid-cell {tone}" style="--shade:{shade:.2f}">'
-                       f'{esc(_num(float(v)))}</span></td>')
+                       f'{float(v):,.1f}</span></td>')
         body.append(f"<tr>{th}{''.join(tds)}</tr>")
     counts = f'{sec["shown"]} of {sec["matched"]} {esc(str(sec["y"]))}'
     if int(cast("int", sec.get("columns_matched") or 0)) > len(columns):

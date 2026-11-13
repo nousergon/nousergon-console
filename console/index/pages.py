@@ -205,6 +205,16 @@ class Section:
     #: decisions only: the declared write and the labelled fields each card shows.
     act: Act | None = None
     labels: tuple[tuple[str, str], ...] = ()
+    #: table only: a PLAIN table (Brian 2026-11-13: the order book "is so bad,
+    #: I cannot read it"): headed by each field's declared `label`, values
+    #: written for a reader (12.03%, $45,730, 891), the first column linking
+    #: the row, and no id, state, source, as-of or evidence columns. The
+    #: provenance stays one click away on the row's own page.
+    plain: bool = False
+    #: plain tables: fields written with a sign and toned as a gain or a
+    #: loss (a trade: +891 bought, -88 sold). The sign carries it; the tone
+    #: only adds to it.
+    signed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -354,6 +364,39 @@ def _tick(raw: Any, where: str, kind: str, ticks: set[str] | None) -> tuple[str,
     return name, key
 
 
+def _plain_fields(raw: object, where: str
+                  ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """A plain table's `fields`: each a field name, or ``{field, label,
+    signed}``. A bare name is headed by itself with underscores as spaces."""
+    if not isinstance(raw, list) or not raw:
+        raise PagesConfigError(f"{where}: a plain table lists its `fields`")
+    names: list[str] = []
+    labels: list[tuple[str, str]] = []
+    signed: list[str] = []
+    for n, entry in enumerate(cast("list[object]", raw), start=1):
+        if isinstance(entry, str) and entry.strip():
+            name, label, sign = entry.strip(), entry.strip().replace("_", " "), False
+        elif isinstance(entry, Mapping):
+            m = cast("Mapping[str, object]", entry)
+            name = _text(m, "field", f"{where} field #{n}")
+            label = str(m.get("label") or name.replace("_", " ")).strip()
+            sign = m.get("signed", False)
+            if not isinstance(sign, bool):
+                raise PagesConfigError(f"{where} field #{n}: `signed` is true or false")
+            stray = sorted(set(m) - {"field", "label", "signed"})
+            if stray:
+                raise PagesConfigError(f"{where} field #{n}: unknown key(s) {', '.join(stray)}")
+        else:
+            raise PagesConfigError(f"{where} field #{n}: a field name or `{{field, label}}`")
+        if name in names:
+            raise PagesConfigError(f"{where}: `fields` names {name!r} twice")
+        names.append(name)
+        labels.append((name, label))
+        if sign:
+            signed.append(name)
+    return tuple(names), tuple(labels), tuple(signed)
+
+
 def _section(raw: Any, where: str, feeds: set[str] | None,
              ticks: set[str] | None = None) -> Section:
     if not isinstance(raw, Mapping):
@@ -411,7 +454,19 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
         return _decisions(cast("Mapping[str, object]", raw), where, title, select, empty)
     if "act" in raw:
         raise PagesConfigError(f"{where}: only a decisions section takes `act`")
-    fields = _names(raw.get("fields"), where, "fields")
+    spec = cast("Mapping[str, object]", raw)
+    plain: object = spec.get("plain", False)
+    if not isinstance(plain, bool):
+        raise PagesConfigError(f"{where}: `plain` is true or false")
+    if plain and kind != "table":
+        raise PagesConfigError(f"{where}: only a table can be `plain`")
+    raw_fields: object = spec.get("fields")
+    labels: tuple[tuple[str, str], ...] = ()
+    signed: tuple[str, ...] = ()
+    if plain:
+        fields, labels, signed = _plain_fields(raw_fields, where)
+    else:
+        fields = _names(raw_fields, where, "fields")
     if kind == "chart" and not 1 <= len(fields) <= MAX_CHART_SERIES:
         raise PagesConfigError(
             f"{where}: `fields` must name exactly one timeseries field, or 2..{MAX_CHART_SERIES} "
@@ -480,7 +535,7 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
                    annotations=annotations, sortable=sortable, tick=tick, x=x,
-                   y=y, columns=columns)
+                   y=y, columns=columns, plain=plain, labels=labels, signed=signed)
 
 
 _WRITE_PATH = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$")
@@ -1232,8 +1287,13 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
             for n in _declared_order(e):
                 seen.setdefault(n, None)
         columns = list(seen)
-    table = [_row(e, columns) for e in in_range]
     chosen = _requested_sort(s, requested_sort)
+    # The sort field is read even when it is not shown: an order book sorts
+    # by its own `book_position` without printing it, and a key read only
+    # from the shown columns left every such table in index order.
+    keys = [n.lstrip("-") for n in (chosen, s.sort) if n]
+    shown_and_keys = [*columns, *(k for k in keys if k not in columns)]
+    table = [_row(e, shown_and_keys) for e in cast("list[Entity]", in_range)]
     if s.sortable:
         doc["sort"] = {"value": chosen or s.sort, "default": s.sort,
                        "sortable": list(s.sortable)}
@@ -1244,6 +1304,8 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         table.sort(key=_sort_key(s.sort, s.sort_order))
     else:
         table.sort(key=lambda r: state_rank(r["state"]))  # stable: newest within a state
+    if s.plain:
+        doc.update(plain=True, labels=dict(s.labels), signed=list(s.signed))
     doc.update(columns=columns, matched=len(rows), total=len(table),
                rows=table[:s.limit], outside_range=len(rows) - len(in_range))
     if s.tick is not None:

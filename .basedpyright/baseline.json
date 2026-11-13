@@ -13260,14 +13260,6 @@
             {
                 "code": "reportUnknownMemberType",
                 "range": {
-                    "startColumn": 20,
-                    "endColumn": 27,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownMemberType",
-                "range": {
                     "startColumn": 31,
                     "endColumn": 38,
                     "lineCount": 1
@@ -15142,14 +15134,6 @@
                 "range": {
                     "startColumn": 12,
                     "endColumn": 13,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownVariableType",
-                "range": {
-                    "startColumn": 34,
-                    "endColumn": 35,
                     "lineCount": 1
                 }
             },

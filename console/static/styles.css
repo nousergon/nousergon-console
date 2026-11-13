@@ -362,3 +362,21 @@ article.decision.decision-ruled .decision-options { opacity: .55; }
   font-weight: 600; padding: .15rem .55rem; border-radius: .4rem; background: var(--surface); }
 .decision-saved { color: var(--good); border: 1px solid var(--good); }
 .decision-error { margin: 0; max-width: 60%; border: 1px solid var(--bad); }
+
+/* A page's declared decisions (`decisions` section, Brian 2026-11-13): the
+   ruling-card look, plus the facts, the note and the "change" choices. */
+.page-decisions { display: flex; flex-direction: column; gap: 1.1rem; }
+.decision-facts { display: grid; grid-template-columns: minmax(7rem, max-content) 1fr;
+  gap: .25rem .9rem; margin: .7rem 0; }
+.decision-facts dt { font-weight: 600; color: var(--muted, inherit); }
+.decision-facts dd { margin: 0; overflow-wrap: anywhere; }
+.decision-note { display: block; margin: .4rem 0 .6rem; font-size: .9rem; }
+.decision-note textarea { display: block; width: 100%; box-sizing: border-box; margin-top: .2rem;
+  font: inherit; }
+.decision-change { margin-top: .5rem; }
+.decision-change label { display: block; margin: .35rem 0; font-size: .9rem; }
+.decision-change select { display: block; max-width: 100%; margin-top: .15rem; font: inherit; }
+@media (max-width: 34rem) {
+  .decision-facts { grid-template-columns: 1fr; }
+  .decision-facts dd { margin-bottom: .35rem; }
+}

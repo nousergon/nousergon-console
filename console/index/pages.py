@@ -53,7 +53,7 @@ _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SECTION = re.compile(r"^[a-z0-9][a-z0-9 -]{0,39}$")
 
 #: The closed section vocabulary. Adding one is a PR here, never config.
-SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions", "text")
+SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions", "text", "decisions")
 
 #: The closed time-range vocabulary, as the URL spells it.
 RANGES: dict[str, timedelta | None] = {
@@ -120,6 +120,39 @@ class Annotation:
 
 
 @dataclass(frozen=True)
+class Choice:
+    """One button on a decision card: the value posted and the words shown."""
+    value: str
+    label: str
+    primary: bool = False
+
+
+@dataclass(frozen=True)
+class Act:
+    """A `decisions` section's declared write (Brian 2026-11-13: pages are
+    read-only by default; a page opts in to acting by declaring this). The
+    console posts nothing itself and holds no write grant: the reader's
+    browser posts JSON to ``post``, a same-origin path the console does not
+    serve, owned by the writer that holds the record's one write grant."""
+    post: str
+    #: the row field identifying the row to the writer, posted under its own name.
+    key: str
+    #: further row fields posted under their own names (e.g. the tenant).
+    send: tuple[str, ...]
+    #: the body field the chosen button's value is posted under.
+    choice_field: str
+    choices: tuple[Choice, ...]
+    #: "change" button: its value, its label, and the selects it opens,
+    #: each a body field and its (value, label) options.
+    change: Choice | None = None
+    change_fields: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    #: whether the card carries a free-text note, posted as `note`.
+    note: bool = True
+    #: the row field shown as the card's headline.
+    headline: str | None = None
+
+
+@dataclass(frozen=True)
 class Section:
     type: str
     title: str
@@ -160,6 +193,9 @@ class Section:
     #: table only: a declared `ticks:` list and the row field keying it, so each
     #: row carries a checkbox (`index/ticks.py`), e.g. ("reading-list", "item_id").
     tick: tuple[str, str] | None = None
+    #: decisions only: the declared write and the labelled fields each card shows.
+    act: Act | None = None
+    labels: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -362,6 +398,10 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     if not title:
         raise PagesConfigError(f"{where}: `title` is required")
     select = _selector(raw.get("select"), where)
+    if kind == "decisions":
+        return _decisions(cast("Mapping[str, object]", raw), where, title, select, empty)
+    if "act" in raw:
+        raise PagesConfigError(f"{where}: only a decisions section takes `act`")
     fields = _names(raw.get("fields"), where, "fields")
     if kind == "chart" and not 1 <= len(fields) <= MAX_CHART_SERIES:
         raise PagesConfigError(
@@ -407,6 +447,129 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
                    annotations=annotations, sortable=sortable, tick=tick, x=x)
+
+
+_WRITE_PATH = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9._~/-]{0,199}$")
+_BODY_FIELD = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def is_console_route(path: str) -> bool:
+    """Whether ``path`` is one the console itself serves (a view or an asset).
+    A declared write path must not be: the console never receives a write."""
+    from ..server import router
+
+    try:
+        router.resolve(path)
+    except router.UnknownRoute:
+        return path.split("?", 1)[0] in _STATIC_PATHS
+    return True
+
+
+#: The console's own static asset paths (`server/app.py`), which `resolve` does not route.
+_STATIC_PATHS = frozenset({"/styles.css", "/console.js", "/charts.js"})
+
+
+def _write_path(raw: object, where: str) -> str:
+    post = str(raw or "").strip()
+    if not _WRITE_PATH.match(post) or "//" in post or "/../" in post or post.endswith("/.."):
+        raise PagesConfigError(
+            f"{where}: `act.post` must be a same-origin absolute path such as "
+            f"/back-office/decide, not {post!r}")
+    if post.startswith("/vendor/") or is_console_route(post):
+        raise PagesConfigError(
+            f"{where}: `act.post` {post!r} is a console route; a page posts to the writer that "
+            "owns the record, never to the console")
+    return post
+
+
+def _body_field(raw: object, where: str, what: str) -> str:
+    name = str(raw or "").strip()
+    if not _BODY_FIELD.match(name):
+        raise PagesConfigError(f"{where}: `{what}` must be a field name like `verdict`, "
+                               f"not {name!r}")
+    return name
+
+
+def _mapping(raw: object, where: str, what: str) -> Mapping[str, object]:
+    if not isinstance(raw, Mapping):
+        raise PagesConfigError(f"{where}: {what} must be a mapping")
+    return cast("Mapping[str, object]", raw)
+
+
+def _items(raw: object, where: str, what: str) -> list[object]:
+    if not isinstance(raw, list) or not raw:
+        raise PagesConfigError(f"{where}: {what}")
+    return cast("list[object]", raw)
+
+
+def _choice(raw: object, where: str) -> Choice:
+    entry = _mapping(raw, where, "a button")
+    return Choice(value=_text(entry, "value", where), label=_text(entry, "label", where),
+                  primary=bool(entry.get("primary", False)))
+
+
+def _change(raw: object, at: str) -> tuple[Choice, tuple[tuple[str, tuple[tuple[str, str], ...]], ...]]:
+    """The "change" button and the selects it opens: body field -> (value, label) options."""
+    change = _choice(raw, f"{at} change")
+    selects = cast("Mapping[str, object]", raw).get("fields")
+    if not isinstance(selects, Mapping) or not selects:
+        raise PagesConfigError(f"{at} change: `fields` must map a body field to its options")
+    out: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    for name, opts in cast("Mapping[object, object]", selects).items():
+        fname = _body_field(name, f"{at} change", "fields")
+        where = f"{at} change field {fname}"
+        options = [_choice(o, where) for o in _items(opts, where, "must list options")]
+        out.append((fname, tuple((c.value, c.label) for c in options)))
+    return change, tuple(out)
+
+
+def _decisions(raw: Mapping[str, object], where: str, title: str, select: Selector,
+               empty: str | None) -> Section:
+    """A `decisions` section: rows as cards, each with the declared buttons."""
+    stray = [k for k in ("sortable", "sort_order", "annotations", "x", "tick") if k in raw]
+    if stray:
+        raise PagesConfigError(
+            f"{where}: {', '.join(f'`{k}`' for k in stray)} does not apply to a decisions section")
+    if not isinstance(raw.get("act"), Mapping):
+        raise PagesConfigError(f"{where}: `act` must declare where a decision is posted")
+    at = f"{where} act"
+    act_raw = _mapping(raw.get("act"), at, "`act`")
+    known = {"post", "key", "send", "choice_field", "choices", "change", "note", "headline"}
+    unknown = sorted(set(act_raw) - known)
+    if unknown:
+        raise PagesConfigError(f"{at}: unknown key(s) {', '.join(unknown)}")
+    key = _body_field(act_raw.get("key"), at, "key")
+    send_raw = act_raw.get("send")
+    send = tuple(_body_field(n, at, "send")
+                 for n in (cast("list[object]", send_raw) if isinstance(send_raw, list) else []))
+    choice_field = _body_field(act_raw.get("choice_field") or "choice", at, "choice_field")
+    choices = tuple(_choice(c, f"{at} choice #{n}") for n, c in enumerate(
+        _items(act_raw.get("choices"), at, "`choices` must list at least one button"), start=1))
+    change: Choice | None = None
+    change_fields: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    if act_raw.get("change") is not None:
+        change, change_fields = _change(act_raw["change"], at)
+    note = bool(act_raw.get("note", True))
+    posted = [key, *send, choice_field, *(n for n, _ in change_fields)]
+    if note:
+        posted.append("note")
+    if len(set(posted)) != len(posted):
+        raise PagesConfigError(f"{at}: a body field is posted twice: {posted}")
+    values = [c.value for c in choices] + ([change.value] if change else [])
+    if len(set(values)) != len(values):
+        raise PagesConfigError(f"{at}: two buttons post the same value")
+    headline = str(act_raw.get("headline") or "").strip() or None
+    labels = _also(raw.get("fields"), where)
+    limit = raw.get("limit", DEFAULT_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        raise PagesConfigError(f"{where}: `limit` must be an integer 1..{MAX_LIMIT}")
+    sort = str(raw["sort"]).strip() if raw.get("sort") else None
+    act = Act(post=_write_path(act_raw.get("post"), at), key=key, send=send,
+              choice_field=choice_field, choices=choices, change=change,
+              change_fields=change_fields, note=note, headline=headline)
+    return Section(type="decisions", title=title, select=select,
+                   fields=tuple(n for n, _ in labels), sort=sort, limit=limit, empty=empty,
+                   act=act, labels=labels)
 
 
 def parse(raw: Any, feeds: set[str] | None = None,
@@ -956,6 +1119,9 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
                        annotations_undated=undated)
         return doc
     in_range = [e for e in rows if _in_range(e, since)]
+    if s.type == "decisions":
+        return _decisions_doc(doc, s, len(cast("list[Entity]", rows)),
+                              cast("list[Entity]", in_range))
     if s.type == "exceptions":
         bad = by_priority([e for e in in_range if is_exception(e)])
         doc.update(matched=len(in_range), columns=[],
@@ -996,6 +1162,37 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
             value = _fields(by_id[r["id"]]).get(key) if r["id"] in by_id else None
             k = str(value.value) if value is not None and value.value not in (None, "") else None
             r["tick"] = {"key": k, "done": bool(found and k and found.done(k))}
+    return doc
+
+
+def _decisions_doc(doc: dict[str, object], s: Section, matched: int,
+                   in_range: list[Entity]) -> dict[str, object]:
+    """A decisions section's cards: each row with its headline, its labelled
+    fields and the values its card posts, plus the declared write."""
+    act = s.act
+    assert act is not None
+    wanted = [*(n for n, _ in s.labels), act.key, *act.send]
+    if act.headline:
+        wanted.append(act.headline)
+    if s.sort:
+        wanted.append(s.sort.lstrip("-"))
+    columns = list(dict.fromkeys(wanted))
+    cards: list[dict[str, object]] = [_row(e, columns) for e in in_range]
+    if s.sort:
+        cards.sort(key=_sort_key(s.sort, ()))
+    change: dict[str, object] | None = None
+    if act.change is not None:
+        change = {"value": act.change.value, "label": act.change.label,
+                  "fields": [{"name": n, "options": [list(o) for o in opts]}
+                             for n, opts in act.change_fields]}
+    doc.update(matched=matched, total=len(cards), rows=cards[:s.limit],
+               outside_range=matched - len(in_range),
+               labels=[list(pair) for pair in s.labels],
+               act={"post": act.post, "key": act.key, "send": list(act.send),
+                    "choice_field": act.choice_field, "headline": act.headline,
+                    "note": act.note, "change": change,
+                    "choices": [{"value": c.value, "label": c.label, "primary": c.primary}
+                                for c in act.choices]})
     return doc
 
 

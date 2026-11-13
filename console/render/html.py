@@ -3053,6 +3053,90 @@ def _page_rows(index: Index, sec: dict, links: Citations | None, pg: dict | None
             + f"<tbody>{rows}</tbody></table>{more}")
 
 
+def _decision_value(value: object) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _change_html(change: dict[str, object]) -> str:
+    """The "change" choices a card opens: one select per declared body field."""
+    fields = cast("list[dict[str, object]]", change["fields"])
+    selects = ""
+    for fld in fields:
+        name = str(fld["name"])
+        options = cast("list[list[str]]", fld["options"])
+        selects += (f'<label>{esc(name.replace("_", " "))}<select name="{esc(name)}">'
+                    + "".join(f'<option value="{esc(v)}">{esc(lbl)}</option>' for v, lbl in options)
+                    + "</select></label>")
+    label = str(change["label"])
+    return (f'<details class="decision-change"><summary>{esc(label)}</summary>'
+            f'{selects}<button type="button" class="decision-option"'
+            f' data-choice="{esc(change["value"])}" data-change="1">'
+            f'<span class="decision-text">Save: {esc(label)}</span></button></details>')
+
+
+def _decision_form(act: dict[str, object], values: dict[str, object]) -> str:
+    """A card's form: the posted values, the note and the declared buttons.
+    The buttons are plain buttons; `console.js` posts the JSON body."""
+    sent = [str(act["key"]), *cast("list[str]", act["send"])]
+    hidden = "".join(
+        f'<input type="hidden" name="{esc(n)}" value="{esc(_decision_value(values.get(n)))}">'
+        for n in sent)
+    note = ('<label class="decision-note">Note (optional)'
+            '<textarea name="note" rows="2" maxlength="2000"></textarea></label>'
+            if act["note"] else "")
+    buttons = "".join(
+        f'<button type="button" class="decision-option{" decision-rec" if c["primary"] else ""}"'
+        f' data-choice="{esc(c["value"])}"><span class="decision-text">{esc(c["label"])}</span>'
+        "</button>" for c in cast("list[dict[str, object]]", act["choices"]))
+    change = act["change"]
+    more = _change_html(cast("dict[str, object]", change)) if change else ""
+    return (f'<form class="page-act" data-post="{esc(act["post"])}"'
+            f' data-choice-field="{esc(act["choice_field"])}">{hidden}{note}'
+            f'<div class="decision-options">{buttons}</div>{more}'
+            '<noscript><p class="absent">Deciding here needs JavaScript.</p></noscript></form>')
+
+
+def _page_decisions(sec: dict[str, object], demo: bool = False) -> str:
+    """A `decisions` section (Brian 2026-11-13: decide on the page you are
+    reading, not on a second one). Each row is a card: its headline, its
+    labelled fields, a note, and the declared buttons. A button posts JSON
+    to the section's declared writer path from the reader's browser
+    (`console.js`); the console serves no write and holds no grant. A demo
+    shows the cards without the buttons."""
+    rows = cast("list[dict[str, object]]", sec["rows"])
+    if not rows:
+        what = (f'{_empty_note(sec)}no row matches <code>{esc(sec["selector"])}</code>'
+                if not sec["matched"] else "no row inside the selected range")
+        return f'<p class="absent">{what}</p>'
+    act = cast("dict[str, object]", sec["act"])
+    labels = cast("list[list[str]]", sec["labels"])
+    headline_field = act["headline"]
+    cards: list[str] = []
+    for r in rows:
+        values = cast("dict[str, object]", r["fields"])
+        key = _decision_value(values.get(str(act["key"])))
+        headline = _decision_value(values.get(str(headline_field))) if headline_field else ""
+        facts = "".join(
+            f"<dt>{esc(label)}</dt><dd>{esc(_decision_value(values.get(name)))}</dd>"
+            for name, label in labels if _decision_value(values.get(name)))
+        head = (f'<h3 class="decision-title">{esc(headline or r["label"])}</h3>'
+                f'<div class="muted">{as_of_html(cast("str | None", r["as_of"]))} · '
+                f'<a href="{esc(r["url"])}">details and evidence</a></div>')
+        dl = f'<dl class="decision-facts">{facts}</dl>' if facts else ""
+        if demo or not key:
+            why = ("" if demo else f'<p class="absent">this row has no {esc(act["key"])}, '
+                   "so it cannot be decided here</p>")
+            cards.append(f'<article class="decision page-decision">{head}{dl}{why}</article>')
+            continue
+        anchor = "dc-" + re.sub(r"[^A-Za-z0-9_-]", "-", key)[:80]
+        cards.append(f'<article id="{esc(anchor)}" class="decision page-decision">'
+                     f"{head}{dl}{_decision_form(act, values)}</article>")
+    total = cast("int", sec["total"])
+    more = (f'<p class="list-window">showing {len(rows)} of {total}</p>'
+            if total > len(rows) else "")
+    return f'<div class="page-decisions">{"".join(cards)}</div>{more}'
+
+
 def _with_tick(row_html: str, cell: str) -> str:
     """``row_html`` with ``cell`` as its first cell."""
     head, rest = row_html.split(">", 1)
@@ -3243,6 +3327,8 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
                     f'{_report_text(latest, links)}</article>')
     elif sec["type"] == "chart":
         body = _page_chart(index, sec)
+    elif sec["type"] == "decisions":
+        body = _page_decisions(cast("dict[str, object]", sec), demo)
     else:
         body = _page_rows(index, sec, links, pg)
     return f'<section class="page-section page-{esc(sec["type"])}">{title}{body}</section>'

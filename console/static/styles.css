@@ -390,3 +390,9 @@ table.grid th[scope="row"], table.grid thead th:first-child { text-align: left; 
 .grid-none { color: var(--muted); }
 table.grid .grid-marked { outline: 2px solid var(--chart-1); outline-offset: -2px; }
 .grid-note { font-size: .8rem; color: var(--muted); margin: .2rem 0 0; }
+
+/* plain tables: numbers right-aligned, a signed value toned by its sign */
+table.plain td.num, table.plain th { font-variant-numeric: tabular-nums; }
+table.plain td.num { text-align: right; white-space: nowrap; }
+table.plain td.num-pos { color: var(--good); }
+table.plain td.num-neg { color: var(--bad); }

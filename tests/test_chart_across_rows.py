@@ -125,7 +125,7 @@ def test_mixed_units_are_refused_rather_than_drawn_on_one_axis():
 
 
 @pytest.mark.parametrize("bad, why", [
-    (dict(type="table", x="ticker"), "only a chart takes `x`"),
+    (dict(type="table", x="ticker"), "only a chart or a grid takes `x`"),
     (dict(x="ticker", fields=["ticker"]), "also a series"),
     (dict(sort="-alpha", fields=["alpha"]), "takes `sort`"),
 ])

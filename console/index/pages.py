@@ -53,7 +53,10 @@ _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SECTION = re.compile(r"^[a-z0-9][a-z0-9 -]{0,39}$")
 
 #: The closed section vocabulary. Adding one is a PR here, never config.
-SECTION_TYPES = ("tiles", "table", "chart", "report", "exceptions", "text")
+SECTION_TYPES = ("tiles", "table", "chart", "grid", "report", "exceptions", "text")
+#: grid: the most columns (days) one grid shows, and its default.
+MAX_GRID_COLUMNS = 60
+DEFAULT_GRID_COLUMNS = 14
 
 #: The closed time-range vocabulary, as the URL spells it.
 RANGES: dict[str, timedelta | None] = {
@@ -155,6 +158,12 @@ class Section:
     #: per day). Dates draw as lines in date order; anything else as bars,
     #: in `sort` order, `limit` of them.
     x: str | None = None
+    #: grid only: the field naming each ROW of a grid (e.g. ``ticker``), whose
+    #: columns are the `x` values and whose cells are the one declared field
+    #: (Brian 2026-11-13: the old dashboard's target-weight-by-day grid).
+    y: str | None = None
+    #: grid only: how many of the newest `x` values to show as columns.
+    columns: int = DEFAULT_GRID_COLUMNS
     #: table only: the fields a reader may sort by from the URL (`?sort=`).
     sortable: tuple[str, ...] = ()
     #: table only: a declared `ticks:` list and the row field keying it, so each
@@ -374,8 +383,32 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
         raise PagesConfigError(f"{where}: only a chart takes `annotations`")
     x_raw: object = cast("Mapping[str, object]", raw).get("x")
     x = str(x_raw).strip() if x_raw else None
-    if x is not None and kind != "chart":
-        raise PagesConfigError(f"{where}: only a chart takes `x`")
+    if x is not None and kind not in ("chart", "grid"):
+        raise PagesConfigError(f"{where}: only a chart or a grid takes `x`")
+    y_raw: object = cast("Mapping[str, object]", raw).get("y")
+    y = str(y_raw).strip() if y_raw else None
+    columns: int = DEFAULT_GRID_COLUMNS
+    if kind == "grid":
+        if x is None or y is None:
+            raise PagesConfigError(f"{where}: a grid takes `x` (its columns) and `y` (its rows)")
+        if x == y:
+            raise PagesConfigError(f"{where}: a grid's `x` and `y` must be different fields")
+        if len(fields) != 1 or fields[0] in (x, y):
+            raise PagesConfigError(f"{where}: a grid takes exactly one field for its cells, "
+                                   "other than `x` and `y`")
+        stray = [k for k in ("sort", "sort_order", "sortable", "annotations", "tick")
+                 if k in raw]
+        if stray:
+            raise PagesConfigError(
+                f"{where}: {', '.join(f'`{k}`' for k in stray)} does not apply to a grid "
+                "(its rows sort by the newest column)")
+        cols_raw: object = cast("Mapping[str, object]", raw).get("columns", DEFAULT_GRID_COLUMNS)
+        if (isinstance(cols_raw, bool) or not isinstance(cols_raw, int)
+                or not 1 <= cols_raw <= MAX_GRID_COLUMNS):
+            raise PagesConfigError(f"{where}: `columns` must be an integer 1..{MAX_GRID_COLUMNS}")
+        columns = cols_raw
+    elif y is not None or "columns" in raw:
+        raise PagesConfigError(f"{where}: only a grid takes `y` and `columns`")
     if x is not None and annotations:
         raise PagesConfigError(f"{where}: a chart across rows (`x`) takes no `annotations`")
     if x is not None and x in fields:
@@ -406,7 +439,8 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     tick = _tick(raw.get("tick"), where, kind, ticks)
     return Section(type=kind, title=title, select=select, fields=fields,
                    sort=sort, limit=limit, sort_order=sort_order, empty=empty,
-                   annotations=annotations, sortable=sortable, tick=tick, x=x)
+                   annotations=annotations, sortable=sortable, tick=tick, x=x,
+                   y=y, columns=columns)
 
 
 def parse(raw: Any, feeds: set[str] | None = None,
@@ -853,6 +887,60 @@ def _across(rows: Sequence[Entity], s: Section) -> dict[str, object]:
             "as_of": newest_row.provenance.as_of}
 
 
+def _grid(rows: Sequence[Entity], s: Section, marked: str | None) -> dict[str, object]:
+    """A grid: one row per `y` value, one column per `x` value (the newest
+    `columns` of them, oldest first), each cell the declared field of the row
+    carrying that pair. Two rows on one cell keep the first (rows arrive
+    newest first). A cell no row fills is absent, which is not zero: on an
+    order book, a name not in the book that day. Rows sort by the newest
+    column's value, largest first, then by their largest value anywhere, so
+    a name that just left the book stays beside the ones it left; `limit`
+    of them are shown. `marked` is the column a page variable picked."""
+    x, y, name = s.x or "", s.y or "", s.fields[0]
+    cells: dict[tuple[str, str], object] = {}
+    urls: dict[tuple[str, str], str] = {}
+    unit: str | None = None
+    unplaced = 0
+    for e in rows:
+        raw_fields = cast("Mapping[str, object] | None", e.detail.get("fields"))
+        by_name: dict[str, Field] = {f.name: f for f in parse_fields(raw_fields)}
+        xf, yf, vf = by_name.get(x), by_name.get(y), by_name.get(name)
+        xv = xf.value if xf is not None else None
+        yv = yf.value if yf is not None else None
+        if xv in (None, "") or yv in (None, ""):
+            unplaced += 1
+            continue
+        cell = (str(yv), str(xv))
+        if cell in cells:
+            continue
+        cells[cell] = vf.value if vf is not None else None
+        urls[cell] = e.route
+        if vf is not None and unit is None and vf.unit:
+            unit = vf.unit
+    if not cells:
+        return {"absent": f"no matched row carries both {x!r} and {y!r}", "unplaced": unplaced}
+    # ISO dates (the common `x`) sort as text in date order.
+    all_columns = sorted({c for _, c in cells})
+    shown_columns = all_columns[-s.columns:]
+    newest = shown_columns[-1]
+
+    def number(r: str, c: str) -> float | None:
+        return _as_number(cells.get((r, c)))
+
+    names = sorted({r for r, c in cells if c in shown_columns})
+    names.sort(key=lambda r: (-(number(r, newest) or 0.0),
+                              -max((number(r, c) or 0.0) for c in shown_columns), r))
+    values = [n for r in names for c in shown_columns if (n := number(r, c)) is not None]
+    return {"columns": shown_columns, "marked": marked if marked in shown_columns else None,
+            "rows": [{"label": r,
+                      "cells": [{"value": number(r, c),
+                                 "url": urls.get((r, c))} for c in shown_columns]}
+                     for r in names[:s.limit]],
+            "unit": unit, "max": max(values, default=0.0), "min": min(values, default=0.0),
+            "matched": len(names), "shown": min(len(names), s.limit),
+            "columns_matched": len(all_columns), "unplaced": unplaced}
+
+
 def _day(value: Any) -> str | None:
     """The UTC calendar day of a date or instant, or None when it is neither."""
     when = _instant(value)
@@ -929,6 +1017,16 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
         return doc
     assert s.select is not None
     doc["selector"] = s.select.text
+    if s.type == "grid":
+        # A grid spans its `x` values, so a page variable on that same facet
+        # (the order book's day picker) marks a column rather than filtering
+        # the grid down to one.
+        spanned = {k: v for k, v in variables.items() if k != s.x}
+        matched_rows = cast("list[Entity]", _select(index, s.select, spanned))
+        doc.update(x=s.x, y=s.y, field=s.fields[0],
+                   **_grid([e for e in matched_rows if _in_range(e, since)], s,
+                           variables.get(s.x or "")))
+        return doc
     rows = _select(index, s.select, variables)
     if s.type == "chart" and s.x is not None:
         matched = cast("list[Entity]", rows)

@@ -380,3 +380,13 @@ article.decision.decision-ruled .decision-options { opacity: .55; }
   .decision-facts { grid-template-columns: 1fr; }
   .decision-facts dd { margin-bottom: .35rem; }
 }
+/* grid section: rows × columns, value printed, background shaded by size */
+table.grid { border-collapse: collapse; font-size: .82rem; font-variant-numeric: tabular-nums; }
+table.grid th, table.grid td { padding: .15rem .35rem; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.grid th[scope="row"], table.grid thead th:first-child { text-align: left; position: sticky; left: 0; background: var(--bg); }
+.grid-cell { display: block; padding: .05rem .3rem; border-radius: 3px; }
+.grid-pos { background: color-mix(in srgb, var(--chart-1) calc(var(--shade) * 60%), transparent); }
+.grid-neg { background: color-mix(in srgb, var(--chart-3) calc(var(--shade) * 60%), transparent); }
+.grid-none { color: var(--muted); }
+table.grid .grid-marked { outline: 2px solid var(--chart-1); outline-offset: -2px; }
+.grid-note { font-size: .8rem; color: var(--muted); margin: .2rem 0 0; }

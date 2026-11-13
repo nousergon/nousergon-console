@@ -3218,6 +3218,56 @@ def _page_across(sec: Mapping[str, object]) -> str:
             f'{as_of_html(cast("str | None", sec.get("as_of")))}</figcaption></figure>')
 
 
+def _page_grid(sec: Mapping[str, object]) -> str:
+    """A grid: rows by `y`, columns by `x`, each cell's value printed and its
+    background shaded by size (shade adds to the number, never replaces it,
+    §5.7). An empty cell is a dash: no row for that pair, which is not zero.
+    The column a page variable picked is outlined."""
+    if "absent" in sec:
+        return (f'<p class="absent">{esc(str(sec["absent"]))} — '
+                f'<code>{esc(str(sec.get("selector", "")))}</code></p>')
+    columns = [str(c) for c in cast("list[object]", sec["columns"])]
+    marked = cast("str | None", sec.get("marked"))
+    hi = max(abs(float(cast("float", sec.get("max") or 0.0))),
+             abs(float(cast("float", sec.get("min") or 0.0)))) or 1.0
+    unit = cast("str | None", sec.get("unit"))
+
+    def short(c: str) -> str:
+        return c[5:] if len(c) == 10 and c[4] == "-" else c
+
+    mark = ' class="grid-marked"'
+    head = "".join(f'<th scope="col"{mark if c == marked else ""}>'
+                   f'<abbr title="{esc(c)}">{esc(short(c))}</abbr></th>' for c in columns)
+    body: list[str] = []
+    for row in cast("list[dict[str, object]]", sec["rows"]):
+        cells = cast("list[dict[str, object]]", row["cells"])
+        url = next((str(c["url"]) for c in reversed(cells) if c.get("url")), None)
+        label = esc(str(row["label"]))
+        th = f'<th scope="row"><a href="{esc(url)}">{label}</a></th>' if url else f'<th scope="row">{label}</th>'
+        tds: list[str] = []
+        for c, cell in zip(columns, cells):
+            v = cell.get("value")
+            cls = mark if c == marked else ""
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                tds.append(f'<td{cls}><span class="grid-none">—</span></td>')
+                continue
+            shade = min(abs(float(v)) / hi, 1.0)
+            tone = "grid-neg" if v < 0 else "grid-pos"
+            tds.append(f'<td{cls}><span class="grid-cell {tone}" style="--shade:{shade:.2f}">'
+                       f'{esc(_num(float(v)))}</span></td>')
+        body.append(f"<tr>{th}{''.join(tds)}</tr>")
+    counts = f'{sec["shown"]} of {sec["matched"]} {esc(str(sec["y"]))}'
+    if int(cast("int", sec.get("columns_matched") or 0)) > len(columns):
+        counts += f' · newest {len(columns)} of {sec["columns_matched"]} {esc(str(sec["x"]))}'
+    if sec.get("unplaced"):
+        counts += f' · {sec["unplaced"]} rows without both'
+    u = f" · cells in {esc(unit)}" if unit else ""
+    return (f'<div class="table-wrap"><table class="grid"><thead><tr><th scope="col">'
+            f'{esc(str(sec["y"]))}</th>{head}</tr></thead><tbody>{"".join(body)}</tbody>'
+            f'</table></div><p class="grid-note">{counts}{u} · a dash is no row that day, '
+            f'not zero</p>')
+
+
 def _bars_html(labels: list[str], urls: list[str], series: list[dict[str, object]],
                unit: str | None, key: str) -> str:
     """One labelled group of horizontal bars per row, one bar per series in
@@ -3329,6 +3379,8 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
         body = _page_chart(index, sec)
     elif sec["type"] == "decisions":
         body = _page_decisions(cast("dict[str, object]", sec), demo)
+    elif sec["type"] == "grid":
+        body = _page_grid(cast("Mapping[str, object]", sec))
     else:
         body = _page_rows(index, sec, links, pg)
     return f'<section class="page-section page-{esc(sec["type"])}">{title}{body}</section>'

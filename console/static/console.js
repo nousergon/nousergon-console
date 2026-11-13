@@ -147,7 +147,7 @@
     if (typeof module !== "undefined") {
       module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen,
                         tickReply: tickReply, tickFlow: tickFlow, superseded: superseded,
-                        rowToggleKey: rowToggleKey};
+                        rowToggleKey: rowToggleKey, pageActReply: pageActReply};
     }
     return;
   }
@@ -728,6 +728,115 @@
     var btn = form.querySelector("button");
     if (!btn || btn.disabled) return;
     tickFlow(tickUi(form), function () { return sendTick(form); }, ticks);
+  });
+
+  // A page's declared decision (a `decisions` section, Brian 2026-11-13).
+  // The button posts JSON to the section's declared writer path, never to
+  // the console; the writer answers JSON, and only a 2xx JSON answer with
+  // no `error` is a save. Same flow and refresh guard as a ruling above.
+  function pageActReply(status, contentType, text) {
+    var body = null;
+    if (/application\/json/.test(contentType || "")) {
+      try { body = JSON.parse(text); } catch (e) { body = null; }
+    }
+    if (body && typeof body.error === "string" && body.error) {
+      return {ok: false, error: body.error + " (HTTP " + status + ")"};
+    }
+    if (body && status >= 200 && status < 300 && body.ok !== false) {
+      body.ok = true;
+      return body;
+    }
+    return {ok: false, error: "the decision was not confirmed (HTTP " + status +
+                              ") — reload and try again"};
+  }
+
+  function pageActBody(form, btn) {
+    var body = {};
+    var inputs = form.querySelectorAll('input[type="hidden"]');
+    for (var i = 0; i < inputs.length; i++) body[inputs[i].name] = inputs[i].value;
+    body[form.getAttribute("data-choice-field") || "choice"] = btn.getAttribute("data-choice");
+    var note = form.querySelector('textarea[name="note"]');
+    if (note && note.value.replace(/\s+/g, "")) body.note = note.value.trim();
+    if (btn.getAttribute("data-change")) {
+      var selects = form.querySelectorAll("details.decision-change select");
+      for (var j = 0; j < selects.length; j++) body[selects[j].name] = selects[j].value;
+    }
+    return body;
+  }
+
+  function pageActUi(form, btn) {
+    var card = form.closest("article.decision");
+    var buttons = form.querySelectorAll("button[data-choice]");
+    var label = (btn.textContent || "").replace(/^Save:\s*/, "").trim();
+    function clearError() {
+      var old = card && card.querySelector(".tick-error");
+      if (old) old.parentNode.removeChild(old);
+    }
+    function lock(on) {
+      for (var i = 0; i < buttons.length; i++) buttons[i].disabled = on;
+      var fields = form.querySelectorAll("textarea, select");
+      for (var k = 0; k < fields.length; k++) fields[k].disabled = on;
+    }
+    return {
+      optimistic: function () {
+        clearError();
+        lock(true);
+        btn.setAttribute("aria-busy", "true");
+        btn.classList.add("decision-picked");
+        if (card) card.classList.add("decision-pending");
+      },
+      confirm: function (reply) {
+        btn.removeAttribute("aria-busy");
+        if (!card) return;
+        card.classList.remove("decision-pending");
+        card.classList.add("decision-ruled");
+        var done = document.createElement("span");
+        done.className = "decision-saved";
+        done.setAttribute("role", "status");
+        done.textContent = "Saved: " + label +
+          (reply && reply.decided_by ? " by " + reply.decided_by : "");
+        card.appendChild(done);
+      },
+      rollback: function (message) {
+        btn.removeAttribute("aria-busy");
+        btn.classList.remove("decision-picked");
+        if (card) card.classList.remove("decision-pending");
+        lock(false);
+        clearError();
+        var err = document.createElement("span");
+        err.className = "tick-error decision-error";
+        err.setAttribute("role", "alert");
+        err.textContent = message;
+        (card || form).appendChild(err);
+      }
+    };
+  }
+
+  function sendPageAct(form, btn) {
+    var post = form.getAttribute("data-post") || "";
+    // Same origin only, and never the console's own path (the server
+    // refuses such a declaration; this is the browser-side half).
+    if (!/^\/[A-Za-z0-9]/.test(post) || post.indexOf("//") !== -1) {
+      return Promise.resolve({ok: false, error: "this page declares no valid place to save to"});
+    }
+    return fetch(post, {
+      method: "POST", credentials: "same-origin", cache: "no-store",
+      headers: {"Accept": "application/json", "Content-Type": "application/json"},
+      body: JSON.stringify(pageActBody(form, btn))
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        return pageActReply(resp.status, resp.headers.get("Content-Type"), text);
+      });
+    });
+  }
+
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target && ev.target.closest && ev.target.closest("form.page-act button[data-choice]");
+    if (!btn || btn.disabled) return;
+    if (!window.fetch || !window.JSON) return;
+    ev.preventDefault();
+    var form = btn.closest("form.page-act");
+    tickFlow(pageActUi(form, btn), function () { return sendPageAct(form, btn); }, ticks);
   });
 
   tickAges();

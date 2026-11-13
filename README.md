@@ -6,7 +6,7 @@
 
 **A read-only fleet index that persists nothing and reports what it cannot see.**
 
-(One declared exception to read-only: the optional `/actions` page can tick an action, which writes a label and a comment to that action's own issue. The issue is the store; the console still keeps nothing.)
+(Two declared exceptions to read-only. The optional `/actions` page can tick an action, which writes a label and a comment to that action's own issue: the issue is the store. And a declared page may opt in to a `decisions` section, whose buttons post from the reader's browser to a same-origin writer path the page declares, a path the console does not serve. The console receives no write and holds no write grant there; the writer that owns the record checks the reader and stores it. Either way the console still keeps nothing.)
 
 Most monitoring surfaces are a pile of dashboards. A dashboard is a frozen answer to the questions its author had at authoring time — but monitoring is the business of being asked questions nobody anticipated: *why is this stale · what else touched that artifact · what did this cycle cost · which of these has never run · who breaks if this one does.* Each of those is a traversal, not a tile.
 

@@ -28276,24 +28276,6 @@
                 }
             }
         ],
-        "./console/search/resolve.py": [
-            {
-                "code": "reportUnknownMemberType",
-                "range": {
-                    "startColumn": 12,
-                    "endColumn": 22,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportUnknownVariableType",
-                "range": {
-                    "startColumn": 11,
-                    "endColumn": 14,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./console/server/app.py": [
             {
                 "code": "reportIncompatibleVariableOverride",

@@ -43,7 +43,7 @@ class Hit:
 
 def _labels(ent: Entity) -> list[str]:
     """Every declared name of a row, lower-cased: its label, then its job's."""
-    out = []
+    out: list[str] = []
     for slot in (LABEL_DETAIL, JOB_LABEL_DETAIL):
         raw = ent.detail.get(slot)
         if isinstance(raw, str) and raw.strip():

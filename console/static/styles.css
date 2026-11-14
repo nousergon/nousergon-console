@@ -311,7 +311,7 @@ svg.ts-chart.ts-enhanced { display: none; }
 svg.ts-chart rect.ts-untriaged { fill: var(--warn); fill-opacity: .9; }
 
 /* Your actions (`/actions`): a table, the tick button in its own narrow first column. */
-table.actions td.action-cell { width: 2rem; padding-right: 0; }
+table.actions td.action-cell { width: 4.5rem; padding-right: 0; vertical-align: top; text-align: center; }
 table.actions tr.action-done td a { color: var(--muted); }
 .action-tick { margin: 0; }
 .action-prs { margin: 0.3rem 0 0; padding-left: 1.1rem; }
@@ -326,6 +326,14 @@ table.actions tr.action-done td a { color: var(--muted); }
    new state; the row dims until the server confirms, and a failed save says
    why beside the box. */
 .action-tick button[aria-busy="true"] { cursor: progress; }
+/* The second box: send a row back to an agent to re-review (Brian 2026-11-14). */
+.action-agent { margin-top: 0.5rem; }
+.action-tick button:has(.tick-label) { display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
+.action-agent button { font-size: 1rem; display: flex; flex-direction: column; align-items: center; gap: 0.1rem; }
+.tick-label { font-size: 0.65rem; line-height: 1.1; color: var(--muted); max-width: 4.5rem; text-align: center; }
+.decision-agent { margin-top: 0.75rem; }
+.decision-agent .action-agent button { flex-direction: row; gap: 0.4rem; }
+.decision-agent .tick-label { font-size: 0.85rem; max-width: none; }
 tr.tick-pending > td { opacity: 0.6; transition: opacity 0.15s; }
 /* A confirmed tick: the row fades out of To do, then arrives at the top of
    Done with a brief highlight. Nothing else on the page moves. */

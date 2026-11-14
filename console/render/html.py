@@ -2630,17 +2630,19 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
     it has one, then its first paragraph and its command), when it is due, any bound on when it may
     happen, and how long it has waited. The tick is a form POST, so it works
     with no script; the button is the checkbox."""
-    checked = not a.actionable
+    checked = a.done or a.closed or (a.merge_ask and a.pr_state in ("merged", "closed"))
     box = "☑" if checked else "☐"
     # Only a reader's own tick can be unticked here; an action done by its PR
     # merging or by its issue closing is shown ticked, read-only.
-    if writable and not a.closed and (a.done or a.actionable):
+    if writable and not a.closed and (a.done or a.actionable or a.agent):
         control = (f'<form method="post" action="/actions/{a.number}" class="action-tick">'
                    f'<input type="hidden" name="done" value="{"0" if a.done else "1"}">'
                    f'<button type="submit" aria-pressed="{"true" if a.done else "false"}" '
                    f'aria-label="{"Untick" if a.done else "Tick"} {esc(a.title)}" '
                    f'title="{"Untick: not done yet" if a.done else "Tick when you have done this"}">'
-                   f'{box}</button></form>')
+                   f'<span class="tick-box">{box}</span>'
+                   + ('<span class="tick-label">done</span>' if decl.agent_label else "")
+                   + '</button></form>')
     else:
         control = f'<span class="action-tick" aria-hidden="true">{box}</span>'
     if a.closed:
@@ -2651,6 +2653,9 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
                   "nothing left for you; the issue closes on the next check</span></div>")
     elif a.done:
         status = f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
+    elif a.agent:
+        status = ('<div><span class="chip state-degraded">sent back to an agent to re-review'
+                  ' — it returns here once fixed</span></div>')
     else:
         status = ""
     # PRs and commands, never the tracking issue (Brian 2026-11-04): the title
@@ -2672,7 +2677,7 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
         parts.append("pick an option")
     what = " · ".join(parts) or "step"
     return (f'<tr id="a{a.number}" class="action{" action-done" if checked else ""}">'
-            f'<td class="action-cell">{control}</td>'
+            f'<td class="action-cell">{control}{_agent_flag(a, decl, writable)}</td>'
             f"<td>{title}"
             + (f'<div class="muted">{esc(a.summary)}</div>' if a.summary else "")
             + ask + status + "</td>"
@@ -2680,6 +2685,24 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
             f"<td>{esc(a.when) if a.when else _ANY_TIME}</td>"
             f'<td>{what}<br>'
             f'<span class="muted">{as_of_html(a.created_at)}</span></td></tr>')
+
+
+def _agent_flag(a: "Action", decl: "ActionsDeclaration", writable: bool) -> str:
+    """The second box (Brian 2026-11-14): "this is not ready for me, an agent
+    must re-review it" (red CI on a PR to merge, a broken command). It writes
+    the declared agent label; an agent fixes the ask and removes it."""
+    if not (writable and decl.agent_label) or a.closed or a.done:
+        return ""
+    on = a.agent
+    return (f'<form method="post" action="/actions/{a.number}" class="action-tick action-agent">'
+            f'<input type="hidden" name="done" value="{"0" if on else "1"}">'
+            '<input type="hidden" name="flag" value="agent">'
+            f'<button type="submit" aria-pressed="{"true" if on else "false"}" '
+            f'aria-label="{"Take back from the agents" if on else "Needs an agent"}: {esc(a.title)}" '
+            f'title="{"Take it back: it is ready for you again" if on else "Not ready for you: send it back to an agent to re-review"}">'
+            f'<span class="tick-box">{"☑" if on else "☐"}</span>'
+            '<span class="tick-label">needs an agent</span>'
+            "</button></form>")
 
 
 def _prs_to_merge(a: "Action") -> list[tuple[str, str, str | None]]:
@@ -2704,7 +2727,8 @@ def _action_options(a: "Action", writable: bool) -> str:
     return '<div class="action-run">Decide:<ul class="action-options">' + "".join(items) + "</ul></div>"
 
 
-def _decision_card(a: "Action", writable: bool, today: str) -> str:
+def _decision_card(a: "Action", writable: bool, today: str,
+                   decl: "ActionsDeclaration | None" = None) -> str:
     """One ruling as a readable card (Brian 2026-11-11: the table was
     unreadable): the question, a 2-4 sentence brief, where to read more, then
     one full-width button per option with the recommended one marked and why."""
@@ -2739,7 +2763,10 @@ def _decision_card(a: "Action", writable: bool, today: str) -> str:
     why = (f'<p class="decision-why"><strong>Why {esc(a.recommended)}:</strong> '
            f'{esc(a.rec_reason)}</p>' if a.recommended and a.rec_reason else "")
     return (f'<article id="a{a.number}" class="decision">{head}{body}'
-            f'<div class="decision-options">{"".join(opts)}</div>{why}</article>')
+            f'<div class="decision-options">{"".join(opts)}</div>{why}'
+            + (f'<div class="decision-agent">{_agent_flag(a, decl, writable)}</div>'
+               if decl is not None else "")
+            + "</article>")
 
 
 def _action_ask(a: "Action", writable: bool = False) -> str:
@@ -2804,6 +2831,17 @@ def action_row(index: Index, number: int) -> str:
     return _action_row(a, decl, decl.writable, render_now().date().isoformat())
 
 
+def action_section(index: Index, a: "Action") -> str:
+    """Which part of `/actions` the row belongs in now: ``todo``, ``agents``
+    or ``done``. The script moves a ticked row to that part's table."""
+    from ..index import actions
+
+    found = actions.listing(index)
+    if found is not None and any(x.number == a.number for x in found.not_ready):
+        return "agents"
+    return "todo" if a.actionable else "done"
+
+
 def actions_page(index: Index, notice: str | None = None) -> str:
     """Your actions (`index/actions.py`): every open issue carrying a declared
     label, not yet done first, oldest first. A tick writes the done label to
@@ -2844,7 +2882,7 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             if decisions:
                 body += ("<h2>Decisions</h2>"
                          '<p class="muted">Tap one option; the ruling is written to the issue.</p>'
-                         + "".join(_decision_card(a, decl.writable, today) for a in decisions))
+                         + "".join(_decision_card(a, decl.writable, today, decl) for a in decisions))
             if steps:
                 body += ("<h2>Commands and PRs</h2>"
                          + _actions_table(steps, decl, today))
@@ -2853,9 +2891,9 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             if waiting:
                 body += ('<details class="actions-waiting"><summary><h2>With agents · '
                          f'{len(waiting)}</h2></summary>'
-                         '<p class="muted">No command, PR or options yet, so nothing for you. '
-                         'Agents work these until each needs one specific step from you, '
-                         'then it moves up.</p>'
+                         '<p class="muted">Nothing for you here: either no command, PR or '
+                         'options yet, or you sent it back with "needs an agent". Agents work '
+                         'these until each needs one specific step from you, then it moves up.</p>'
                          + _actions_table(waiting, decl, today) + "</details>")
             # Brian 2026-11-05: the list is actionable only; everything else
             # is an archive, ticked.

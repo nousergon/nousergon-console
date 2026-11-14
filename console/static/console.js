@@ -535,10 +535,11 @@
 
   function tickUi(form) {
     var btn = form.querySelector("button");
+    var glyph = btn.querySelector(".tick-box") || btn;
     var input = form.querySelector('input[name="done"]');
     var cell = form.closest("td") || form.parentNode;
-    var row = form.closest("tr");
-    var was = {text: btn.textContent, pressed: btn.getAttribute("aria-pressed"),
+    var row = form.closest("tr") || form.closest("article.decision");
+    var was = {text: glyph.textContent, pressed: btn.getAttribute("aria-pressed"),
                label: btn.getAttribute("aria-label"), title: btn.getAttribute("title")};
     var marking = input && input.value !== "0";
     function clearError() {
@@ -548,7 +549,7 @@
     return {
       optimistic: function () {
         clearError();
-        btn.textContent = marking ? BOX_ON : BOX_OFF;
+        glyph.textContent = marking ? BOX_ON : BOX_OFF;
         btn.setAttribute("aria-pressed", marking ? "true" : "false");
         btn.setAttribute("aria-busy", "true");
         btn.disabled = true;  // this row only; every other row stays live
@@ -558,7 +559,8 @@
         if (row) row.classList.remove("tick-pending");
         btn.removeAttribute("aria-busy");
         if (typeof reply.row === "string" && row) {
-          moveActionRow(row, reply.row, !reply.actionable);
+          moveActionRow(row, reply.row,
+                        reply.section || (reply.actionable ? "todo" : "done"));
           return;
         }
         // A tick-list row: it stays where it is, now saved the other way.
@@ -572,7 +574,7 @@
         if (row) row.classList.remove("tick-pending");
         btn.removeAttribute("aria-busy");
         btn.disabled = false;
-        btn.textContent = was.text;
+        glyph.textContent = was.text;
         if (was.pressed !== null) btn.setAttribute("aria-pressed", was.pressed);
         clearError();
         var err = document.createElement("span");
@@ -589,7 +591,7 @@
   // it is again. With no such table on the page the row is replaced where it
   // stands; the cadence refresh, once the reader is still, lays the page out
   // afresh with the missing section (see the note above the submit handler).
-  function moveActionRow(row, html, done) {
+  function moveActionRow(row, html, section) {
     var tpl = document.createElement("template");
     tpl.innerHTML = "<table><tbody>" + html + "</tbody></table>";
     var fresh = tpl.content.querySelector("tr");
@@ -597,11 +599,23 @@
     var tables = document.querySelectorAll("table.actions");
     var target = null;
     for (var i = 0; i < tables.length; i++) {
-      var inDone = !!tables[i].closest("details.actions-done");
-      if (inDone === done) { target = tables[i].tBodies[0]; break; }
+      var where = tables[i].closest("details.actions-done") ? "done"
+        : tables[i].closest("details.actions-waiting") ? "agents" : "todo";
+      if (where === section) { target = tables[i].tBodies[0]; break; }
     }
-    if (!target || target.contains(row)) {
-      row.parentNode.replaceChild(fresh, row);
+    var isCard = row.tagName === "ARTICLE";
+    if (!target && isCard && section !== "todo") {
+      // A decision sent to agents with no such table on the page yet: it
+      // leaves the decisions; the cadence refresh draws the section.
+      row.classList.add("tick-leaving");
+      setTimeout(function () {
+        if (row.parentNode) row.parentNode.removeChild(row);
+        recountActions();
+      }, 350);
+      return;
+    }
+    if (!target || target.contains(row) || (isCard && section === "todo")) {
+      if (!isCard) row.parentNode.replaceChild(fresh, row);
       return;
     }
     // Fade the row out where it stands, then add it to the other table and
@@ -620,19 +634,23 @@
   // now on the page, so they agree with the move without a re-read.
   function recountActions() {
     var tables = document.querySelectorAll("table.actions");
-    var todo = 0, done = 0;
+    var todo = document.querySelectorAll("article.decision").length, done = 0, agents = 0;
     for (var i = 0; i < tables.length; i++) {
       var n = tables[i].tBodies[0] ? tables[i].tBodies[0].rows.length : 0;
       if (tables[i].closest("details.actions-done")) done += n;
-      else if (!tables[i].closest("details.actions-waiting")) todo += n;
+      else if (tables[i].closest("details.actions-waiting")) agents += n;
+      else todo += n;
     }
     var h = document.querySelector("details.actions-done > summary > h2");
     if (h) h.textContent = "Done \u00b7 " + done;
+    var w = document.querySelector("details.actions-waiting > summary > h2");
+    if (w) w.textContent = "With agents \u00b7 " + agents;
     var ps = document.querySelectorAll("body > p");
     for (var j = 0; j < ps.length; j++) {
       var t = ps[j].firstChild;
       if (t && t.nodeType === 3 && /^\d+ to do \u00b7 \d+ done \u00b7 /.test(t.nodeValue)) {
-        t.nodeValue = t.nodeValue.replace(/^\d+ to do \u00b7 \d+ done/, todo + " to do \u00b7 " + done + " done");
+        t.nodeValue = t.nodeValue.replace(/^\d+ to do \u00b7 \d+ done \u00b7 \d+ with agents/,
+          todo + " to do \u00b7 " + done + " done \u00b7 " + agents + " with agents");
       }
     }
   }

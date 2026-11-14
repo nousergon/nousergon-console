@@ -90,6 +90,10 @@ class Declaration:
     done_label: str
     token_command: tuple[str, ...]
     write_token_command: tuple[str, ...] = ()
+    #: The label a reader adds to say "an agent must look at this again"
+    #: (Brian 2026-11-14: ops#2324's CI was red, so not his to merge yet).
+    #: None: the page offers no such box.
+    agent_label: str | None = None
     title: str = "Your actions"
     done_text: str = "Done — waiting for a check that it deployed and looks good."
     api_url: str = "https://api.github.com"
@@ -150,6 +154,9 @@ class Action:
     rec_reason: str = ""
     #: Where to read more, as (url, label): the ``**Links:**`` paragraph.
     links: tuple[tuple[str, str], ...] = ()
+    #: The reader flagged it back to the agents (the declared agent label):
+    #: off the to-do list until an agent fixes it and removes the label.
+    agent: bool = False
 
     @property
     def has_step(self) -> bool:
@@ -172,7 +179,7 @@ class Action:
     def actionable(self) -> bool:
         """Waiting on the reader: open, not ticked, and not about a PR that
         has already merged or closed (Brian 2026-11-05: "actionable only")."""
-        return not (self.done or self.closed
+        return not (self.done or self.closed or self.agent
                     or (self.merge_ask and self.pr_state in ("merged", "closed")))
 
 
@@ -215,13 +222,21 @@ class Listing:
         """Open but giving the reader nothing to do: no command, PR or
         options. Off the to-do list (Brian 2026-11-11), listed apart so it
         never falls off the map while agents work it to a concrete step."""
-        return tuple(a for a in self.todo if not a.has_step)
+        return (tuple(a for a in self.todo if not a.has_step)
+                + self.flagged)
+
+    @property
+    def flagged(self) -> tuple[Action, ...]:
+        """Open, not done, and sent back to the agents by the reader."""
+        return tuple(a for a in self.actions if a.agent and not a.done and not a.closed)
 
     @property
     def done(self) -> tuple[Action, ...]:
         """Everything not actionable: ticked or PR merged/closed (still open
         issues, waiting for a check), then the closed archive."""
-        return tuple(a for a in self.actions if not a.actionable) + self.archive
+        flagged = {a.number for a in self.flagged}
+        return (tuple(a for a in self.actions
+                      if not a.actionable and a.number not in flagged) + self.archive)
 
 
 # ------------------------------------------------------------------ parse ---
@@ -243,7 +258,7 @@ def parse(raw: Any) -> Declaration | None:
         return None
     if not isinstance(raw, Mapping):
         raise ActionsConfigError("actions: must be a mapping")
-    known = {"org", "repo", "labels", "done_label", "token_command",
+    known = {"org", "repo", "labels", "done_label", "agent_label", "token_command",
              "write_token_command", "title", "done_text", "api_url"}
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -263,12 +278,19 @@ def parse(raw: Any) -> Declaration | None:
         raise ActionsConfigError("actions.done_label must be a label name")
     if done_label in labels:
         raise ActionsConfigError("actions.done_label must differ from every listed label")
+    agent_label = cast("Mapping[str, object]", raw).get("agent_label")
+    if agent_label is not None:
+        if not isinstance(agent_label, str) or not _LABEL.match(agent_label):
+            raise ActionsConfigError("actions.agent_label must be a label name")
+        if agent_label in labels or agent_label == done_label:
+            raise ActionsConfigError(
+                "actions.agent_label must differ from done_label and every listed label")
     token_command = _command(raw.get("token_command"), "token_command")
     if not token_command:
         raise ActionsConfigError("actions.token_command is required")
     out = Declaration(
         org=org, repo=repo, labels=tuple(labels), done_label=done_label,
-        token_command=token_command,
+        agent_label=agent_label, token_command=token_command,
         write_token_command=_command(raw.get("write_token_command"), "write_token_command"),
     )
     for key in ("title", "done_text", "api_url"):
@@ -660,6 +682,7 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         number=number, ref=f"{decl.repo}-I{number}",
         title=str(issue.get("title", "")), url=str(issue.get("html_url", "")),
         labels=labels, done=decl.done_label in labels,
+        agent=decl.agent_label is not None and decl.agent_label in labels,
         summary=summary(issue.get("body")),
         created_at=issue.get("created_at"), updated_at=issue.get("updated_at"),
         **dict(zip(("due", "due_source", "when"),
@@ -866,16 +889,31 @@ def attach(index: Any, listing: Listing | None) -> None:
 #: ruled row came back (Brian 2026-11-11: "decisions I've already decided on
 #: have reappeared"). `listing` re-applies every tick newer than the read
 #: behind the list it returns; entries older than an hour are dropped.
-_ACCEPTED: dict[int, tuple[bool, float]] = {}
+#: Keyed by (issue number, flag), flag being "done" or "agent".
+_ACCEPTED: dict[tuple[int, str], tuple[bool, float]] = {}
 _ACCEPTED_TTL = 3600.0
 
+#: The two boxes a row carries: the field on `Action` each one sets.
+FLAGS = ("done", "agent")
 
-def _remember(number: int, done: bool) -> None:
+
+def _flag_label(decl: Declaration, flag: str) -> str | None:
+    return decl.done_label if flag == "done" else decl.agent_label
+
+
+def _set_flag(decl: Declaration, a: Action, flag: str, value: bool) -> Action:
+    label = _flag_label(decl, flag)
+    assert label is not None
+    labels = set(a.labels) - {label} | ({label} if value else set[str]())
+    return replace(a, labels=tuple(sorted(labels)), **{flag: value})
+
+
+def _remember(number: int, value: bool, flag: str = "done") -> None:
     now = time.monotonic()
     with _MARK_LOCK:
-        for n in [n for n, (_, t) in _ACCEPTED.items() if now - t > _ACCEPTED_TTL]:
-            del _ACCEPTED[n]
-        _ACCEPTED[number] = (done, now)
+        for k in [k for k, (_, t) in _ACCEPTED.items() if now - t > _ACCEPTED_TTL]:
+            del _ACCEPTED[k]
+        _ACCEPTED[(number, flag)] = (value, now)
 
 
 def listing(index: Any) -> Listing | None:
@@ -883,15 +921,18 @@ def listing(index: Any) -> Listing | None:
     if found is None or not _ACCEPTED:
         return found
     with _MARK_LOCK:
-        later = {n: d for n, (d, t) in _ACCEPTED.items() if t >= found.read_started}
-        if later and any(a.number in later and a.done != later[a.number] for a in found.actions):
-            labels_done = found.declaration.done_label
-            found.actions = tuple(
-                replace(a, done=later[a.number],
-                        labels=tuple(sorted(set(a.labels) - {labels_done}
-                                            | ({labels_done} if later[a.number] else set()))))
-                if a.number in later else a
-                for a in found.actions)
+        later = {k: v for k, (v, t) in _ACCEPTED.items() if t >= found.read_started}
+        decl = found.declaration
+        stale = [(n, f, v) for (n, f), v in later.items()
+                 if _flag_label(decl, f) is not None]
+        if stale:
+            out: list[Action] = []
+            for a in found.actions:
+                for n, f, v in stale:
+                    if a.number == n and getattr(a, f) != v:
+                        a = _set_flag(decl, a, f, v)
+                out.append(a)
+            found.actions = tuple(out)
     return found
 
 
@@ -907,8 +948,16 @@ class TickRefused(Exception):
 
 
 def comment_text(decl: Declaration, done: bool, actor: str | None,
-                 choice: tuple[str, str] | None = None) -> str:
+                 choice: tuple[str, str] | None = None, flag: str = "done") -> str:
     who = actor or "the console's reader"
+    if flag == "agent":
+        if done:
+            return (f"Sent back to the agents on the console by {who}: this is not ready "
+                    "for them yet and needs an agent to re-review it.\n\n"
+                    f"Next: an agent finds what is wrong (red CI, a conflict, a missing step), "
+                    f"fixes it, then removes the `{decl.agent_label}` label so it returns to "
+                    "the list with a note on what changed.")
+        return f"Taken back from the agents on the console by {who}."
     if done and choice is not None:
         return (f"Ruling on the console by {who}: option {choice[0]}) {choice[1]}\n\n"
                 "Next: carry out that option, check it landed, then close this with a note.")
@@ -957,7 +1006,8 @@ def _say(call: Request, url: str, tok: str, body: str, number: int) -> None:
 
 def tick(index: Any, number: int, done: bool, actor: str | None,
          request: Request | None = None, token: str | None = None,
-         defer: Defer | None = None, choice: str | None = None) -> Action:
+         defer: Defer | None = None, choice: str | None = None,
+         flag: str = "done") -> Action:
     """Add (``done``) or remove the done label on one LISTED action, and say
     so on the issue. Returns the action as it now stands.
 
@@ -973,7 +1023,14 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     current = next((a for a in found.actions if a.number == number), None)
     if current is None:
         raise TickRefused(f"#{number} is not on the actions list", 404)
+    if flag not in FLAGS:
+        raise TickRefused(f"unknown box {flag[:20]!r}", 400)
+    label = _flag_label(decl, flag)
+    if label is None:
+        raise TickRefused("this console declares no agent_label", 400)
     picked: tuple[str, str] | None = None
+    if choice is not None and flag != "done":
+        raise TickRefused("a choice goes with the done box only", 400)
     if choice is not None:
         picked = next((o for o in current.options if o[0] == choice), None)
         if picked is None or not done:
@@ -983,10 +1040,10 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     try:
         tok = token or _mint(decl.write_token_command, decl)
         if done:
-            call("POST", f"{base}/labels", tok, {"labels": [decl.done_label]})
+            call("POST", f"{base}/labels", tok, {"labels": [label]})
         else:
             try:
-                call("DELETE", f"{base}/labels/{urllib.parse.quote(decl.done_label, safe='')}",
+                call("DELETE", f"{base}/labels/{urllib.parse.quote(label, safe='')}",
                      tok, None)
             except RuntimeError as exc:
                 if not str(exc).startswith("HTTP 404"):  # already absent is the goal
@@ -995,8 +1052,8 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
         raise
     except Exception as exc:  # noqa: BLE001 - shown to the reader, nothing changed here
         raise TickRefused(f"the tracker refused the write: {str(exc)[:200]}", 502) from None
-    act = mark(index, number, done)
-    text = comment_text(decl, done, actor, picked)
+    act = mark(index, number, done, flag)
+    text = comment_text(decl, done, actor, picked, flag)
     say = lambda: _say(call, f"{base}/comments", tok, text, number)  # noqa: E731
     if defer is None:
         say()
@@ -1005,21 +1062,20 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     return act
 
 
-def mark(index: Any, number: int, done: bool) -> Action:
+def mark(index: Any, number: int, done: bool, flag: str = "done") -> Action:
     """Reflect a tick the tracker accepted in the list already read, so the
     page answering the POST shows it. The next rebuild re-reads the tracker
     and replaces this list whole; nothing here outlives that."""
-    _remember(number, done)
+    _remember(number, done, flag)
     found = listing(index)
     assert found is not None
-    labels_done = found.declaration.done_label
+    decl = found.declaration
     with _MARK_LOCK:
         updated: list[Action] = []
         result: Action | None = None
         for a in found.actions:
             if a.number == number:
-                labels = set(a.labels) - {labels_done} | ({labels_done} if done else set())
-                a = replace(a, done=done, labels=tuple(sorted(labels)))
+                a = _set_flag(decl, a, flag, done)
                 result = a
             updated.append(a)
         found.actions = tuple(updated)
@@ -1034,6 +1090,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
     return {
         "declared": True, "title": decl.title, "repo": f"{decl.org}/{decl.repo}",
         "labels": list(decl.labels), "done_label": decl.done_label,
+        "agent_label": decl.agent_label,
         "writable": decl.writable, "read_at": found.read_at, "error": found.error,
         "open": len(found.todo),
         "decisions": len(found.decisions),
@@ -1048,7 +1105,8 @@ def as_json(found: Listing | None) -> dict[str, Any]:
 
 def _action_json(a: Action) -> dict[str, Any]:
     return {"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
-            "done": a.done, "actionable": a.actionable, "summary": a.summary,
+            "done": a.done, "agent": a.agent, "actionable": a.actionable,
+            "summary": a.summary,
             "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
             "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,
             "pr_state": a.pr_state, "merge_ask": a.merge_ask,

@@ -205,7 +205,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             # The comment follows on the server's comment worker: the reader
             # waits for the label, which is the record, and nothing else.
             act = actions.tick(index, number, done, actor, defer=actions.in_background,
-                               choice=form.get("choice") or None)
+                               choice=form.get("choice") or None,
+                               flag=form.get("flag") or "done")
         except actions.TickRefused as exc:
             if as_json:
                 self._refuse(exc.status, f"Not saved: {exc}", True)
@@ -216,7 +217,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if as_json:
             self._send(200, render_json.dumps({
                 "ok": True, "number": act.number, "done": act.done,
-                "actionable": act.actionable,
+                "agent": act.agent, "actionable": act.actionable,
+                "section": render_html.action_section(index, act),
                 "row": render_html.action_row(index, act.number)}),
                 "application/json; charset=utf-8")
             return

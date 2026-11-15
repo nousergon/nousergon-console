@@ -77,6 +77,7 @@ UNREPORTED_WORD = "unreported"
 THREATENED_WORD = "threatened"
 ON_TRACK_WORD = "on track"
 NO_DATES_WORD = "no dates"
+ONGOING_WORD = "ongoing"
 
 #: One saved row: rank, dates, complete and who/when, as raw JSON.
 Entry = dict[str, object]
@@ -169,6 +170,8 @@ class BoardRow(TypedDict):
     closed_recent: list[BoardIssue]
     review: bool
     review_reason: str | None
+    kind: str
+    health: str | None
 
 
 class Board(TypedDict):
@@ -186,6 +189,7 @@ class Board(TypedDict):
     sweep_order: list[str]
     sweep_rule: str
     review: list[str]
+    permanent: list[str]
 
 
 def parse(planner_raw: object) -> Declaration | None:
@@ -468,14 +472,22 @@ def evaluate(index: object, today: date | None = None,
         issues = [str(x) for x in cast(list[object], p.get("issues") or [])]
         plan_next, plan_final = _plan_dates(milestones)
         nxt, fin = _date_or_none(e.get("next_milestone")), _date_or_none(e.get("final"))
-        complete = bool(e.get("complete"))
+        # A permanent project is never archived, even if a stored entry says done.
+        complete = bool(e.get("complete")) and p.get("kind") != "permanent"
         late = [label for label, d in (("next milestone", nxt), ("final phase", fin))
                 if d and not complete and d < today.isoformat()]
         open_items, n_closed, unread, recent = _project_issues(
             index, epic_refs, _named_refs(epic_refs, issues, milestones), read,
             plan.blocker_labels, since)
         status, status_reason = _status(milestones, late)
-        review = None if complete else _review(milestones, len(open_items), n_closed, unread)
+        kind = str(p.get("kind") or "temporary")
+        health = _opt_str(p.get("health"))
+        # A permanent project never ends, so it is never up for a done review.
+        review = (None if complete or kind == "permanent"
+                  else _review(milestones, len(open_items), n_closed, unread))
+        if kind == "permanent" and status == NO_DATES_WORD:
+            status, status_reason = ONGOING_WORD, (f"health target: {health}" if health
+                                                   else "standing work, no end date")
         rows[pid] = BoardRow(
             id=pid, title=str(p["title"]), url=str(p["url"]),
             tracker=_opt_str(p.get("tracker")), owner=_opt_str(p.get("owner")),
@@ -490,8 +502,10 @@ def evaluate(index: object, today: date | None = None,
             n_in_progress=sum(1 for i in open_items if i["in_progress"]),
             unread_epics=unread, closed_recent=recent,
             review=review is not None, review_reason=review,
+            kind=kind, health=health,
         )
-    active = [rows[i] for i in _active_order(ids, entries)]
+    perm = {pid for pid, r in rows.items() if r["kind"] == "permanent"}
+    active = [rows[i] for i in _active_order(ids, _never_done(entries, perm))]
     for pos, r in enumerate(active, start=1):
         r["position"] = pos
     sweep = _sweep_order(active)
@@ -512,6 +526,7 @@ def evaluate(index: object, today: date | None = None,
         unread_epics=list(read.unread),
         active=active, archive=archive, sweep_order=sweep, sweep_rule=SWEEP_RULE,
         review=[r["id"] for r in active if r["review"]],
+        permanent=[r["id"] for r in active if r["kind"] == "permanent"],
     )
 
 
@@ -556,6 +571,8 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
     nxt = _form_date(form.get("next_milestone"), "next milestone")
     fin = _form_date(form.get("final"), "final phase date")
     complete = form.get("complete", "0") not in {"", "0"}
+    if complete and project_id in _permanent(index):
+        raise SaveRefused(f"{project_id} is a permanent project: it is never done or archived")
     decl = found.declaration
     with _LOCK:
         try:
@@ -563,6 +580,7 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
         except Exception as exc:  # noqa: BLE001 - nothing was written
             raise SaveRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
         before: Entry = dict(entries.get(project_id) or {})
+        entries = _never_done(entries, _permanent(index))
         prior = _active_order(ids, entries)
         entry: Entry = {**before, "next_milestone": nxt, "final": fin,
                         "updated_at": now, "updated_by": actor}
@@ -600,6 +618,21 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
 #: ``rank.<id>``, ``next_milestone.<id>``, ``final.<id>`` and, when ticked,
 #: ``complete.<id>``.
 ROW_FIELDS = ("row", "rank", "next_milestone", "final", "complete")
+
+
+def _permanent(index: object) -> set[str]:
+    from . import planner
+
+    return {p.id for p in planner.declared(index).projects if p.kind == "permanent"}
+
+
+def _never_done(entries: Mapping[str, Entry], permanent: set[str]) -> dict[str, Entry]:
+    """Entries with any stored ``complete`` cleared on permanent projects,
+    which are never done (one ticked before it was declared permanent
+    comes back to the board)."""
+    return {pid: ({**e, "complete": False, "completed_at": None, "by": None}
+                  if pid in permanent and e.get("complete") else e)
+            for pid, e in entries.items()}
 
 
 def _rank_field(raw: str | None, title: str) -> int | None:
@@ -644,6 +677,8 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
     for pid, f in rows.items():
         title = titles.get(pid, pid)
         shown = _rank_field(f.get("row"), title)
+        if f.get("complete", "0") not in {"", "0"} and pid in _permanent(index):
+            raise SaveRefused(f"{title} is a permanent project: it is never done or archived")
         parsed[pid] = (_rank_field(f.get("rank"), title), shown,
                        _form_date(f.get("next_milestone"), f"next milestone for {title}"),
                        _form_date(f.get("final"), f"final phase date for {title}"),
@@ -656,6 +691,7 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
             entries = _entries((getter or _s3_get)(decl.bucket, decl.key), decl)
         except Exception as exc:  # noqa: BLE001 - nothing was written
             raise SaveRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
+        entries = _never_done(entries, _permanent(index))
         prior = _active_order(ids, entries)
         changed: list[str] = []
         for pid, (_, _, nxt, fin, complete) in parsed.items():

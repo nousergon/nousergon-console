@@ -2126,10 +2126,21 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<p class="absent">read-only: cannot read {esc(b["store"])} ({esc(b["error"])})</p>')
     fid = "pb-board"
     forms: list[str] = [f'<form id="{fid}" method="post" action="/planner"></form>']
-    rows: list[str] = []
+    temp_rows: list[str] = []
+    perm_rows: list[str] = []
     for r in b["active"]:
         rid = esc(r["id"])
-        rows.append(
+        permanent = r["kind"] == "permanent"
+        if permanent:
+            final = ('<td><span class="board-hint">ongoing</span>'
+                     + (f'<small class="board-hint">health: {esc(r["health"])}</small>'
+                        if r["health"] else "") + "</td>")
+            done = '<td class="absent" title="a permanent project is never done">—</td>'
+        else:
+            final = _board_date(r, "final", "final phase", fid, disabled)
+            done = (f'<td><input type="checkbox" name="complete.{rid}" value="1" form="{fid}" '
+                    f'aria-label="{esc(r["title"])} complete"{disabled}></td>')
+        row = (
             f'<tr id="p-{rid}">'
             f'<td><input type="hidden" name="row.{rid}" value="{r["position"]}" form="{fid}">'
             f'<input type="number" name="rank.{rid}" min="1" value="{r["position"]}" '
@@ -2144,16 +2155,26 @@ def _planning_board(index: Index) -> tuple[str, str]:
             + '</td>'
             f'<td>{_board_issues(r)}</td>'
             + _board_date(r, "next_milestone", "next milestone", fid, disabled)
-            + _board_date(r, "final", "final phase", fid, disabled)
-            + f'<td><input type="checkbox" name="complete.{rid}" value="1" form="{fid}" '
-            f'aria-label="{esc(r["title"])} complete"{disabled}></td></tr>')
+            + final + done + "</tr>")
+        (perm_rows if permanent else temp_rows).append(row)
     head = ("<tr><th>rank</th><th>sweep</th><th>project</th><th>status</th><th>active issues</th>"
-            "<th>next milestone</th><th>final phase</th><th>done</th></tr>")
+            "<th>next milestone</th><th>{final}</th><th>{done}</th></tr>")
     save = (f'<div class="board-save"><button type="submit" form="{fid}"{disabled}>'
-            'save all changes</button> <small class="board-hint">ranks are positions: '
-            'typing 2 moves a project to second and shifts the rest down</small></div>')
-    active = (f'<table class="plan-table board-table">{head}{"".join(rows)}</table>{save}'
-              if rows else '<p class="absent">no active projects</p>')
+            'save all changes</button> <small class="board-hint">one ranking across both '
+            'groups; ranks are positions: typing 2 moves a project to second and shifts '
+            'the rest down</small></div>')
+    tables = ""
+    if temp_rows:
+        tables += ('<h3>projects</h3><p class="board-hint">temporary: each ends, is flagged '
+                   'for your review when finished, and is archived when you tick done</p>'
+                   f'<table class="plan-table board-table">'
+                   f'{head.format(final="final phase", done="done")}{"".join(temp_rows)}</table>')
+    if perm_rows:
+        tables += ('<h3>ongoing work</h3><p class="board-hint">permanent: never done or '
+                   'archived; judged by its health target and rolling milestones</p>'
+                   f'<table class="plan-table board-table">'
+                   f'{head.format(final="end", done="")}{"".join(perm_rows)}</table>')
+    active = tables + save if tables else '<p class="absent">no active projects</p>'
     archived: list[str] = []
     for r in b["archive"]:
         fid = f'pb-{r["id"]}'

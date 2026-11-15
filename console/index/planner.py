@@ -194,6 +194,19 @@ class Project:
     #: Further named issue refs that count as this project's active work
     #: while open, for work not (yet) filed under an epic as sub-issues.
     issues: tuple[str, ...] = ()
+    #: ``temporary`` (default): a project that ends; it is flagged for review
+    #: when finished and archived when ticked done. ``permanent``: standing
+    #: work that never ends (incidents, cost) — never flagged, never archived,
+    #: judged against its ``health`` target instead of an end date (Brian
+    #: 2026-11-15).
+    kind: str = "temporary"
+    #: A permanent project's rolling health target, in words.
+    health: str | None = None
+
+
+#: Project kinds (Brian 2026-11-15): a temporary project ends; a permanent one
+#: is standing work that never does.
+PROJECT_KINDS = ("temporary", "permanent")
 
 
 @dataclass(frozen=True)
@@ -400,6 +413,18 @@ def parse(raw: Any) -> Plan:
                 pace=pace,
             ))
         milestones.sort(key=lambda ms: (ms.target, ms.id))
+        spec = cast(Mapping[str, object], p)
+        kind = str(spec.get("kind") or "temporary")
+        if kind not in PROJECT_KINDS:
+            raise PlannerConfigError(
+                f"planner project {pid!r}: `kind` must be one of {list(PROJECT_KINDS)}, not {kind!r}")
+        health = spec.get("health")
+        if health is not None and (not isinstance(health, str) or not health.strip()):
+            raise PlannerConfigError(f"planner project {pid!r}: `health` must be a sentence")
+        if health is not None and kind != "permanent":
+            raise PlannerConfigError(
+                f"planner project {pid!r}: `health` is for permanent projects; a temporary "
+                "project is judged by its milestones")
         projects.append(Project(
             id=pid, title=_text(p, "title", f"planner project {pid!r}"),
             milestones=tuple(milestones),
@@ -409,6 +434,7 @@ def parse(raw: Any) -> Plan:
             panes=_parse_panes(p.get("panes"), pid),
             epics=_parse_refs(cast(Mapping[str, object], p).get("epics"), pid, "epics"),
             issues=_parse_refs(cast(Mapping[str, object], p).get("issues"), pid, "issues"),
+            kind=kind, health=(health.strip() if isinstance(health, str) else None),
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -670,6 +696,8 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "panes": list(p.panes),
             "epics": list(p.epics),
             "issues": list(p.issues),
+            "kind": p.kind,
+            "health": p.health,
             # Declared position: the project's colour on the calendar follows
             # the project, so a project page draws it in the same colour.
             "slot": slot,

@@ -2672,6 +2672,10 @@ def _action_row(a: "Action", decl: "ActionsDeclaration", writable: bool, today: 
     elif a.merge_ask and a.pr_state in ("merged", "closed"):
         status = (f'<div><span class="chip state-healthy">PR {esc(a.pr_state)} — '
                   "nothing left for you; the issue closes on the next check</span></div>")
+    elif a.done and a.ruling:
+        status = (f'<div><span class="chip state-healthy">You picked {esc(a.ruling[0])}) '
+                  f'{esc(a.ruling[1])}</span> <span class="muted">Agents are carrying it out; '
+                  "the issue closes when it has landed.</span></div>")
     elif a.done:
         status = f'<div><span class="chip state-healthy">{esc(decl.done_text)}</span></div>'
     elif a.agent:

@@ -28234,24 +28234,6 @@
                 }
             }
         ],
-        "./console/s3_body_cache.py": [
-            {
-                "code": "reportExplicitAny",
-                "range": {
-                    "startColumn": 31,
-                    "endColumn": 34,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportExplicitAny",
-                "range": {
-                    "startColumn": 33,
-                    "endColumn": 36,
-                    "lineCount": 1
-                }
-            }
-        ],
         "./console/server/app.py": [
             {
                 "code": "reportIncompatibleVariableOverride",

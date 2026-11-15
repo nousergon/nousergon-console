@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import yaml
 
@@ -314,24 +314,31 @@ def build_index(config: dict[str, Any]) -> Index:
         )
         descriptors.extend(result.descriptors)
 
+    # Declared adapters are independent reads (each is its own S3/API/SQL
+    # round trip), so they are fetched CONCURRENTLY and folded into the index
+    # in declared order. Serially the first build was the sum of ~120 reads:
+    # 709s on 2026-11-10, ~1460s on 11-12, past the config-apply probe's
+    # 1500s deadline (alpha-engine-config-I13625). Folding stays serial and
+    # ordered, so the index is identical to the serial build.
+    inbox = _Inbox()
     for entry in config.get("adapters", []) or []:
         if not entry.get("enabled"):
             continue
         kind = entry.get("kind")
         module = ADAPTERS.get(kind)
         if module is None:
-            index.add_result(_unknown_adapter(entry.get("name", kind), kind))
+            inbox.add_result(_unknown_adapter(entry.get("name", kind), kind))
             continue
         name = entry.get("name", kind)
         if kind == "declared-registry":
             try:
                 _check_declared_registry_default_state(str(name), entry.get("config") or {})
             except ConfigError as exc:
-                index.add_result(_config_error_result(str(name), exc))
+                inbox.add_result(_config_error_result(str(name), exc))
                 continue
         cfg = {**entry.get("config", {}), "_name": name}
-        result, elapsed = _timed_fetch(module.fetch, cfg)
-        index.add_result(result, elapsed_seconds=elapsed)
+        inbox.queue_fetch(module.fetch, cast("dict[str, object]", cfg))
+    inbox.fold_into(index)
 
     # The planner's required issues, read by name whatever their age — the
     # repos adapter lists only the newest issues per repo. One read for every
@@ -493,6 +500,56 @@ def build_index(config: dict[str, Any]) -> Index:
     # landing model, so the document matches what /planner.json serves.
     planning_board.publish(index, now_iso())
     return index
+
+
+class _Inbox:
+    """Adapter outcomes in declared order; the reads themselves run concurrently."""
+
+    def __init__(self) -> None:
+        self._slots: list[AdapterResult | int] = []
+        self._jobs: list[tuple[Callable[[dict[str, object]], AdapterResult],
+                               dict[str, object]]] = []
+
+    def add_result(self, result: AdapterResult) -> None:
+        """An outcome already known (unknown adapter, bad config)."""
+        self._slots.append(result)
+
+    def queue_fetch(self, fetch: Callable[[dict[str, object]], AdapterResult],
+                    cfg: dict[str, object]) -> None:
+        self._slots.append(len(self._jobs))
+        self._jobs.append((fetch, cfg))
+
+    def fold_into(self, index: Index) -> None:
+        fetched = _fetch_all(self._jobs)
+        for slot in self._slots:
+            if isinstance(slot, int):
+                result, elapsed = fetched[slot]
+                index.add_result(result, elapsed_seconds=elapsed)
+            else:
+                index.add_result(slot)
+
+
+#: Concurrent adapter reads per build. The reads are network-bound; the cap
+#: keeps the burst on S3 / the git host polite.
+FETCH_WORKERS = 12
+
+
+def _fetch_all(
+    jobs: list[tuple[Callable[[dict[str, object]], AdapterResult], dict[str, object]]],
+) -> list[tuple[AdapterResult, float]]:
+    """Run each (fetch, config) via `_timed_fetch`, concurrently, in order.
+
+    An adapter that raises propagates as it did serially (first failure in
+    declared order), so a crashing source still fails the build.
+    """
+    if len(jobs) <= 1:
+        return [_timed_fetch(f, c) for f, c in jobs]
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(jobs)),
+                            thread_name_prefix="adapter-fetch") as pool:
+        futures = [pool.submit(_timed_fetch, f, c) for f, c in jobs]
+        return [fut.result() for fut in futures]
 
 
 def _timed_fetch(fetch: Callable[..., Any], config: dict[str, Any]) -> tuple[Any, float]:

@@ -29,13 +29,14 @@ no adapter can mutate what the next pass reads.
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from datetime import datetime
 
 #: (raw body bytes, the tag S3 returned with them — or None when it gave none)
 Fetched = tuple[bytes, "str | None"]
 
 
-def listing_tag(obj: dict[str, Any]) -> str | None:
+def listing_tag(obj: Mapping[str, object]) -> str | None:
     """The change token for one ``list_objects_v2`` ``Contents`` entry.
 
     ETag when present (it changes with the content); otherwise LastModified
@@ -48,11 +49,11 @@ def listing_tag(obj: dict[str, Any]) -> str | None:
     lm, size = obj.get("LastModified"), obj.get("Size")
     if lm is None or size is None:
         return None
-    stamp = lm.isoformat() if hasattr(lm, "isoformat") else str(lm)
+    stamp = lm.isoformat() if isinstance(lm, datetime) else str(lm)
     return f"lm:{stamp}|{size}"
 
 
-def response_tag(resp: dict[str, Any]) -> str | None:
+def response_tag(resp: Mapping[str, object]) -> str | None:
     """The same token, read off a ``get_object`` response.
 
     Stored with the bytes instead of the LISTED tag so that an object rewritten
@@ -65,7 +66,7 @@ def response_tag(resp: dict[str, Any]) -> str | None:
     lm, size = resp.get("LastModified"), resp.get("ContentLength")
     if lm is None or size is None:
         return None
-    stamp = lm.isoformat() if hasattr(lm, "isoformat") else str(lm)
+    stamp = lm.isoformat() if isinstance(lm, datetime) else str(lm)
     return f"lm:{stamp}|{size}"
 
 

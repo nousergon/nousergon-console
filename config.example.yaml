@@ -1532,6 +1532,12 @@ planner:
       # named issues that count while open. Milestone `requires` count too.
       # epics: [example-repo-I3]
       # issues: [example-repo-I4]
+      # kind: temporary (default) ends, is flagged for review when finished and
+      # archived when ticked done. kind: permanent is standing work (incidents,
+      # cost): never flagged or archived, judged by `health` (a sentence) and
+      # any rolling milestones.
+      # kind: permanent
+      # health: no past-limit incidents
       title: Example project
       owner: example-owner
       tracker: https://example.invalid/tracker/2

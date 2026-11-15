@@ -167,7 +167,7 @@ def test_complete_moves_a_project_to_the_archive_and_reopen_returns_it() -> None
     assert [r["id"] for r in b["archive"]] == ["alpha"]
     assert b["archive"][0]["completed_by"] == "brian@example"
     page = render_html.planner_page(idx)
-    assert page.index("archive") > page.index("calendar")  # archive is at the bottom
+    assert page.index("<h2>archive</h2>") > page.index("calendar")  # archive is at the bottom
     _save(idx, s3, "alpha")
     assert _order(idx) == ["beta", "gamma", "alpha"]
 
@@ -282,6 +282,51 @@ def test_saving_a_prefilled_plan_date_does_not_store_it() -> None:
     doc = json.loads(s3.body or b"{}")
     assert doc["projects"]["alpha"]["next_milestone"] is None  # still follows the plan
     assert doc["projects"]["alpha"]["final"] == "2027-01-31"  # Brian's own date
+
+
+# ------------------------------------------------- permanent projects --
+
+def _raw_with_permanent() -> dict[str, Any]:
+    raw = _raw()
+    raw["projects"].append({"id": "ops", "title": "Incidents", "kind": "permanent",
+                            "health": "no past-limit SEVs", "issues": ["repo-I5"]})
+    return raw
+
+
+def test_a_permanent_project_is_never_flagged_and_sits_in_its_own_group() -> None:
+    s3 = FakeS3()
+    idx = _index(s3, _raw_with_permanent())
+    b = board.evaluate(idx, date(2026, 11, 9))
+    ops = next(r for r in b["active"] if r["id"] == "ops")
+    # Nothing open would flag a temporary project; a permanent one never is.
+    assert not ops["review"] and b["review"] == [] and b["permanent"] == ["ops"]
+    assert ops["status"] == "ongoing" and "no past-limit SEVs" in ops["status_reason"]
+    assert "ops" in b["sweep_order"]
+    page = render_html.planner_page(idx)
+    assert page.index("<h3>projects</h3>") < page.index("<h3>ongoing work</h3>")
+    assert 'name="complete.ops"' not in page and "health: no past-limit SEVs" in page
+
+
+def test_a_permanent_project_cannot_be_ticked_done_or_stay_archived() -> None:
+    s3 = FakeS3(json.dumps({"projects": {"ops": {"complete": True, "rank": None}}}).encode())
+    idx = _index(s3, _raw_with_permanent())
+    b = board.evaluate(idx, date(2026, 11, 9))
+    assert "ops" in [r["id"] for r in b["active"]] and b["archive"] == []
+    with pytest.raises(board.SaveRefused):
+        _save(idx, s3, "ops", complete="1")
+    with pytest.raises(board.SaveRefused):
+        _save_all(idx, s3, row__ops="4", complete__ops="1")
+
+
+def test_kind_is_checked_and_health_is_for_permanent_only() -> None:
+    raw = _raw()
+    raw["projects"][0]["kind"] = "forever"
+    with pytest.raises(planner.PlannerConfigError, match="kind"):
+        planner.parse(raw)
+    raw = _raw()
+    raw["projects"][0]["health"] = "x"
+    with pytest.raises(planner.PlannerConfigError, match="health"):
+        planner.parse(raw)
 
 
 # ------------------------------------------------------ whole-table save --

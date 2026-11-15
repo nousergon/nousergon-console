@@ -157,6 +157,10 @@ class Action:
     #: The reader flagged it back to the agents (the declared agent label):
     #: off the to-do list until an agent fixes it and removes the label.
     agent: bool = False
+    #: The option the reader picked on the console, as (letter, text), read
+    #: back from the ruling comment (Brian 2026-11-15: a decision he had
+    #: already ruled on was reported to him as still waiting).
+    ruling: tuple[str, str] | None = None
 
     @property
     def has_step(self) -> bool:
@@ -793,6 +797,41 @@ def _comment_options(decl: Declaration, actions: list[Action], call: Request,
     return out
 
 
+_RULING = re.compile(r"^Ruling on the console by [^:\n]+: option (?P<l>[A-Za-z0-9]{1,3})\) (?P<t>[^\n]+)")
+
+
+def ruling(body: str | None) -> tuple[str, str] | None:
+    """The (letter, text) a console ruling comment records, or None."""
+    m = _RULING.match(str(body or ""))
+    return (m.group("l"), m.group("t").strip()) if m else None
+
+
+def _rulings(decl: Declaration, actions: list[Action], call: Request,
+             tok: str, base: str) -> dict[int, Action]:
+    """The picked option for every OPEN decision already ticked: what the
+    reader chose, read from the newest ruling comment. One read per such row
+    (few: a ruled decision closes once carried out). Unreadable: no ruling
+    shown, the row still reads as done."""
+    out: dict[int, Action] = {}
+    for a in actions:
+        if not (a.done and a.options and not a.closed):
+            continue
+        try:
+            got: object = call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues/{a.number}"
+                            f"/comments?per_page=100", tok, None)
+        except Exception:  # noqa: BLE001 - unreadable: no ruling shown
+            continue
+        listed = cast("list[object]", got) if isinstance(got, list) else []
+        for c in reversed(listed):
+            if not isinstance(c, Mapping):
+                continue
+            picked = ruling(str(cast("Mapping[str, object]", c).get("body") or ""))
+            if picked is not None:
+                out[a.number] = replace(a, ruling=picked)
+                break
+    return out
+
+
 def read(decl: Declaration, now: str, request: Request | None = None,
          token: str | None = None) -> tuple[Listing, AdapterResult]:
     """List every open issue carrying any declared label. A failed read is a
@@ -833,6 +872,8 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     ruled = _comment_options(decl, list(seen.values()), call, tok, base)
     seen = {n: ruled.get(n, a)
             for n, a in seen.items()}
+    picked = _rulings(decl, list(seen.values()), call, tok, base)
+    seen = {n: picked.get(n, a) for n, a in seen.items()}
     # Actionable first; within that, the soonest due date first, undated
     # after, oldest first among equals.
     actions = tuple(sorted(seen.values(), key=lambda a: (
@@ -1053,6 +1094,10 @@ def tick(index: Any, number: int, done: bool, actor: str | None,
     except Exception as exc:  # noqa: BLE001 - shown to the reader, nothing changed here
         raise TickRefused(f"the tracker refused the write: {str(exc)[:200]}", 502) from None
     act = mark(index, number, done, flag)
+    if flag == "done":
+        with _MARK_LOCK:
+            act = replace(act, ruling=picked if done else None)
+            found.actions = tuple(act if a.number == number else a for a in found.actions)
     text = comment_text(decl, done, actor, picked, flag)
     say = lambda: _say(call, f"{base}/comments", tok, text, number)  # noqa: E731
     if defer is None:
@@ -1106,6 +1151,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
 def _action_json(a: Action) -> dict[str, Any]:
     return {"ref": a.ref, "number": a.number, "title": a.title, "url": a.url,
             "done": a.done, "agent": a.agent, "actionable": a.actionable,
+            "ruling": list(a.ruling) if a.ruling else None,
             "summary": a.summary,
             "labels": list(a.labels), "due": a.due, "due_source": a.due_source,
             "when": a.when, "pr_url": a.pr_url, "pr_ref": a.pr_ref,

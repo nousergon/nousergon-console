@@ -628,7 +628,14 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
 #: one per row). Each shown row posts ``row.<id>`` (its shown position) beside
 #: ``rank.<id>``, ``next_milestone.<id>``, ``final.<id>`` and, when ticked,
 #: ``complete.<id>``.
-ROW_FIELDS = ("row", "rank", "next_milestone", "final", "complete")
+ROW_FIELDS = ("row", "rank", "next_milestone", "final", "complete",
+              "was_next_milestone", "was_final", "was_complete")
+#: What the form DISPLAYED for a field, posted beside it. A posted value equal
+#: to its displayed one is untouched, so the store's current value is kept:
+#: a stale tab can no longer overwrite or reopen a row someone else changed
+#: (alpha-engine-config-I13470). A form without them is applied as posted.
+_WAS = {"next_milestone": "was_next_milestone", "final": "was_final",
+        "complete": "was_complete"}
 
 
 def _permanent(index: object) -> set[str]:
@@ -707,6 +714,13 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
         changed: list[str] = []
         for pid, (_, _, nxt, fin, complete) in parsed.items():
             before: Entry = dict(entries.get(pid) or {})
+            f = rows[pid]
+            if _WAS["next_milestone"] in f and f.get("next_milestone", "") == f[_WAS["next_milestone"]]:
+                nxt = cast("str | None", before.get("next_milestone"))
+            if _WAS["final"] in f and f.get("final", "") == f[_WAS["final"]]:
+                fin = cast("str | None", before.get("final"))
+            if _WAS["complete"] in f and complete == (f[_WAS["complete"]] not in {"", "0"}):
+                complete = bool(before.get("complete"))
             # The page pre-fills an unset box with the planned date. Posting it
             # back unchanged is not Brian setting a date: keep it unstored so
             # it keeps following the calendar.

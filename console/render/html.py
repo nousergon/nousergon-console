@@ -3273,6 +3273,50 @@ def _page_decisions(sec: dict[str, object], demo: bool = False) -> str:
     return f'<div class="page-decisions">{"".join(cards)}</div>{more}'
 
 
+def _page_posts(sec: dict[str, object], links: Citations | None) -> str:
+    """A `posts` section: one card per row, like a feed of posts. The card's
+    headline, its labelled facts on one line, then its body field rendered
+    as markdown in full, through the one document path (`document_body`), so
+    the text is shown exactly as a carried document is and never as HTML."""
+    rows = cast("list[dict[str, object]]", sec["rows"])
+    if not rows:
+        what = (f'{_empty_note(sec)}no row matches <code>{esc(sec["selector"])}</code>'
+                if not sec["matched"] else "no row inside the selected range")
+        return f'<p class="absent">{what}</p>'
+    labels = cast("list[list[str]]", sec["labels"])
+    headline_field = sec.get("headline")
+    body_field = str(sec["body"])
+    cards: list[str] = []
+    for r in rows:
+        values = cast("dict[str, object]", r["fields"])
+        headline = _decision_value(values.get(str(headline_field))) if headline_field else ""
+        facts = " · ".join(
+            f'<span class="post-fact"><span class="muted">{esc(label)}</span> '
+            f"{markdown_link_text(_decision_value(values.get(name)), links)}</span>"
+            for name, label in labels if _decision_value(values.get(name)))
+        text = values.get(body_field)
+        body = (document_body({"format": DOCUMENT_MARKDOWN, "text": str(text)}, links)
+                if isinstance(text, str) and text.strip()
+                else '<p class="absent">nothing written yet</p>')
+        cards.append(
+            f'<article class="post page-post"><h3 class="post-title">'
+            f'<a href="{esc(r["url"])}">{esc(headline or r["label"])}</a></h3>'
+            f'<div class="muted">{as_of_html(cast("str | None", r["as_of"]))}</div>'
+            + (f'<p class="post-facts">{facts}</p>' if facts else "")
+            + f"{body}</article>")
+    total = cast("int", sec["total"])
+    more = (f'<p class="list-window">showing {len(rows)} of {total}</p>'
+            if total > len(rows) else "")
+    return f'<div class="page-posts">{"".join(cards)}</div>{more}'
+
+
+def markdown_link_text(value: str, links: Citations | None) -> str:
+    """A short fact with its bare URLs and declared citations linked."""
+    from . import markdown
+
+    return markdown.link_text(value, links)
+
+
 def _with_tick(row_html: str, cell: str) -> str:
     """``row_html`` with ``cell`` as its first cell."""
     head, rest = row_html.split(">", 1)
@@ -3515,6 +3559,8 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
         body = _page_chart(index, sec)
     elif sec["type"] == "decisions":
         body = _page_decisions(cast("dict[str, object]", sec), demo)
+    elif sec["type"] == "posts":
+        body = _page_posts(cast("dict[str, object]", sec), links)
     elif sec["type"] == "grid":
         body = _page_grid(cast("Mapping[str, object]", sec))
     else:

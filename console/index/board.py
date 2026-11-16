@@ -78,6 +78,7 @@ THREATENED_WORD = "threatened"
 ON_TRACK_WORD = "on track"
 NO_DATES_WORD = "no dates"
 ONGOING_WORD = "ongoing"
+PAUSED_WORD = "paused"
 
 #: One saved row: rank, dates, complete and who/when, as raw JSON.
 Entry = dict[str, object]
@@ -172,6 +173,7 @@ class BoardRow(TypedDict):
     review_reason: str | None
     kind: str
     health: str | None
+    paused_until: str | None
 
 
 class Board(TypedDict):
@@ -190,6 +192,7 @@ class Board(TypedDict):
     sweep_rule: str
     review: list[str]
     permanent: list[str]
+    paused: list[str]
 
 
 def parse(planner_raw: object) -> Declaration | None:
@@ -435,7 +438,8 @@ def _sweep_order(active: list[BoardRow]) -> list[str]:
 
 
 SWEEP_RULE = (f"rank, moved up {OFF_TRACK_LIFT} places when off track or past a "
-              f"board date and {THREATENED_LIFT} when unreported or threatened")
+              f"board date and {THREATENED_LIFT} when unreported or threatened; "
+              "paused projects are left out until their pause ends")
 
 
 def _plan_dates(milestones: list[Mapping[str, object]]) -> tuple[str | None, str | None]:
@@ -488,6 +492,12 @@ def evaluate(index: object, today: date | None = None,
         if kind == "permanent" and status == NO_DATES_WORD:
             status, status_reason = ONGOING_WORD, (f"health target: {health}" if health
                                                    else "standing work, no end date")
+        paused = _date_or_none(p.get("paused_until"))
+        paused = paused if paused and not complete and today.isoformat() < paused else None
+        if paused:
+            # Paused by ruling: not judged against its dates, not swept.
+            status, status_reason, review, late = (
+                PAUSED_WORD, f"paused until {paused}", None, [])
         rows[pid] = BoardRow(
             id=pid, title=str(p["title"]), url=str(p["url"]),
             tracker=_opt_str(p.get("tracker")), owner=_opt_str(p.get("owner")),
@@ -502,15 +512,15 @@ def evaluate(index: object, today: date | None = None,
             n_in_progress=sum(1 for i in open_items if i["in_progress"]),
             unread_epics=unread, closed_recent=recent,
             review=review is not None, review_reason=review,
-            kind=kind, health=health,
+            kind=kind, health=health, paused_until=paused,
         )
     perm = {pid for pid, r in rows.items() if r["kind"] == "permanent"}
     active = [rows[i] for i in _active_order(ids, _never_done(entries, perm))]
     for pos, r in enumerate(active, start=1):
         r["position"] = pos
-    sweep = _sweep_order(active)
+    sweep = _sweep_order([r for r in active if not r["paused_until"]])
     for r in active:
-        r["sweep_position"] = sweep.index(r["id"]) + 1
+        r["sweep_position"] = sweep.index(r["id"]) + 1 if r["id"] in sweep else 0
     archive = sorted((r for r in rows.values() if r["complete"]),
                      key=lambda r: r["completed_at"] or "", reverse=True)
     return Board(
@@ -527,6 +537,7 @@ def evaluate(index: object, today: date | None = None,
         active=active, archive=archive, sweep_order=sweep, sweep_rule=SWEEP_RULE,
         review=[r["id"] for r in active if r["review"]],
         permanent=[r["id"] for r in active if r["kind"] == "permanent"],
+        paused=[r["id"] for r in active if r["paused_until"]],
     )
 
 

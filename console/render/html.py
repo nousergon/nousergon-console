@@ -2126,6 +2126,7 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<p class="absent">read-only: cannot read {esc(b["store"])} ({esc(b["error"])})</p>')
     fid = "pb-board"
     forms: list[str] = [f'<form id="{fid}" method="post" action="/planner"></form>']
+    paused_rows: list[str] = []
     temp_rows: list[str] = []
     perm_rows: list[str] = []
     for r in b["active"]:
@@ -2145,7 +2146,7 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<td><input type="hidden" name="row.{rid}" value="{r["position"]}" form="{fid}">'
             f'<input type="number" name="rank.{rid}" min="1" value="{r["position"]}" '
             f'form="{fid}" class="board-rank" aria-label="rank for {esc(r["title"])}"{disabled}></td>'
-            f'<td class="board-sweep">{r["sweep_position"]}</td>'
+            f'<td class="board-sweep">{r["sweep_position"] or "—"}</td>'
             f'<td>{_board_project(r, org)}</td>'
             f'<td class="board-status board-{esc(r["status"].replace(" ", "-"))}">'
             f'{esc(r["status"])}<small class="board-hint">{esc(r["status_reason"])}</small>'
@@ -2156,11 +2157,12 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<td>{_board_issues(r)}</td>'
             + _board_date(r, "next_milestone", "next milestone", fid, disabled)
             + final + done + "</tr>")
-        (perm_rows if permanent else temp_rows).append(row)
+        (paused_rows if r["paused_until"] else perm_rows if permanent
+         else temp_rows).append(row)
     head = ("<tr><th>rank</th><th>sweep</th><th>project</th><th>status</th><th>active issues</th>"
             "<th>next milestone</th><th>{final}</th><th>{done}</th></tr>")
     save = (f'<div class="board-save"><button type="submit" form="{fid}"{disabled}>'
-            'save all changes</button> <small class="board-hint">one ranking across both '
+            'save all changes</button> <small class="board-hint">one ranking across all '
             'groups; ranks are positions: typing 2 moves a project to second and shifts '
             'the rest down</small></div>')
     tables = ""
@@ -2174,6 +2176,11 @@ def _planning_board(index: Index) -> tuple[str, str]:
                    'archived; judged by its health target and rolling milestones</p>'
                    f'<table class="plan-table board-table">'
                    f'{head.format(final="end", done="")}{"".join(perm_rows)}</table>')
+    if paused_rows:
+        tables += ('<h3>paused</h3><p class="board-hint">paused by your ruling: not judged '
+                   'against their dates and left out of the sweep until the date shown</p>'
+                   f'<table class="plan-table board-table">'
+                   f'{head.format(final="final phase", done="done")}{"".join(paused_rows)}</table>')
     active = tables + save if tables else '<p class="absent">no active projects</p>'
     archived: list[str] = []
     for r in b["archive"]:

@@ -329,6 +329,33 @@ def test_kind_is_checked_and_health_is_for_permanent_only() -> None:
         planner.parse(raw)
 
 
+# ------------------------------------------------------------- paused --
+
+def test_a_paused_project_reads_paused_and_leaves_the_sweep() -> None:
+    raw = _raw()
+    raw["projects"][0]["paused_until"] = "2026-11-22"
+    s3 = FakeS3()
+    idx = _index(s3, raw)
+    _save(idx, s3, "alpha", next_milestone="2026-11-01")  # a past date: not overdue while paused
+    b = board.evaluate(idx, date(2026, 11, 16))
+    alpha = next(r for r in b["active"] if r["id"] == "alpha")
+    assert alpha["status"] == "paused" and alpha["status_reason"] == "paused until 2026-11-22"
+    assert alpha["overdue"] == [] and alpha["sweep_position"] == 0
+    assert "alpha" not in b["sweep_order"] and b["paused"] == ["alpha"]
+    page = render_html.planner_page(idx)
+    assert "<h3>paused</h3>" in page
+    # On the date the pause ends, the project is back in the sweep.
+    after = board.evaluate(idx, date(2026, 11, 22))
+    assert "alpha" in after["sweep_order"] and after["paused"] == []
+
+
+def test_paused_until_must_be_a_date() -> None:
+    raw = _raw()
+    raw["projects"][0]["paused_until"] = "soon"
+    with pytest.raises(planner.PlannerConfigError):
+        planner.parse(raw)
+
+
 # ------------------------------------------------------ whole-table save --
 
 def _save_all(idx: Index, s3: FakeS3, **form: str) -> list[str]:

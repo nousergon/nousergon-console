@@ -2099,7 +2099,9 @@ def _board_date(row: "board_types.BoardRow", key: str, label: str, form: str,
     late = (' <strong class="plan-blocker">overdue</strong>'
             if mine and label in row["overdue"] else "")
     return (f'<td><input type="date" name="{esc(key)}.{esc(row["id"])}" value="{esc(value)}" form="{form}" '
-            f'aria-label="{esc(label)} for {esc(row["title"])}"{disabled}>{late}{hint}</td>')
+            f'aria-label="{esc(label)} for {esc(row["title"])}"{disabled}>'
+            f'<input type="hidden" name="was_{esc(key)}.{esc(row["id"])}" value="{esc(value)}" '
+            f'form="{form}">{late}{hint}</td>')
 
 
 def _board_project(row: "board_types.BoardRow", org: str | None) -> str:
@@ -2140,7 +2142,8 @@ def _planning_board(index: Index) -> tuple[str, str]:
         else:
             final = _board_date(r, "final", "final phase", fid, disabled)
             done = (f'<td><input type="checkbox" name="complete.{rid}" value="1" form="{fid}" '
-                    f'aria-label="{esc(r["title"])} complete"{disabled}></td>')
+                    f'aria-label="{esc(r["title"])} complete"{disabled}>'
+                    f'<input type="hidden" name="was_complete.{rid}" value="0" form="{fid}"></td>')
         row = (
             f'<tr id="p-{rid}">'
             f'<td><input type="hidden" name="row.{rid}" value="{r["position"]}" form="{fid}">'

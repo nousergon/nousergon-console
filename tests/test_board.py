@@ -566,3 +566,34 @@ def test_each_build_publishes_planner_json_for_readers_off_the_console() -> None
 def test_publish_must_not_overwrite_the_store() -> None:
     with pytest.raises(board.BoardConfigError, match="store itself"):
         board.parse({"board": {"store": STORE, "publish": STORE}})
+
+
+def test_a_stale_tab_neither_reopens_nor_undates_what_another_tab_saved() -> None:
+    """alpha-engine-config-I13470: tab 1 ticks alpha done and dates beta; tab 2,
+    loaded before that, re-ranks gamma. Its untouched boxes (posted with what
+    they displayed) must leave tab 1's work alone."""
+    s3 = FakeS3()
+    idx = _index(s3)
+    _save_all(idx, s3, **_table(), complete__alpha="1", final__beta="2027-01-31")
+    stale = {**_table(gamma="1"),
+             "final__beta": "", "was_final__beta": "",
+             "complete__alpha": "0", "was_complete__alpha": "0",
+             "next_milestone__alpha": "", "was_next_milestone__alpha": ""}
+    _save_all(idx, s3, **stale)
+    doc = json.loads(s3.body or b"{}")
+    assert doc["projects"]["alpha"]["complete"] is True
+    assert doc["projects"]["beta"]["final"] == "2027-01-31"
+    assert _order(idx)[0] == "gamma"
+
+
+def test_a_box_changed_from_what_it_displayed_still_saves() -> None:
+    s3 = FakeS3()
+    idx = _index(s3)
+    _save_all(idx, s3, **_table(), final__beta="2027-01-31", was_final__beta="")
+    assert json.loads(s3.body or b"{}")["projects"]["beta"]["final"] == "2027-01-31"
+
+
+def test_the_page_posts_what_each_box_displayed() -> None:
+    s3 = FakeS3()
+    page = render_html.planner_page(_index(s3))
+    assert 'name="was_final.beta"' in page and 'name="was_complete.alpha" value="0"' in page

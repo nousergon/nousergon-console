@@ -374,6 +374,20 @@ article.decision.decision-ruled .decision-options { opacity: .55; }
 /* A page's declared decisions (`decisions` section, Brian 2026-11-13): the
    ruling-card look, plus the facts, the note and the "change" choices. */
 .page-decisions { display: flex; flex-direction: column; gap: 1.1rem; }
+
+/* A page's `posts` section (Brian 2026-11-16): one card per row, read like a
+   feed — headline, one line of facts, then the full text. */
+.page-posts { display: flex; flex-direction: column; gap: 1.1rem; }
+article.post { border: 1px solid var(--border); border-radius: .6rem; background: var(--surface);
+  padding: .9rem 1rem; max-width: 52rem; overflow-wrap: anywhere; }
+.post-title { font-size: 1.1rem; margin: 0 0 .2rem; line-height: 1.35; }
+.post-title a { color: inherit; text-decoration: none; }
+.post-title a:hover { text-decoration: underline; }
+.post-facts { margin: .4rem 0 .6rem; font-size: .92rem; line-height: 1.5; }
+.post-fact + .post-fact::before { content: ""; }
+article.post .document { line-height: 1.55; }
+article.post .document h4 { margin: 1rem 0 .3rem; font-size: .95rem; color: var(--muted, inherit); }
+article.post .document hr { border: 0; border-top: 1px solid var(--border); margin: 1rem 0; }
 .decision-facts { display: grid; grid-template-columns: minmax(7rem, max-content) 1fr;
   gap: .25rem .9rem; margin: .7rem 0; }
 .decision-facts dt { font-weight: 600; color: var(--muted, inherit); }

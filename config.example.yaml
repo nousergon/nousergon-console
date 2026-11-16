@@ -1538,6 +1538,7 @@ planner:
       # any rolling milestones.
       # kind: permanent
       # health: no past-limit incidents
+      # paused_until: "2026-12-01"  # paused by ruling: reads "paused", left out of the sweep
       title: Example project
       owner: example-owner
       tracker: https://example.invalid/tracker/2

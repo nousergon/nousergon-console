@@ -202,6 +202,10 @@ class Project:
     kind: str = "temporary"
     #: A permanent project's rolling health target, in words.
     health: str | None = None
+    #: Paused by Brian's ruling until this date (exclusive of nothing: paused
+    #: while today < this date). A paused project reads "paused", is not off
+    #: track, and leaves the sweep order (Brian 2026-11-16, focus on three).
+    paused_until: date | None = None
 
 
 #: Project kinds (Brian 2026-11-15): a temporary project ends; a permanent one
@@ -425,6 +429,9 @@ def parse(raw: Any) -> Plan:
             raise PlannerConfigError(
                 f"planner project {pid!r}: `health` is for permanent projects; a temporary "
                 "project is judged by its milestones")
+        paused_raw = spec.get("paused_until")
+        paused_until = (_date(paused_raw, f"planner project {pid!r}", "paused_until")
+                        if paused_raw is not None else None)
         projects.append(Project(
             id=pid, title=_text(p, "title", f"planner project {pid!r}"),
             milestones=tuple(milestones),
@@ -435,6 +442,7 @@ def parse(raw: Any) -> Plan:
             epics=_parse_refs(cast(Mapping[str, object], p).get("epics"), pid, "epics"),
             issues=_parse_refs(cast(Mapping[str, object], p).get("issues"), pid, "issues"),
             kind=kind, health=(health.strip() if isinstance(health, str) else None),
+            paused_until=paused_until,
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -698,6 +706,7 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "issues": list(p.issues),
             "kind": p.kind,
             "health": p.health,
+            "paused_until": p.paused_until.isoformat() if p.paused_until else None,
             # Declared position: the project's colour on the calendar follows
             # the project, so a project page draws it in the same colour.
             "slot": slot,

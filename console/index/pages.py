@@ -53,7 +53,8 @@ _PAGE_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SECTION = re.compile(r"^[a-z0-9][a-z0-9 -]{0,39}$")
 
 #: The closed section vocabulary. Adding one is a PR here, never config.
-SECTION_TYPES = ("tiles", "table", "chart", "grid", "report", "exceptions", "text", "decisions")
+SECTION_TYPES = ("tiles", "table", "chart", "grid", "report", "exceptions", "text", "decisions",
+                 "posts")
 #: grid: the most columns (days) one grid shows, and its default.
 MAX_GRID_COLUMNS = 60
 DEFAULT_GRID_COLUMNS = 14
@@ -204,6 +205,11 @@ class Section:
     tick: tuple[str, str] | None = None
     #: decisions only: the declared write and the labelled fields each card shows.
     act: Act | None = None
+    #: posts only: the field heading each card, and the field whose markdown
+    #: is the card's full text (Brian 2026-11-16: "each thread's full updates
+    #: in a facebook post style update log, one post for each thread").
+    headline: str | None = None
+    body_field: str | None = None
     labels: tuple[tuple[str, str], ...] = ()
     #: table only: a PLAIN table (Brian 2026-11-13: the order book "is so bad,
     #: I cannot read it"): headed by each field's declared `label`, values
@@ -452,6 +458,8 @@ def _section(raw: Any, where: str, feeds: set[str] | None,
     select = _selector(raw.get("select"), where)
     if kind == "decisions":
         return _decisions(cast("Mapping[str, object]", raw), where, title, select, empty)
+    if kind == "posts":
+        return _posts(cast("Mapping[str, object]", raw), where, title, select, empty)
     if "act" in raw:
         raise PagesConfigError(f"{where}: only a decisions section takes `act`")
     spec = cast("Mapping[str, object]", raw)
@@ -659,6 +667,30 @@ def _decisions(raw: Mapping[str, object], where: str, title: str, select: Select
     return Section(type="decisions", title=title, select=select,
                    fields=tuple(n for n, _ in labels), sort=sort, limit=limit, empty=empty,
                    act=act, labels=labels)
+
+
+def _posts(raw: Mapping[str, object], where: str, title: str, select: Selector,
+           empty: str | None) -> Section:
+    """A `posts` section: each row is one card, headed by `headline`, with its
+    labelled `fields` as a line of facts and the markdown of `body` in full
+    under them. It reads the way a feed of posts reads, which a table cannot:
+    a table cell is one line, and the body is the whole message (Brian
+    2026-11-16: monitor every thread from the console alone)."""
+    known = {"type", "title", "select", "headline", "body", "fields", "sort", "limit", "empty"}
+    stray = sorted(set(raw) - known)
+    if stray:
+        raise PagesConfigError(
+            f"{where}: {', '.join(f'`{k}`' for k in stray)} does not apply to a posts section")
+    body = _text(raw, "body", where)
+    headline = str(raw.get("headline") or "").strip() or None
+    labels = _also(raw.get("fields"), where)
+    limit = raw.get("limit", DEFAULT_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        raise PagesConfigError(f"{where}: `limit` must be an integer 1..{MAX_LIMIT}")
+    sort = str(raw["sort"]).strip() if raw.get("sort") else None
+    return Section(type="posts", title=title, select=select,
+                   fields=tuple(n for n, _ in labels), sort=sort, limit=limit, empty=empty,
+                   labels=labels, headline=headline, body_field=body)
 
 
 def parse(raw: Any, feeds: set[str] | None = None,
@@ -1275,6 +1307,9 @@ def _section_doc(index: Any, s: Section, variables: Mapping[str, str],
     if s.type == "decisions":
         return _decisions_doc(doc, s, len(cast("list[Entity]", rows)),
                               cast("list[Entity]", in_range))
+    if s.type == "posts":
+        return _posts_doc(doc, s, len(cast("list[Entity]", rows)),
+                          cast("list[Entity]", in_range))
     if s.type == "exceptions":
         bad = by_priority([e for e in in_range if is_exception(e)])
         doc.update(matched=len(in_range), columns=[],
@@ -1353,6 +1388,27 @@ def _decisions_doc(doc: dict[str, object], s: Section, matched: int,
                     "note": act.note, "change": change,
                     "choices": [{"value": c.value, "label": c.label, "primary": c.primary}
                                 for c in act.choices]})
+    return doc
+
+
+def _posts_doc(doc: dict[str, object], s: Section, matched: int,
+               in_range: list[Entity]) -> dict[str, object]:
+    """A posts section's cards: each row with its headline, its labelled
+    fields and its full markdown body."""
+    assert s.body_field is not None
+    wanted = [*(n for n, _ in s.labels), s.body_field]
+    if s.headline:
+        wanted.append(s.headline)
+    if s.sort:
+        wanted.append(s.sort.lstrip("-"))
+    columns = list(dict.fromkeys(wanted))
+    cards: list[dict[str, object]] = [_row(e, columns) for e in in_range]
+    if s.sort:
+        cards.sort(key=_sort_key(s.sort, ()))
+    doc.update(matched=matched, total=len(cards), rows=cards[:s.limit],
+               outside_range=matched - len(in_range),
+               labels=[list(pair) for pair in s.labels],
+               headline=s.headline, body=s.body_field)
     return doc
 
 

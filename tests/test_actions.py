@@ -452,7 +452,7 @@ def test_the_page_script_posts_ticks_for_json_and_falls_back_to_the_form():
     assert "if (!window.fetch || !window.URLSearchParams || !window.FormData) return;" in src
     # A cadence refresh never swaps the page out from under an unsaved tick
     # or a reader who is active (Brian 2026-11-06: the swap undid his clicks).
-    assert "return editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;" in src
+    assert "return docketDirty || docketSubmitting || editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;" in src
     assert "if (busy()) { retrySoon(); return; }" in src
     # A settled tick moves its row and recounts in place; it never re-reads.
     assert "ticks.onIdle" not in src and "recountActions();" in src
@@ -906,15 +906,16 @@ def test_a_decision_is_a_card_with_its_brief_links_and_why():
     assert [u for u, _ in a.links] == ["https://example.test/inc", "https://example.test/runbook"]
     page = render_html.actions_page(idx)
     card = page[page.index('<article id="a9"'):page.index("</article>")]
-    assert "The trader refused" in card and "No brief written" not in card
+    assert "Context the filer wrote." in card and "No brief written" not in card
     assert 'href="https://example.test/inc">the incident</a>' in card
     assert "Why B:" in card and 'class="decision-option decision-rec"' in card
 
 
-def test_a_decision_without_a_brief_says_so():
+def test_a_decision_without_a_brief_shows_the_opening():
     idx, _ = _index(issues=[_issue(7, body=_RULING)])
     page = render_html.actions_page(idx)
-    assert "No brief written for this one yet" in page
+    assert "No brief written for this one yet" not in page
+    assert render_html.esc(actions.summary(_RULING)) in page
 
 
 # ------------------------------------------- a tick racing a rebuild ---
@@ -969,7 +970,8 @@ def test_malformed_decision_is_visible_and_counted(body):
     assert [a.number for a in found.not_ready] == [8]
     assert not found.steps
     page = render_html.actions_page(idx)
-    section = page[page.index('<section class="actions-fixing">'):page.index('</section>')]
+    start = page.index('<section class="actions-fixing">')
+    section = page[start:page.index('</section>', start)]
     assert "Decisions that need fixing" in section
     assert 'href="https://example.test/7"' in section
     assert "no Options block" in section
@@ -1015,7 +1017,8 @@ const document = {
   querySelector: () => null
 };
 const recount = src.slice(src.indexOf("  function recountActions()"), src.indexOf("  function sendTick("));
-new Function("document", recount + "\nrecountActions();")(document);
+// The docket bar's refresh lives outside the slice; it is not under test here.
+new Function("document", "updateDocket", recount + "\nrecountActions();")(document, () => {});
 console.log(text.nodeValue);
 """
     assert "1 decisions · 1 needs fixing" in _node(prog)

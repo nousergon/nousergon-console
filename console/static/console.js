@@ -141,13 +141,32 @@
     return !!onRow && (key === "Enter" || key === " " || key === "Spacebar");
   }
 
+  function docketSummary(rows) {
+    var pending = rows.filter(function (row) { return !row.saved; });
+    if (!pending.length) return "All decisions submitted";
+    var missing = pending.filter(function (row) { return !row.choice; });
+    if (missing.length) return missing.length + " decisions need a selection";
+    var changed = pending.filter(function (row) { return row.choice !== row.recommended; });
+    return changed.length ? changed.map(function (row) {
+      return row.title + ": " + row.text;
+    }).join("; ") : pending.length + " decisions, all as recommended";
+  }
+
+  // Sequential writes keep the existing tick path and allow per-item retries.
+  function submitDocket(rows, send) {
+    return rows.filter(function (row) { return !row.saved; }).reduce(function (chain, row) {
+      return chain.then(function () { return send(row); });
+    }, Promise.resolve());
+  }
+
   // Outside a browser (the console's own tests run this file under node)
   // only the pure functions above are exported; nothing below runs.
   if (typeof document === "undefined") {
     if (typeof module !== "undefined") {
       module.exports = {ageText: ageText, ageFrom: ageFrom, carryOpen: carryOpen,
                         tickReply: tickReply, tickFlow: tickFlow, superseded: superseded,
-                        rowToggleKey: rowToggleKey, pageActReply: pageActReply};
+                        rowToggleKey: rowToggleKey, pageActReply: pageActReply,
+                        docketSummary: docketSummary, submitDocket: submitDocket};
     }
     return;
   }
@@ -237,7 +256,7 @@
                             {capture: true, passive: true});
   });
   function busy() {
-    return editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;
+    return docketDirty || docketSubmitting || editing() || ticks.inFlight > 0 || Date.now() - lastActive < QUIET_MS;
   }
 
   // An expanded table row (`tr.row-open`), named by its first link or, with
@@ -633,6 +652,7 @@
   // The "N to do · M done" line and the Done heading, counted from the rows
   // now on the page, so they agree with the move without a re-read.
   function recountActions() {
+    updateDocket();
     var tables = document.querySelectorAll("table.actions");
     var decisions = document.querySelectorAll("article.decision").length;
     var todo = decisions, done = 0, agents = 0;
@@ -731,6 +751,61 @@
     };
   }
 
+  var docketDirty = false;
+  var docketSubmitting = false;
+
+  function docketRows() {
+    return Array.from(document.querySelectorAll(".docket-decision")).map(function (card) {
+      var picked = card.querySelector('[data-docket-choice][aria-pressed="true"]');
+      return {card: card, title: card.getAttribute("data-title"),
+              recommended: card.getAttribute("data-recommended"),
+              choice: picked ? picked.getAttribute("data-docket-choice") : "",
+              text: picked ? picked.getAttribute("data-option-text") : "",
+              form: picked && picked.closest("form"),
+              saved: card.classList.contains("decision-ruled")};
+    });
+  }
+
+  function updateDocket() {
+    var bar = document.querySelector(".docket-bar");
+    if (!bar) return;
+    var rows = docketRows();
+    var pending = rows.filter(function (row) { return !row.saved; });
+    if (!pending.length) docketDirty = false;
+    bar.querySelector(".docket-summary").textContent = docketSummary(rows);
+    var button = bar.querySelector(".docket-submit");
+    button.disabled = docketSubmitting || !pending.length || pending.some(function (row) { return !row.form; });
+    button.textContent = docketSubmitting ? "Submitting…" : "Submit decisions";
+  }
+
+  document.addEventListener("click", function (ev) {
+    var button = ev.target.closest(".docket-submit");
+    if (!button || button.disabled || docketSubmitting) return;
+    var rows = docketRows();
+    if (rows.some(function (row) { return !row.saved && !row.form; })) return;
+    docketSubmitting = true;
+    docketDirty = true;  // Keep failures and local choices until confirmed or reloaded.
+    // Freeze the batch snapshot, including agent flags, while it is sent.
+    rows.forEach(function (row) {
+      row.card.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    });
+    updateDocket();
+    submitDocket(rows, function (row) {
+      if (row.saved) return Promise.resolve();
+      return tickFlow(optionUi(row.form), function () { return sendTick(row.form); }, ticks)
+        .then(function () { row.saved = row.card.classList.contains("decision-ruled"); });
+    }).finally(function () {
+      docketSubmitting = false;
+      docketDirty = rows.some(function (row) { return !row.saved; });
+      rows.forEach(function (row) {
+        row.card.querySelectorAll("button").forEach(function (b) {
+          b.disabled = row.saved && !b.classList.contains("action-copy");
+        });
+      });
+      updateDocket();
+    });
+  });
+
   document.addEventListener("submit", function (ev) {
     var form = ev.target;
     if (!form.classList || !form.classList.contains("action-option")) return;
@@ -738,6 +813,16 @@
     ev.preventDefault();
     var btn = form.querySelector("button");
     if (!btn || btn.disabled) return;
+    var card = form.closest(".docket-decision");
+    if (card) {
+      if (docketSubmitting || card.classList.contains("decision-ruled")) return;
+      card.querySelectorAll("[data-docket-choice]").forEach(function (option) {
+        option.setAttribute("aria-pressed", option === btn ? "true" : "false");
+      });
+      docketDirty = true;
+      updateDocket();
+      return;
+    }
     tickFlow(optionUi(form), function () { return sendTick(form); }, ticks);
   });
 

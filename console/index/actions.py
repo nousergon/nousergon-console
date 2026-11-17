@@ -51,6 +51,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import date
 from typing import Any, Callable, Mapping, cast
 
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -162,6 +163,17 @@ class Action:
     #: already ruled on was reported to him as still waiting).
     ruling: tuple[str, str] | None = None
 
+    #: Decision-only projections; command and archive timing stay unchanged.
+    decision_date: str | None = None
+    what: str = ""
+
+    @property
+    def project(self) -> str:
+        """The group heading: `area:back-office` reads "Back office"."""
+        name = next((label[5:].replace("-", " ").strip() for label in self.labels
+                     if label.startswith("area:") and label[5:].strip()), "")
+        return name[:1].upper() + name[1:] if name else "Other"
+
     @property
     def has_step(self) -> bool:
         """The reader can act on it from the page: a PR to merge, a command to
@@ -215,6 +227,17 @@ class Listing:
         """To do and asking for a ruling: pick one of its lettered options
         (Brian 2026-11-11: decision cards first, then commands and PRs)."""
         return tuple(a for a in self.todo if a.options)
+
+    @property
+    def decision_groups(self) -> tuple[tuple[str, tuple[Action, ...]], ...]:
+        """First-occurrence project order, retaining row priority; Other last."""
+        groups: dict[str, list[Action]] = {}
+        for action in self.decisions:
+            groups.setdefault(action.project, []).append(action)
+        names = [name for name in groups if name != "Other"]
+        if "Other" in groups:
+            names.append("Other")
+        return tuple((name, tuple(groups[name])) for name in names)
 
     @property
     def steps(self) -> tuple[Action, ...]:
@@ -417,6 +440,45 @@ def timing(body: str | None, milestone: Any = None) -> tuple[str | None, str | N
             when = when[:WHEN_CHARS].rsplit(" ", 1)[0] + "…"
         when = when or None
     return due, source, when
+
+
+_DECISION_DATE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?"
+    r"(?P<kind>Due|Re-exam|Default)(?:\*\*)?:[ \t]*(?:\*\*)?"
+    r"(?P<value>[^\r\n]*)", re.IGNORECASE | re.MULTILINE)
+
+
+def decision_due(body: str | None) -> str | None:
+    """The first declared docket date in body order; no milestone fallback."""
+    for match in _DECISION_DATE.finditer(body or ""):
+        value = match.group("value").strip()
+        pattern = (r"\bafter[ \t]+(\d{4}-\d{2}-\d{2})\b"
+                   if match.group("kind").lower() == "default"
+                   else r"^(\d{4}-\d{2}-\d{2})\b")
+        stamp = re.search(pattern, value, re.IGNORECASE)
+        if stamp:
+            try:
+                return date.fromisoformat(stamp.group(1)).isoformat()
+            except ValueError:
+                # Invalid source date is not a schedulable chip; raw issue remains linked.
+                return None
+    return None
+
+
+def due_class(due: str | None, today: date) -> str | None:
+    if due is None:
+        return None
+    days = (date.fromisoformat(due) - today).days
+    return "overdue" if days < 0 else "today" if days == 0 else "soon" if days <= 3 else "later"
+
+
+def option_card(letter: str, text: str) -> tuple[str, str]:
+    """Presentation only: preserve the original option text for ruling writes."""
+    plain = text.replace("**", "").replace("`", "")
+    for tag in ("My pick", "Best-in-class", "System-optimized", "Other"):
+        if plain.startswith(tag + ":"):
+            return tag, plain[len(tag) + 1:].strip()
+    return letter, plain
 
 
 _PR_URL = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
@@ -681,6 +743,17 @@ def brief(body: str | None) -> tuple[str, bool]:
     return (_plain(ask, BRIEF_CHARS) if ask else summary(b)), False
 
 
+def what_this_is(body: str | None) -> str:
+    text = str(body or "")
+    declared = _field(text, "What this is")
+    if declared:
+        return " ".join(_WHEN_NOISE.sub("", _MD_LINK.sub(lambda m: m.group("t"), declared)).split())
+    for para in re.split(r"\n\s*\n", text):
+        if para.strip() and not para.lstrip().startswith(("#", "|", "<!--", "```", "---")):
+            return " ".join(_WHEN_NOISE.sub("", _MD_LINK.sub(lambda m: m.group("t"), para)).split())
+    return ""
+
+
 def rec_reason(body: str | None) -> str:
     """The Recommendation line after its letter: why that option."""
     text = _field(str(body or ""), "Recommendation") or ""
@@ -713,6 +786,8 @@ def _action(decl: Declaration, issue: Mapping[str, Any]) -> Action:
         labels=labels, done=decl.done_label in labels,
         agent=decl.agent_label is not None and decl.agent_label in labels,
         summary=summary(issue.get("body")),
+        decision_date=decision_due(issue.get("body")),
+        what=what_this_is(issue.get("body")),
         created_at=issue.get("created_at"), updated_at=issue.get("updated_at"),
         **dict(zip(("due", "due_source", "when"),
                    timing(issue.get("body"), issue.get("milestone")))),

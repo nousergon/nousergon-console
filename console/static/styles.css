@@ -418,3 +418,32 @@ table.plain td.num, table.plain th { font-variant-numeric: tabular-nums; }
 table.plain td.num { text-align: right; white-space: nowrap; }
 table.plain td.num-pos { color: var(--good); }
 table.plain td.num-neg { color: var(--bad); }
+
+/* The /actions docket uses only the shared theme palette. */
+.decision-project { margin: 1.4rem 0 .6rem; }
+.docket-decision .decision-title, .docket-decision .decision-brief { overflow-wrap: anywhere; }
+/* One option per row: the letter in a fixed left column, its text beside it. */
+.docket-decision .decision-options { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; }
+.docket-decision .decision-option { width: 100%; box-sizing: border-box; flex-direction: row; align-items: baseline;
+  gap: .75rem; text-align: left; }
+.docket-decision .decision-letter { flex: 0 0 auto; min-width: 7.5rem; }
+.docket-decision .decision-text { flex: 1; min-width: 0; }
+.docket-decision .decision-option[aria-pressed="true"] { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+.docket-decision .decision-why { display: block; }
+.decision-resources { list-style: none; padding-left: 0; margin-top: 1rem; }
+.docket-decision .action-cmd { padding-right: 4rem; }
+.decision-due.overdue { color: var(--bad); border-color: var(--bad); }
+.decision-due.today { color: var(--warn); border-color: var(--warn); }
+.decision-due.soon { color: var(--focus); border-color: var(--focus); }
+.decision-due.later { color: var(--muted); }
+.docket-bar { position: sticky; bottom: 0; z-index: 10; display: flex; align-items: center; gap: 1rem;
+  padding: 1rem; margin-top: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: .6rem; }
+.docket-summary { flex: 1; min-width: 0; overflow-wrap: anywhere; max-height: 25vh; overflow-y: auto; }
+.docket-submit { flex-shrink: 0; padding: .6rem 1rem; background: var(--bg); color: var(--text);
+  border: 1px solid var(--focus); border-radius: .4rem; cursor: pointer; }
+.docket-submit:disabled { color: var(--muted); cursor: default; }
+@media (max-width: 480px) {
+  .docket-bar { flex-direction: column; align-items: stretch; gap: .5rem; padding: .7rem; }
+  .docket-decision .decision-option { flex-direction: column; gap: .2rem; }
+  .docket-decision .decision-letter { min-width: 0; }
+}

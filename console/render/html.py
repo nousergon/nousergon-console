@@ -2764,44 +2764,61 @@ def _action_options(a: "Action", writable: bool) -> str:
 
 def _decision_card(a: "Action", writable: bool, today: str,
                    decl: "ActionsDeclaration | None" = None) -> str:
-    """One ruling as a readable card (Brian 2026-11-11: the table was
-    unreadable): the question, a 2-4 sentence brief, where to read more, then
-    one full-width button per option with the recommended one marked and why."""
-    head = (f'<h3 class="decision-title"><a href="{esc(a.url)}">{esc(a.title)}</a></h3>'
-            f'<div class="muted">{esc(a.ref)} · opened {as_of_html(a.created_at)}'
-            + (f" · due {_action_due(a, today)}" if a.due else "") + "</div>")
-    if a.brief:
-        body = f'<p class="decision-brief">{esc(a.brief)}</p>'
-        if not a.brief_declared:
-            body += ('<p class="muted">No brief written for this one yet; this is the '
-                     'issue\'s own opening. Agents are adding briefs.</p>')
-    else:
-        body = '<p class="muted">No brief yet: read the issue.</p>'
-    more = [(a.url, "the issue")] + [(u, r) for u, r, _ in a.prs] + list(a.links)
-    body += ('<p class="decision-links">More: '
-             + " · ".join(f'<a href="{esc(u)}">{esc(t)}</a>' for u, t in more) + "</p>")
+    """A docket item. Option forms retain the non-script individual POST path."""
+    from ..index.actions import due_class, option_card
+
+    state = due_class(a.decision_date, datetime.fromisoformat(today).date())
+    chip = (f'<span class="chip decision-due {state}">{esc(a.decision_date)} · '
+            f'{"within 3 days" if state == "soon" else state}</span>' if state else "")
+    head = (f'<h4 class="decision-title"><a href="{esc(a.url)}">{esc(a.title)}</a></h4>'
+            f'{chip}<div class="muted">{esc(a.ref)} · opened {as_of_html(a.created_at)}</div>')
+    body = f'<p class="decision-brief">{esc(a.what or a.summary)}</p>'
     opts: list[str] = []
     for letter, text in a.options:
         rec = letter == a.recommended
-        label = (f'<span class="decision-letter">{esc(letter)}</span>'
-                 f'<span class="decision-text">{esc(text.replace("`", ""))}'
+        tag, reason = option_card(letter, text)
+        label = (f'<span class="decision-letter">{esc(tag)}</span>'
+                 f'<span class="decision-text">{esc(reason)}'
                  + (' <span class="chip state-healthy">recommended</span>' if rec else "")
-                 + "</span>")
+                 + (f'<span class="decision-why">Why {esc(letter)}: {esc(a.rec_reason)}</span>'
+                    if rec and a.rec_reason else "") + "</span>")
         cls = "decision-option" + (" decision-rec" if rec else "")
         if writable:
             opts.append(f'<form method="post" action="/actions/{a.number}" class="action-option">'
                         '<input type="hidden" name="done" value="1">'
                         f'<input type="hidden" name="choice" value="{esc(letter)}">'
-                        f'<button type="submit" class="{cls}">{label}</button></form>')
+                        f'<button type="submit" class="{cls}" data-docket-choice="{esc(letter)}"'
+                        f' data-option-text="{esc(tag + ": " + reason if tag != letter else letter + ") " + reason)}"'
+                        f' aria-pressed="{"true" if rec else "false"}">{label}</button></form>')
         else:
             opts.append(f'<div class="{cls}">{label}</div>')
-    why = (f'<p class="decision-why"><strong>Why {esc(a.recommended)}:</strong> '
-           f'{esc(a.rec_reason)}</p>' if a.recommended and a.rec_reason else "")
-    return (f'<article id="a{a.number}" class="decision">{head}{body}'
-            f'<div class="decision-options">{"".join(opts)}</div>{why}'
+    more = list(dict.fromkeys([(a.url, "the issue")] + [(u, r) for u, r, _ in a.prs] + list(a.links)))
+    resources = '<ul class="action-cmds decision-resources">' + "".join(
+        '<li>' + f'<a href="{esc(u)}">{esc(t)}</a>'
+        + _action_copy_block(u, "link") + '</li>' for u, t in more) + '</ul>'
+    resources += _action_commands(a)
+    return (f'<article id="a{a.number}" class="decision docket-decision"'
+            f' data-title="{esc(a.title)}" data-recommended="{esc(a.recommended or "")}">{head}{body}'
+            f'<div class="decision-options">{"".join(opts)}</div>{resources}'
             + (f'<div class="decision-agent">{_agent_flag(a, decl, writable)}</div>'
-               if decl is not None else "")
-            + "</article>")
+               if decl is not None else "") + "</article>")
+
+
+def _action_copy_block(text: str, kind: str = "command") -> str:
+    return (f'<pre class="action-cmd"><code>{esc(text)}</code></pre>'
+            '<button type="button" class="action-copy" '
+            f'aria-label="Copy this {kind}">copy</button>')
+
+
+def _action_commands(a: "Action") -> str:
+    if not a.commands:
+        return ""
+    lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
+    return (f'<div class="action-run">{lead}<ol class="action-cmds">'
+            + "".join('<li>' + (f'<div class="action-step">{esc(lab)}</div>' if lab else "")
+                      + _action_copy_block(c) + _login_note(c) + '</li>'
+                      for lab, c in zip(a.command_labels or ("",) * len(a.commands),
+                                        a.commands, strict=False)) + "</ol></div>")
 
 
 def _action_ask(a: "Action", writable: bool = False) -> str:
@@ -2825,17 +2842,7 @@ def _action_ask(a: "Action", writable: bool = False) -> str:
     elif not a.has_step:
         out += ('<p class="muted">No command, PR or options yet: agents are working it. '
                 f'<a href="{esc(a.url)}">Open the issue</a>.</p>')
-    if a.commands:
-        lead = "Run, in order:" if len(a.commands) > 1 else "Run:"
-        out += (f'<div class="action-run">{lead}<ol class="action-cmds">'
-                + "".join('<li>' + (f'<div class="action-step">{esc(lab)}</div>' if lab else "")
-                          + f'<pre class="action-cmd"><code>{esc(c)}</code></pre>'
-                          '<button type="button" class="action-copy" '
-                          'aria-label="Copy this command">copy</button>'
-                          + _login_note(c) + '</li>'
-                          for lab, c in zip(a.command_labels or ("",) * len(a.commands),
-                                            a.commands, strict=False))
-                + "</ol></div>")
+    out += _action_commands(a)
     return out
 
 
@@ -2915,9 +2922,13 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             # Brian 2026-11-11: decisions first, then commands and PRs; a row
             # with neither is off the list and shown apart, with agents.
             if decisions:
-                body += ("<h2>Decisions</h2>"
-                         '<p class="muted">Tap one option; the ruling is written to the issue.</p>'
-                         + "".join(_decision_card(a, decl.writable, today, decl) for a in decisions))
+                body += ('<section class="actions-docket"><h2>Decisions</h2>'
+                         '<p class="muted">Select options, then submit the decisions below.</p>'
+                         '<noscript>Without JavaScript, each option submits its own ruling.</noscript>'
+                         + "".join(f'<section class="decision-group"><h3 class="decision-project">{esc(name)}</h3>'
+                                   + "".join(_decision_card(a, decl.writable, today, decl) for a in rows)
+                                   + '</section>' for name, rows in found.decision_groups)
+                         + '</section>')
             if steps:
                 body += ("<h2>Commands and PRs</h2>"
                          + _actions_table(steps, decl, today))
@@ -2936,6 +2947,15 @@ def actions_page(index: Index, notice: str | None = None) -> str:
                 body += ('<details class="actions-done"><summary><h2>Done · '
                          f'{len(done)}</h2></summary>' + _actions_table(done, decl, today)
                          + "</details>")
+            if decisions:
+                missing = sum(a.recommended not in dict(a.options) for a in decisions)
+                summary = (f"{missing} decisions need a selection" if missing
+                           else f"{len(decisions)} decisions, all as recommended")
+                body += ('<aside class="docket-bar" aria-label="Submit decisions">'
+                         f'<div class="docket-summary" role="status">{summary}</div>'
+                         '<button type="button" class="docket-submit"'
+                         + (' disabled' if not decl.writable or missing else '')
+                         + '>Submit decisions</button></aside>')
             if found.archive_error:
                 body += (f'<p class="absent">could not read closed actions: '
                          f'{esc(found.archive_error)}</p>')

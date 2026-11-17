@@ -937,3 +937,95 @@ def test_a_tick_made_while_a_rebuild_reads_is_not_undone_by_it():
     later = Index()
     actions.attach(later, fresh)
     assert [a.number for a in actions.listing(later).todo] == [1]
+
+
+@pytest.mark.parametrize("first,second", [
+    ("A)", "B)"), ("a)", "b)"), ("(A)", "(B)"),
+    ("(a)", "(b)"), ("A.", "B."), ("a.", "b."),
+])
+def test_option_marker_forms_normalize_buttons_and_rulings(first, second):
+    body = f"**Options:** {first} Ship it {second} Leave it (recommended)"
+    assert actions.options(body) == (("A", "Ship it"), ("B", "Leave it"))
+    assert actions.recommended(body) == "B"
+    idx, _ = _index(issues=[_issue(7, labels=("gate:decision",), body=body)])
+    page = render_html.actions_page(idx)
+    assert 'name="choice" value="A"' in page
+    assert 'name="choice" value="B"' in page
+    host = FakeHost([])
+    actions.tick(idx, 7, True, None, request=host, choice="B")
+    assert "option B) Leave it" in host.calls[1][3]["body"]
+
+
+@pytest.mark.parametrize("body", ["Decide this.", "**Options:** A) only",
+                                      "Decide this.\n\n```\necho context\n```"])
+def test_malformed_decision_is_visible_and_counted(body):
+    idx, _ = _index(issues=[
+        _issue(7, labels=("gate:decision",), body=body),
+        _issue(8, body="Agents working."),
+        _issue(9, body=_RULING), _issue(10, body=_RULING),
+    ])
+    found = actions.listing(idx)
+    assert [a.number for a in found.needs_fixing] == [7]
+    assert [a.number for a in found.not_ready] == [8]
+    assert not found.steps
+    page = render_html.actions_page(idx)
+    section = page[page.index('<section class="actions-fixing">'):page.index('</section>')]
+    assert "Decisions that need fixing" in section
+    assert 'href="https://example.test/7"' in section
+    assert "no Options block" in section
+    assert "<details" not in section
+    assert page.index("Decisions that need fixing") < page.index("With agents")
+    assert "2 decisions · 1 needs fixing" in page
+    assert actions.as_json(found)["needs_fixing"] == 1
+
+
+@pytest.mark.parametrize("label", ["needs-agent", "operator-done"])
+def test_malformed_decisions_already_handed_off_are_not_needs_fixing(label):
+    idx, _ = _index(decl={**DECL, "agent_label": "needs-agent"}, issues=[
+        _issue(7, labels=("gate:decision", label), body="Decide this.")])
+    found = actions.listing(idx)
+    assert not found.needs_fixing
+    page = render_html.actions_page(idx)
+    assert "Decisions that need fixing" not in page
+    if label == "needs-agent":
+        assert [a.number for a in found.not_ready] == [7]
+        assert page.index("With agents") < page.index('<tr id="a7"')
+    else:
+        assert [a.number for a in found.done] == [7]
+
+
+def test_only_malformed_decision_does_not_claim_nothing_to_do():
+    idx, _ = _index(issues=[_issue(7, labels=("gate:decision",), body="Decide this.")])
+    page = render_html.actions_page(idx)
+    assert "0 decisions · 1 needs fixing" in page
+    assert "Nothing to do." not in page
+
+
+def test_decision_count_refreshes_after_a_ruling_with_malformed_decisions_visible():
+    # Exercise the DOM recount with one of two decision cards already removed.
+    prog = r"""
+const fs = require("fs");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const text = {nodeType: 3, nodeValue: "2 to do · 0 done · 0 with agents · 2 decisions · 1 needs fixing · issues labelled"};
+const document = {
+  querySelectorAll: selector => ({
+    "table.actions": [], "article.decision": [{}],
+    "body > p": [{firstChild: text}]
+  }[selector] || []),
+  querySelector: () => null
+};
+const recount = src.slice(src.indexOf("  function recountActions()"), src.indexOf("  function sendTick("));
+new Function("document", recount + "\nrecountActions();")(document);
+console.log(text.nodeValue);
+"""
+    assert "1 decisions · 1 needs fixing" in _node(prog)
+
+
+def test_a_well_formed_options_block_ignores_a_stray_loose_marker_in_its_text():
+    """`a.` and `(b)` are accepted as markers only when the strict `A)` form
+    finds no run, so prose inside a well-formed option never breaks it."""
+    from console.index import actions as act
+    body = ("**Options:** A) Keep plan a. Then re-test (b) on Monday "
+            "B) Drop it — recommended")
+    assert [letter for letter, _ in act.options(body)] == ["A", "B"]
+    assert act.recommended(body) == "B"

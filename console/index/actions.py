@@ -169,8 +169,10 @@ class Action:
 
     @property
     def project(self) -> str:
-        return next((label[5:].title() for label in self.labels
-                     if label.startswith("area:") and label[5:].strip()), "Other")
+        """The group heading: `area:back-office` reads "Back office"."""
+        name = next((label[5:].replace("-", " ").strip() for label in self.labels
+                     if label.startswith("area:") and label[5:].strip()), "")
+        return name[:1].upper() + name[1:] if name else "Other"
 
     @property
     def has_step(self) -> bool:

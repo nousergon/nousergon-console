@@ -970,7 +970,8 @@ def test_malformed_decision_is_visible_and_counted(body):
     assert [a.number for a in found.not_ready] == [8]
     assert not found.steps
     page = render_html.actions_page(idx)
-    section = page[page.index('<section class="actions-fixing">'):page.index('</section>')]
+    start = page.index('<section class="actions-fixing">')
+    section = page[start:page.index('</section>', start)]
     assert "Decisions that need fixing" in section
     assert 'href="https://example.test/7"' in section
     assert "no Options block" in section
@@ -1016,7 +1017,8 @@ const document = {
   querySelector: () => null
 };
 const recount = src.slice(src.indexOf("  function recountActions()"), src.indexOf("  function sendTick("));
-new Function("document", recount + "\nrecountActions();")(document);
+// The docket bar's refresh lives outside the slice; it is not under test here.
+new Function("document", "updateDocket", recount + "\nrecountActions();")(document, () => {});
 console.log(text.nodeValue);
 """
     assert "1 decisions · 1 needs fixing" in _node(prog)

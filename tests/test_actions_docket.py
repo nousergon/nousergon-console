@@ -148,3 +148,9 @@ assert.equal(docketDirty, false); // Handoff removed the final local pick.
 assert.equal(button.disabled, true);
 '''.replace('UPDATE', update)
     subprocess.run(['node', '-e', harness], check=True, capture_output=True, text=True)
+
+
+def test_a_group_heading_reads_as_words_not_a_label():
+    idx, _ = _index(issues=[_issue(1, labels=('gate:operator', 'area:back-office'), body='Text.' + OPTIONS),
+                            _issue(2, labels=('gate:operator', 'area:crucible-v2'), body='Text.' + OPTIONS)])
+    assert [name for name, _ in actions.listing(idx).decision_groups] == ['Back office', 'Crucible v2']

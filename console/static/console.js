@@ -654,7 +654,8 @@
   function recountActions() {
     updateDocket();
     var tables = document.querySelectorAll("table.actions");
-    var todo = document.querySelectorAll("article.decision").length, done = 0, agents = 0;
+    var decisions = document.querySelectorAll("article.decision").length;
+    var todo = decisions, done = 0, agents = 0;
     for (var i = 0; i < tables.length; i++) {
       var n = tables[i].tBodies[0] ? tables[i].tBodies[0].rows.length : 0;
       if (tables[i].closest("details.actions-done")) done += n;
@@ -671,6 +672,8 @@
       if (t && t.nodeType === 3 && /^\d+ to do \u00b7 \d+ done \u00b7 /.test(t.nodeValue)) {
         t.nodeValue = t.nodeValue.replace(/^\d+ to do \u00b7 \d+ done \u00b7 \d+ with agents/,
           todo + " to do \u00b7 " + done + " done \u00b7 " + agents + " with agents");
+        t.nodeValue = t.nodeValue.replace(/\d+ decisions(?= \u00b7 \d+ needs fixing)/,
+          decisions + " decisions");
       }
     }
   }

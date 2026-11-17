@@ -219,14 +219,24 @@ class Listing:
     @property
     def steps(self) -> tuple[Action, ...]:
         """To do with a command to run or a PR to merge, and no ruling."""
-        return tuple(a for a in self.todo if a.has_step and not a.options)
+        fixing = {a.number for a in self.needs_fixing}
+        return tuple(a for a in self.todo
+                     if a.has_step and not a.options and a.number not in fixing)
+
+    @property
+    def needs_fixing(self) -> tuple[Action, ...]:
+        """Unresolved decision gates with no choices, visible for repair."""
+        return tuple(a for a in self.todo
+                     if "gate:decision" in a.labels and not a.options
+                     and "needs-agent" not in a.labels and "operator-done" not in a.labels)
 
     @property
     def not_ready(self) -> tuple[Action, ...]:
         """Open but giving the reader nothing to do: no command, PR or
         options. Off the to-do list (Brian 2026-11-11), listed apart so it
         never falls off the map while agents work it to a concrete step."""
-        return (tuple(a for a in self.todo if not a.has_step)
+        fixing = {a.number for a in self.needs_fixing}
+        return (tuple(a for a in self.todo if not a.has_step and a.number not in fixing)
                 + self.flagged)
 
     @property
@@ -548,8 +558,8 @@ def pull_requests(body: str | None) -> tuple[tuple[str, str], ...]:
 
 
 _OPTIONS_HEAD = re.compile(r"^\s*\*\*Options:?\*\*:?\s*(?P<rest>.*)$", re.MULTILINE)
-_OPTION = re.compile(r"(?:^|\s)(?P<l>[A-H])\)\s+")
-_RECOMMEND = re.compile(r"^\s*\*\*Recommendation:?\*\*:?\s*\(?(?P<l>[A-H])\b", re.MULTILINE)
+_OPTION = re.compile(r"(?:^|\s)(?P<paren>\()?(?P<l>[A-Ha-h])(?(paren)\)|[).])\s+")
+_RECOMMEND = re.compile(r"^\s*\*\*Recommendation:?\*\*:?\s*\(?(?P<l>[A-Ha-h])\b", re.MULTILINE)
 _REC_TAIL = re.compile(r"\s*(?:[—–-]+\s*recommended\.?|\((?:recommended|default)\))\s*\.?$",
                        re.IGNORECASE)
 #: An option's text as shown on a button.
@@ -578,7 +588,7 @@ def options(body: str | None) -> tuple[tuple[str, str], ...]:
         return ()
     para = _options_paragraph(body or "", m)
     marks = list(_OPTION.finditer(para))
-    letters = [mk.group("l") for mk in marks]
+    letters = [mk.group("l").upper() for mk in marks]
     if len(marks) < 2 or letters != [chr(ord("A") + i) for i in range(len(marks))]:
         return ()
     out: list[tuple[str, str]] = []
@@ -588,7 +598,7 @@ def options(body: str | None) -> tuple[tuple[str, str], ...]:
         text = _REC_TAIL.sub("", text).rstrip(" .")
         if len(text) > OPTION_CHARS:
             text = text[:OPTION_CHARS - 1].rstrip() + "…"
-        out.append((mk.group("l"), text))
+        out.append((mk.group("l").upper(), text))
     return tuple(out)
 
 
@@ -597,13 +607,13 @@ def recommended(body: str | None) -> str | None:
     the one option marked "— recommended" or "(recommended)"."""
     m = _RECOMMEND.search(body or "")
     if m:
-        return m.group("l")
+        return m.group("l").upper()
     m = _OPTIONS_HEAD.search(body or "")
     if not m:
         return None
     para = _options_paragraph(body or "", m)
     marks = list(_OPTION.finditer(para))
-    hits = [mk.group("l") for i, mk in enumerate(marks)
+    hits = [mk.group("l").upper() for i, mk in enumerate(marks)
             if _REC_TAIL.search(" ".join(para[mk.end():(marks[i + 1].start() if i + 1 < len(marks)
                                                       else len(para))].split()).rstrip(" -"))]
     return hits[0] if len(hits) == 1 else None
@@ -1139,6 +1149,7 @@ def as_json(found: Listing | None) -> dict[str, Any]:
         "writable": decl.writable, "read_at": found.read_at, "error": found.error,
         "open": len(found.todo),
         "decisions": len(found.decisions),
+        "needs_fixing": len(found.needs_fixing),
         "with_agents": len(found.not_ready),
         "done": len(found.done),
         "actions": [_action_json(a) for a in found.actions],

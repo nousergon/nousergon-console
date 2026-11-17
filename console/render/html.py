@@ -2899,9 +2899,11 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             where = " or ".join(f"<code>{esc(lab)}</code>" for lab in decl.labels)
             decisions, steps, waiting = (list(found.decisions), list(found.steps),
                                          list(found.not_ready))
+            fixing = list(found.needs_fixing)
             body = (f'<p>{len(decisions) + len(steps)} to do · {len(done)} done · '
                     f'{len(waiting)} with agents · '
-                    f'issues labelled {where} in '
+                    + (f'{len(decisions)} decisions · {len(fixing)} needs fixing · ' if fixing else '')
+                    + f'issues labelled {where} in '
                     f'<a href="https://github.com/{esc(decl.org)}/{esc(decl.repo)}/issues">'
                     f'{esc(decl.org)}/{esc(decl.repo)}</a></p>')
             if found.truncated:
@@ -2921,8 +2923,14 @@ def actions_page(index: Index, notice: str | None = None) -> str:
             if steps:
                 body += ("<h2>Commands and PRs</h2>"
                          + _actions_table(steps, decl, today))
-            if not decisions and not steps:
+            if not decisions and not steps and not fixing:
                 body += '<p class="absent">Nothing to do.</p>'
+            if fixing:
+                body += ('<section class="actions-fixing">'
+                         '<h2>Decisions that need fixing</h2><ul>'
+                         + "".join(f'<li><a href="{esc(a.url)}">{esc(a.ref)}: {esc(a.title)}</a>'
+                                   ' — no Options block</li>' for a in fixing)
+                         + '</ul></section>')
             if waiting:
                 body += ('<details class="actions-waiting"><summary><h2>With agents · '
                          f'{len(waiting)}</h2></summary>'

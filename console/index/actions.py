@@ -558,7 +558,23 @@ def pull_requests(body: str | None) -> tuple[tuple[str, str], ...]:
 
 
 _OPTIONS_HEAD = re.compile(r"^\s*\*\*Options:?\*\*:?\s*(?P<rest>.*)$", re.MULTILINE)
+#: The form the fleet's filers are told to write. Tried first and alone, so a
+#: body that parsed before a looser form was accepted parses exactly as it did.
+_OPTION_STRICT = re.compile(r"(?:^|\s)(?P<l>[A-H])\)\s+")
+#: The forms people actually type: a) (A) (a) A. a.  Used only when the strict
+#: form finds no A, B, C... run, because a stray "a." in prose matches it.
 _OPTION = re.compile(r"(?:^|\s)(?P<paren>\()?(?P<l>[A-Ha-h])(?(paren)\)|[).])\s+")
+
+
+def _option_marks(para: str) -> list[re.Match[str]]:
+    """The option markers of a paragraph: A, B, C... in order, at least two,
+    else none."""
+    for pattern in (_OPTION_STRICT, _OPTION):
+        marks = list(pattern.finditer(para))
+        letters = [mk.group("l").upper() for mk in marks]
+        if len(marks) >= 2 and letters == [chr(ord("A") + i) for i in range(len(marks))]:
+            return marks
+    return []
 _RECOMMEND = re.compile(r"^\s*\*\*Recommendation:?\*\*:?\s*\(?(?P<l>[A-Ha-h])\b", re.MULTILINE)
 _REC_TAIL = re.compile(r"\s*(?:[—–-]+\s*recommended\.?|\((?:recommended|default)\))\s*\.?$",
                        re.IGNORECASE)
@@ -587,9 +603,8 @@ def options(body: str | None) -> tuple[tuple[str, str], ...]:
     if not m:
         return ()
     para = _options_paragraph(body or "", m)
-    marks = list(_OPTION.finditer(para))
-    letters = [mk.group("l").upper() for mk in marks]
-    if len(marks) < 2 or letters != [chr(ord("A") + i) for i in range(len(marks))]:
+    marks = _option_marks(para)
+    if not marks:
         return ()
     out: list[tuple[str, str]] = []
     for i, mk in enumerate(marks):
@@ -612,7 +627,7 @@ def recommended(body: str | None) -> str | None:
     if not m:
         return None
     para = _options_paragraph(body or "", m)
-    marks = list(_OPTION.finditer(para))
+    marks = _option_marks(para) or list(_OPTION_STRICT.finditer(para))
     hits = [mk.group("l").upper() for i, mk in enumerate(marks)
             if _REC_TAIL.search(" ".join(para[mk.end():(marks[i + 1].start() if i + 1 < len(marks)
                                                       else len(para))].split()).rstrip(" -"))]

@@ -1019,3 +1019,13 @@ new Function("document", recount + "\nrecountActions();")(document);
 console.log(text.nodeValue);
 """
     assert "1 decisions · 1 needs fixing" in _node(prog)
+
+
+def test_a_well_formed_options_block_ignores_a_stray_loose_marker_in_its_text():
+    """`a.` and `(b)` are accepted as markers only when the strict `A)` form
+    finds no run, so prose inside a well-formed option never breaks it."""
+    from console.index import actions as act
+    body = ("**Options:** A) Keep plan a. Then re-test (b) on Monday "
+            "B) Drop it — recommended")
+    assert [letter for letter, _ in act.options(body)] == ["A", "B"]
+    assert act.recommended(body) == "B"

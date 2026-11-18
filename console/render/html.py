@@ -3304,7 +3304,32 @@ def _page_decisions(sec: dict[str, object], demo: bool = False) -> str:
     return f'<div class="page-decisions">{"".join(cards)}</div>{more}'
 
 
-def _page_posts(sec: dict[str, object], links: Citations | None) -> str:
+def _open_decisions(index: Index) -> "tuple[ActionsDeclaration, list[Action]] | None":
+    """The open decisions /actions shows, for a page that embeds them."""
+    from ..index import actions
+
+    found = actions.listing(index)
+    if found is None or found.error:
+        return None
+    return found.declaration, list(found.decisions)
+
+
+def _named_decisions(text: str, decisions: "list[Action]") -> "list[Action]":
+    """The decisions a post's text names, by issue URL or ref (``repo-I<n>``,
+    ``aec#<n>`` for the config repo), in the order /actions lists them."""
+    named: list[Action] = []
+    for a in decisions:
+        url = re.escape(a.url.rstrip("/"))
+        refs = [rf"{url}(?![0-9])", rf"\b{re.escape(a.ref)}(?![0-9])"]
+        if a.ref.startswith("alpha-engine-config-I"):
+            refs.append(rf"\baec#{a.number}(?![0-9])")
+        if a.url and any(re.search(r, text) for r in refs):
+            named.append(a)
+    return named
+
+
+def _page_posts(sec: dict[str, object], links: Citations | None,
+                decisions: "tuple[ActionsDeclaration, list[Action]] | None" = None) -> str:
     """A `posts` section: one card per row, like a feed of posts. The card's
     headline, its labelled facts on one line, then its body field rendered
     as markdown in full, through the one document path (`document_body`), so
@@ -3318,9 +3343,21 @@ def _page_posts(sec: dict[str, object], links: Citations | None) -> str:
     headline_field = sec.get("headline")
     body_field = str(sec["body"])
     cards: list[str] = []
+    fields = cast("list[str]", sec.get("decision_fields") or [])
+    today = render_now().date().isoformat()
+    shown: list[Action] = []
     for r in rows:
         values = cast("dict[str, object]", r["fields"])
         headline = _decision_value(values.get(str(headline_field))) if headline_field else ""
+        asked = ""
+        if decisions is not None and fields:
+            said = " ".join(_decision_value(values.get(f)) for f in fields)
+            named = [a for a in _named_decisions(said, decisions[1]) if a not in shown]
+            shown.extend(named)
+            asked = "".join(_decision_card(a, decisions[0].writable, today, decisions[0])
+                            for a in named)
+            if asked:
+                asked = f'<div class="post-decisions">{asked}</div>'
         facts = " · ".join(
             f'<span class="post-fact"><span class="muted">{esc(label)}</span> '
             f"{markdown_link_text(_decision_value(values.get(name)), links)}</span>"
@@ -3334,11 +3371,23 @@ def _page_posts(sec: dict[str, object], links: Citations | None) -> str:
             f'<a href="{esc(r["url"])}">{esc(headline or r["label"])}</a></h3>'
             f'<div class="muted">{as_of_html(cast("str | None", r["as_of"]))}</div>'
             + (f'<p class="post-facts">{facts}</p>' if facts else "")
-            + f"{body}</article>")
+            + f"{asked}{body}</article>")
     total = cast("int", sec["total"])
     more = (f'<p class="list-window">showing {len(rows)} of {total}</p>'
             if total > len(rows) else "")
-    return f'<div class="page-posts">{"".join(cards)}</div>{more}'
+    bar = ""
+    if shown and decisions is not None:
+        # The same bar /actions carries: console.js gathers every docket card
+        # on the page and posts each changed ruling to its issue.
+        missing = sum(a.recommended not in dict(a.options) for a in shown)
+        summary = (f"{missing} decisions need a selection" if missing
+                   else f"{len(shown)} decisions, all as recommended")
+        bar = ('<aside class="docket-bar" aria-label="Submit decisions">'
+               f'<div class="docket-summary" role="status">{summary}</div>'
+               '<button type="button" class="docket-submit"'
+               + (' disabled' if not decisions[0].writable or missing else '')
+               + '>Submit decisions</button></aside>')
+    return f'<div class="page-posts">{"".join(cards)}</div>{more}{bar}'
 
 
 def markdown_link_text(value: str, links: Citations | None) -> str:
@@ -3591,7 +3640,8 @@ def _page_section(index: Index, sec: dict, links: Citations | None,
     elif sec["type"] == "decisions":
         body = _page_decisions(cast("dict[str, object]", sec), demo)
     elif sec["type"] == "posts":
-        body = _page_posts(cast("dict[str, object]", sec), links)
+        body = _page_posts(cast("dict[str, object]", sec), links,
+                           None if demo else _open_decisions(index))
     elif sec["type"] == "grid":
         body = _page_grid(cast("Mapping[str, object]", sec))
     else:

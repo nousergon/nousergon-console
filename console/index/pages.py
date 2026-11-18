@@ -210,6 +210,11 @@ class Section:
     #: in a facebook post style update log, one post for each thread").
     headline: str | None = None
     body_field: str | None = None
+    #: posts only: row fields whose text may name an open decision on
+    #: /actions (its issue URL or ref); each one named is shown on the card
+    #: with its option buttons, so a ruling is made on the post itself
+    #: (Brian 2026-11-16: "make all decisions on the console page alone").
+    decision_fields: tuple[str, ...] = ()
     labels: tuple[tuple[str, str], ...] = ()
     #: table only: a PLAIN table (Brian 2026-11-13: the order book "is so bad,
     #: I cannot read it"): headed by each field's declared `label`, values
@@ -676,7 +681,8 @@ def _posts(raw: Mapping[str, object], where: str, title: str, select: Selector,
     under them. It reads the way a feed of posts reads, which a table cannot:
     a table cell is one line, and the body is the whole message (Brian
     2026-11-16: monitor every thread from the console alone)."""
-    known = {"type", "title", "select", "headline", "body", "fields", "sort", "limit", "empty"}
+    known = {"type", "title", "select", "headline", "body", "fields", "sort", "limit", "empty",
+             "decisions"}
     stray = sorted(set(raw) - known)
     if stray:
         raise PagesConfigError(
@@ -688,9 +694,15 @@ def _posts(raw: Mapping[str, object], where: str, title: str, select: Selector,
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         raise PagesConfigError(f"{where}: `limit` must be an integer 1..{MAX_LIMIT}")
     sort = str(raw["sort"]).strip() if raw.get("sort") else None
+    found: object = raw.get("decisions", [])
+    names = [str(f).strip() for f in cast("list[object]", found)] if isinstance(found, list) else None
+    if names is None or not all(isinstance(f, str) for f in cast("list[object]", found)) \
+            or not all(names):
+        raise PagesConfigError(f"{where}: `decisions` is a list of row field names")
     return Section(type="posts", title=title, select=select,
                    fields=tuple(n for n, _ in labels), sort=sort, limit=limit, empty=empty,
-                   labels=labels, headline=headline, body_field=body)
+                   labels=labels, headline=headline, body_field=body,
+                   decision_fields=tuple(names))
 
 
 def parse(raw: Any, feeds: set[str] | None = None,
@@ -1371,6 +1383,7 @@ def _decisions_doc(doc: dict[str, object], s: Section, matched: int,
         wanted.append(act.headline)
     if s.sort:
         wanted.append(s.sort.lstrip("-"))
+    wanted.extend(s.decision_fields)
     columns = list(dict.fromkeys(wanted))
     cards: list[dict[str, object]] = [_row(e, columns) for e in in_range]
     if s.sort:
@@ -1401,6 +1414,7 @@ def _posts_doc(doc: dict[str, object], s: Section, matched: int,
         wanted.append(s.headline)
     if s.sort:
         wanted.append(s.sort.lstrip("-"))
+    wanted.extend(s.decision_fields)
     columns = list(dict.fromkeys(wanted))
     cards: list[dict[str, object]] = [_row(e, columns) for e in in_range]
     if s.sort:
@@ -1408,7 +1422,8 @@ def _posts_doc(doc: dict[str, object], s: Section, matched: int,
     doc.update(matched=matched, total=len(cards), rows=cards[:s.limit],
                outside_range=matched - len(in_range),
                labels=[list(pair) for pair in s.labels],
-               headline=s.headline, body=s.body_field)
+               headline=s.headline, body=s.body_field,
+               decision_fields=list(s.decision_fields))
     return doc
 
 

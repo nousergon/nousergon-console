@@ -1380,6 +1380,8 @@ def _freshness_line(info: "BuildInfo", now: datetime) -> str:
                f"{max(1, round((info.build_seconds or 300) / 60))} min")
     elif info.bootstrap:
         why = "the console is starting up"
+    elif info.rebuilding:
+        why = "rebuilding; showing the previous index"
     elif info.stale_since:
         why = "the last refresh failed"
     else:
@@ -1517,6 +1519,9 @@ def home_status(index: Index, now: datetime | None = None) -> str:
     if info.bootstrap:
         return ('<p class="state-MISSED">Starting up: the console is loading its data, '
                 'which takes a few minutes. Reload this page shortly.</p>')
+    if info.rebuilding:
+        return (f'<p class="state-MISSED">Rebuilding. Showing data from {as_of_html(info.built_at, now)} '
+                f'while the new index builds.{failed_txt}</p>')
     if not info.built_at:
         return '<p class="absent">The console cannot say how current this data is.</p>'
     if info.stale_since:

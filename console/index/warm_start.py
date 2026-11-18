@@ -17,14 +17,14 @@ THE RULES THAT KEEP IT HONEST
 - **A loaded index is never served as current.** It carries ``bootstrap=True``,
   ``stale_since`` = the restart, ``warm_start_from`` = when it was built, and a
   ``last_error`` that still says "first index build has not completed yet", so
-  the page shows SURFACE STALE and every consumer that waits on the bootstrap
-  window (the deploy probes) still waits for the real build.
+  the page shows SURFACE STALE. The JSON readiness field is true while
+  complete remains false: availability and newest-build completion are separate.
 - **Nothing is owned.** The file is a cache of what the console last rendered,
   never a source; deleting it means one cold start, exactly as before.
 - **A file this code cannot render is ignored.** The payload carries a format
-  version and a digest of the console's source; on a digest mismatch (a code
-  deploy) the loaded index must render home, the site index and the JSON dump
-  without raising, or it is discarded and the start is cold.
+  version and a digest of the console's source. Every loaded index must
+  render home, the site index and the JSON dump without raising, even when
+  the digest matches, or it is discarded and the start is cold.
 - The file is written atomically (temp file + rename), mode 0600. It is only
   ever read back by the process that wrote it, from a directory only that
   service user can write.
@@ -36,8 +36,12 @@ import logging
 import os
 import pickle
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .graph import Index
 
 _LOG = logging.getLogger(__name__)
 
@@ -97,16 +101,20 @@ def _renders(index: Any) -> bool:
     from ..render import html, json as render_json
 
     try:
+        stamp = datetime.fromisoformat(index.build_info.built_at.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return False
         html.landing_page(index)
         html.dashboards_page(index)
         render_json.dumps(render_json.index_freshness(index))
+        render_json.dumps(render_json.index_dump(index))
         return True
     except Exception as exc:  # noqa: BLE001 - any failure means cold start
         _LOG.warning("warm start: cached index does not render under this code: %s", exc)
         return False
 
 
-def load(path: str | None, digest: str) -> Any | None:
+def load(path: str | None, digest: str) -> Index | None:
     """The last saved index, or ``None`` when there is none this code can serve."""
     if not path or not os.path.exists(path):
         return None
@@ -118,9 +126,13 @@ def load(path: str | None, digest: str) -> Any | None:
         return None
     if not isinstance(payload, dict) or payload.get("version") != FORMAT_VERSION:
         return None
+    from .graph import Index
+    from .build import BuildInfo
+
     index = payload.get("index")
-    if index is None or getattr(index, "build_info", None) is None:
+    if not isinstance(index, Index) or not isinstance(getattr(index, "build_info", None), BuildInfo):
         return None
-    if payload.get("digest") != digest and not _renders(index):
+    # A matching source digest does not prove a cached graph is intact.
+    if not _renders(index):
         return None
     return index

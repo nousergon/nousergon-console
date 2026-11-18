@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import os
 import pickle
+from dataclasses import replace
+
+import pytest
 from datetime import datetime, timezone
 
 from console.index import warm_start
@@ -86,12 +89,14 @@ def test_a_corrupt_or_foreign_file_is_a_cold_start(tmp_path):
 
 def test_after_a_code_change_it_must_still_render(tmp_path, monkeypatch):
     path = tmp_path / "last_index.pickle"
-    warm_start.save(_index(), str(path), "old-code")
+    index = _index()
+    index.build_info = replace(index.build_info, built_at=T0.isoformat())
+    warm_start.save(index, str(path), "old-code")
     assert warm_start.load(str(path), "new-code") is not None
     monkeypatch.setattr(warm_start, "_renders", lambda index: False)
     assert warm_start.load(str(path), "new-code") is None
-    # Same code: no render check needed.
-    assert warm_start.load(str(path), "old-code") is not None
+    # Integrity is checked even when the code digest matches.
+    assert warm_start.load(str(path), "old-code") is None
 
 
 def test_default_path_follows_the_systemd_cache_directory(monkeypatch):
@@ -129,3 +134,99 @@ def test_a_failed_build_after_a_warm_start_says_it_failed(tmp_path):
     page = landing_page(idx)
     assert "The last refresh failed" in page and "Restarted" not in page
     assert "Trading" in page  # the last good rows are still served
+
+
+def test_warm_first_response_is_ready_but_rebuilding(tmp_path):
+    from console.server.router import resolve
+
+    path = tmp_path / 'last_index.pickle'
+    _built(path)
+    restarted = Supervisor(lambda: (_ for _ in ()).throw(AssertionError('must not build synchronously')),
+                           refresh_seconds=180, clock=lambda: T1,
+                           defer_first_build=True, warm_start_path=str(path))
+    response = render_json.payload(restarted.current, resolve('/', ''))
+    status = render_json.index_freshness(restarted.current, now=T1)
+    assert response['view'] == 'landing'
+    assert status['ready'] is True and status['complete'] is False
+    assert status['stale'] is True and status['staleness_basis'] == 'rebuilding'
+    assert status['built_at'] == T0.isoformat()
+    assert status['sources'] and all('elapsed_seconds' in row for row in status['sources'])
+
+
+def test_cold_and_failed_first_build_are_not_ready():
+    sup = Supervisor(lambda: (_ for _ in ()).throw(RuntimeError('failed')),
+                     refresh_seconds=180, defer_first_build=True)
+    assert render_json.index_freshness(sup.current)['ready'] is False
+    assert not sup.refresh_once()
+    assert render_json.index_freshness(sup.current)['ready'] is False
+    assert render_json.index_freshness(sup.current)['complete'] is False
+
+
+def test_rebuild_atomically_replaces_ready_snapshot(tmp_path):
+    from threading import Event, Thread
+
+    path = tmp_path / 'last_index.pickle'
+    _built(path)
+    entered, release = Event(), Event()
+    fresh = _index()
+
+    def builder():
+        entered.set()
+        assert release.wait(5)
+        return fresh
+
+    sup = Supervisor(builder, refresh_seconds=180, clock=lambda: T1,
+                     defer_first_build=True, warm_start_path=str(path))
+    old = sup.current
+    thread = Thread(target=sup.refresh_once)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        for _ in range(20):
+            assert sup.current is old
+            assert render_json.index_freshness(sup.current)['ready'] is True
+            assert render_json.index_freshness(sup.current)['complete'] is False
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert sup.current is fresh and old is not fresh
+    assert render_json.index_freshness(fresh)['complete'] is True
+    assert render_json.index_freshness(fresh)['staleness_basis'] != 'rebuilding'
+
+
+def test_same_code_corrupt_graph_is_not_served(tmp_path):
+    path = tmp_path / 'last_index.pickle'
+    index = _index()
+    index.build_info = replace(index.build_info, built_at=T0.isoformat())
+    index._entities = None
+    assert warm_start.save(index, str(path), 'same-code')
+    assert warm_start.load(str(path), 'same-code') is None
+
+
+@pytest.mark.parametrize('stamp', ['', 'bad', '2026-11-04T18:00:00'])
+def test_snapshot_requires_dated_build_with_offset(tmp_path, stamp):
+    path = tmp_path / 'last_index.pickle'
+    index = _index()
+    index.build_info = replace(index.build_info, built_at=stamp)
+    warm_start.save(index, str(path), 'd')
+    assert warm_start.load(str(path), 'd') is None
+
+
+def test_routine_refresh_html_and_json_say_rebuilding():
+    from console.render.html import home_status, _freshness_line
+
+    sup = None
+
+    def build():
+        if sup is not None:
+            info = sup.current.build_info
+            assert 'Rebuilding' in home_status(sup.current, now=T0)
+            assert 'rebuilding' in _freshness_line(info, T0)
+            assert 'older than it should' not in home_status(sup.current, now=T0)
+            assert render_json.index_freshness(sup.current, now=T0)['complete'] is False
+        return _index()
+
+    sup = Supervisor(build, refresh_seconds=180, clock=lambda: T0)
+    assert sup.refresh_once()
+    assert render_json.index_freshness(sup.current, now=T0)['complete'] is True

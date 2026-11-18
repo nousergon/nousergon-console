@@ -526,7 +526,7 @@ class ConsoleServer(ThreadingHTTPServer):
     @property
     def index(self) -> Index:
         source = self._source
-        return source if isinstance(source, Index) else cast("Index", source.current)
+        return source if isinstance(source, Index) else source.current
 
 
 def serve(source: "Index | Supervisor", host: str = "127.0.0.1", port: int = 5180) -> ConsoleServer:

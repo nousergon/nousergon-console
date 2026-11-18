@@ -29,7 +29,10 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .graph import Index
 
 from ..model.envelope import AdapterResult, AdapterStatus
 
@@ -98,6 +101,10 @@ class BuildInfo:
     #: (`warm_start.py`): the `built_at` of the build it came from. Always
     #: paired with `bootstrap=True` and `stale_since`, never served as current.
     warm_start_from: str | None = None
+    #: A valid graph is available, independently of the newest build.
+    ready: bool = True
+    #: The currently served graph is retained while its replacement builds.
+    rebuilding: bool = False
 
     @property
     def cadence_overrun(self) -> bool:
@@ -142,7 +149,7 @@ class BuildInfo:
         pair: `principles.md` §2.7 forbids rendering "we did not measure" as
         "fine", so the caller renders the reason, not a green tick.
         """
-        if self.stale_since is not None:
+        if self.rebuilding or self.stale_since is not None:
             return True
         cadence = self.shortest_cadence_seconds
         age = self.age_seconds(now)
@@ -151,6 +158,8 @@ class BuildInfo:
         return age > cadence
 
     def staleness_basis(self) -> str:
+        if self.rebuilding:
+            return "rebuilding"
         if self.stale_since is not None:
             return f"last refresh failed at {self.stale_since}"
         cadence = self.shortest_cadence_seconds
@@ -186,7 +195,7 @@ class Supervisor:
 
     def __init__(
         self,
-        builder: Callable[[], object],
+        builder: Callable[[], Index],
         refresh_seconds: float,
         clock: Callable[[], datetime] | None = None,
         *,
@@ -271,7 +280,7 @@ class Supervisor:
             self._digest = warm_start.code_digest()
         return self._digest
 
-    def _warm_seed(self):
+    def _warm_seed(self) -> Index | None:
         """The last good index from before the restart, marked, or None."""
         if not self._warm_start_path:
             return None
@@ -285,19 +294,22 @@ class Supervisor:
             index.build_info,
             bootstrap=True,
             warm_start_from=built,
+            ready=True,
+            rebuilding=True,
         )
         _mark_stale(index, self._clock, RuntimeError(
             "first index build has not completed yet; showing the index "
             f"built {built}, from before the restart"))
+        index.build_info = replace(index.build_info, rebuilding=True)
         return index
 
-    def _save_warm(self, index) -> None:
+    def _save_warm(self, index: Index) -> None:
         if not self._warm_start_path:
             return
         from . import warm_start
         warm_start.save(index, self._warm_start_path, self._code_digest())
 
-    def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False):
+    def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False) -> Index:
         """An empty index carrying the reason it is empty.
 
         Shared by the two cases that have no index to serve yet — the first
@@ -318,12 +330,15 @@ class Supervisor:
             built_at=now_iso(self._clock),
             refresh_seconds=self._refresh_seconds,
             bootstrap=bootstrap,
+            ready=False,
+            rebuilding=bootstrap,
         )
         _mark_stale(index, self._clock, exc)
+        index.build_info = replace(index.build_info, rebuilding=bootstrap)
         return index
 
     @property
-    def current(self):
+    def current(self) -> Index:
         with self._lock:
             return self._current
 
@@ -335,6 +350,8 @@ class Supervisor:
         goes on the marker rather than to a log nobody reads — the person who
         needs it is looking at the page.
         """
+        with self._lock:
+            self._current.build_info = replace(self._current.build_info, rebuilding=True)
         started = self._monotonic()
         self._last_build_started = started
         try:
@@ -410,7 +427,7 @@ class Supervisor:
                 next_start += periods_missed * self._refresh_seconds
 
 
-def _stamp(index, clock, refresh_seconds: float,
+def _stamp(index: Index, clock: Callable[[], datetime], refresh_seconds: float,
            build_seconds: float | None = None) -> None:
     index.build_info = replace(
         index.build_info,
@@ -421,12 +438,15 @@ def _stamp(index, clock, refresh_seconds: float,
         last_error=None,
         bootstrap=False,
         warm_start_from=None,
+        ready=True,
+        rebuilding=False,
     )
 
 
-def _mark_stale(index, clock, exc: Exception) -> None:
+def _mark_stale(index: Index, clock: Callable[[], datetime], exc: BaseException) -> None:
     index.build_info = replace(
         index.build_info,
         stale_since=now_iso(clock),
         last_error=f"{type(exc).__name__}: {exc}",
+        rebuilding=False,
     )

@@ -250,6 +250,9 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
         # bootstrap read rather than treat its zeroed §9 numbers as fleet
         # state.
         "bootstrap": info.bootstrap,
+        "ready": info.ready and bool(info.built_at),
+        "complete": info.ready and bool(info.built_at) and not info.rebuilding
+                    and not info.bootstrap and info.last_error is None,
         "sources": [
             {
                 "name": a.name, "status": a.status, "fetched_at": a.fetched_at,

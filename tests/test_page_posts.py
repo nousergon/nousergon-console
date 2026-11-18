@@ -110,3 +110,54 @@ def test_the_json_payload_carries_the_cards() -> None:
     sec = page["sections"][0]
     assert sec["type"] == "posts" and sec["body"] == "log" and sec["headline"] == "title"
     assert [r["fields"]["title"] for r in sec["rows"]] == ["Staging", "Console"]
+
+
+# A post that names an open decision carries its option buttons, so the
+# ruling is made on the post (Brian 2026-11-16: "make all decisions on the
+# console page alone"). The buttons are /actions' own: same card, same bar,
+# same POST to the issue.
+
+OPTIONS = ("Pick one.\n\n**Options:** A) My pick: Ship — reversible "
+           "B) Other: Wait — more evidence\n\n**Recommendation:** A — reversible.")
+
+
+def _index_with_decisions(ask: str, fields: list[str] | None = None) -> Index:
+    from console.index import actions
+    from tests.test_actions import DECL, FakeHost, _issue
+
+    host = FakeHost([_issue(7, "Approve the rules", body=OPTIONS), _issue(70, "Other", body=OPTIONS)])
+    found, result = actions.read(actions.parse(DECL), "2026-11-16T12:00:00Z", request=host)
+    rows = (_thread("a", "Back office", "update", "2026-11-16T17:00:00+00:00", ask=ask),
+            _thread("b", "Console", "plain", "2026-11-16T12:00:00+00:00"))
+    idx = Index()
+    idx.add_result(result)
+    idx.add_result(AdapterResult(name="fixture", status=AdapterStatus.OK,
+                                 claim_class=ClaimClass.OBSERVATION, entities=rows))
+    actions.attach(idx, found)
+    pages.attach(idx, pages.parse(_decl(decisions=fields if fields is not None else ["ask"])))
+    idx.finalize()
+    return idx
+
+
+@pytest.mark.parametrize("ask", [
+    "Approve the rules: https://example.test/7",
+    "Approve the rules (tracker-I7)",
+])
+def test_a_post_naming_an_open_decision_carries_its_buttons(ask: str) -> None:
+    html = render_html.page_page(_index_with_decisions(ask), "thread-updates", {})
+    card = html[html.index(">Back office<"):html.index(">Console<")]
+    assert 'class="decision docket-decision"' in card
+    assert 'action="/actions/7"' in card and 'data-docket-choice="A"' in card
+    assert 'action="/actions/70"' not in html
+    assert html.count('class="docket-bar"') == 1
+
+
+def test_no_named_decision_means_no_buttons_and_no_bar() -> None:
+    for ask, fields in (("https://example.test/77", None), ("https://example.test/7", [])):
+        html = render_html.page_page(_index_with_decisions(ask, fields), "thread-updates", {})
+        assert "docket-decision" not in html and "docket-bar" not in html
+
+
+def test_decisions_must_name_fields() -> None:
+    with pytest.raises(pages.PagesConfigError, match="decisions"):
+        pages.parse(_decl(decisions="ask"))

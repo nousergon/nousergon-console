@@ -52,6 +52,8 @@ oversight, it is the adapter genuinely having nothing to declare.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import dataclasses
 import json
 import re
@@ -228,16 +230,22 @@ def _read_named(get_json: Callable[[str], Any], org: str, repo: str,
     out: list[dict[str, Any]] = []
     first_error: str | None = None
     errors = 0
-    for number in numbers:
+    def read(number: int) -> tuple[dict[str, object] | None, str | None]:
         try:
-            row = _issue_row(get_json, repo, f"repos/{org}/{repo}/issues/{number}")
-        except Exception as exc:  # noqa: BLE001 - an unread ref is reported, not raised
-            errors += 1
-            if first_error is None:
-                first_error = _describe(exc)
-            continue
-        if row is not None:
-            out.append(row)
+            return _issue_row(get_json, repo, f"repos/{org}/{repo}/issues/{number}"), None
+        except Exception as exc:  # unread ref stays visible in the ordered fold below
+            return None, _describe(exc)
+
+    # Small JSON reads, bounded independently of the outer adapter pool.
+    # Preserve declared order and first-error attribution despite completion order.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for row, error in pool.map(read, numbers):
+            if error is not None:
+                errors += 1
+                if first_error is None:
+                    first_error = error
+            elif row is not None:
+                out.append(row)
     if numbers and errors == len(numbers):
         raise RefReadError(f"every {how} read failed; first: {first_error}")
     return out
@@ -330,6 +338,7 @@ def _rest_getter(token_command: list[str], api_url: str,
     opener: Callable[..., object] = urlopen or urllib.request.urlopen
     base_url = str(api_url).rstrip("/")
     token: list[str] = []
+    token_lock = threading.Lock()
 
     def get_json(path: str) -> object:
         url = f"{base_url}/{path}"
@@ -337,8 +346,9 @@ def _rest_getter(token_command: list[str], api_url: str,
         hit = _REST_CACHE.get(url)
         if hit is not None and hit[0] > now:
             return cast(object, hit[1])
-        if not token:
-            token.append(_mint_token(token_command, org, repo))
+        with token_lock:
+            if not token:
+                token.append(_mint_token(token_command, org, repo))
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {token[0]}",
             "Accept": "application/vnd.github+json",
@@ -431,9 +441,18 @@ def rest_sub_issue_reader(token_command: list[str],
     """A `SubIssueReader` over REST with a minted token, cached like the ref
     reader: one call per epic per cache window, on the box's App token and
     never on a person's API limit."""
+    getters: dict[tuple[str, str, str], Callable[[str], object]] = {}
+    getter_lock = threading.Lock()
+
     def reader(org: str, repo: str, number: int, cache: str) -> list[JsonObject]:
-        get_json = _rest_getter(token_command, api_url, urlopen, org, repo,
-                                _cache_seconds(cache))
+        # One lazy token per repository, not per epic. Scope stays at this batch;
+        # the next build creates a new reader and obtains a fresh token if needed.
+        key = (org, repo, cache)
+        with getter_lock:
+            if key not in getters:
+                getters[key] = _rest_getter(token_command, api_url, urlopen, org, repo,
+                                            _cache_seconds(cache))
+            get_json = getters[key]
         return _sub_issues(get_json, org, repo, number)
 
     return reader
@@ -508,17 +527,22 @@ def fetch_sub_issues(
                   if token_command else _gh_sub_issue_reader)
     out: dict[str, list[SubIssue]] = {}
     unavailable: list[str] = []
-    for epic in wanted:
+    def read(epic: str) -> tuple[str, list[SubIssue] | None, str | None]:
         parsed = parse_issue_ref(epic)
-        if parsed is None:  # pragma: no cover - filtered above
-            continue
+        assert parsed is not None  # filtered above
         repo, number = parsed
         try:
             raw = reader(org, repo, number, cache)
-        except Exception as exc:  # noqa: BLE001 - this epic is unread, not empty
-            unavailable.append(f"{epic} ({_describe(exc)})")
-            continue
-        out[epic] = [sub_issue_row(r, repo) for r in raw]
+            return epic, [sub_issue_row(r, repo) for r in raw], None
+        except Exception as exc:  # this epic remains unread, not empty
+            return epic, None, f"{epic} ({_describe(exc)})"
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for epic, rows, error in pool.map(read, wanted):
+            if error is not None:
+                unavailable.append(error)
+            elif rows is not None:
+                out[epic] = rows
     status = AdapterStatus.FAILED if unavailable and not out else AdapterStatus.OK
     return out, AdapterResult(claim_class=CLAIM_CLASS, fetched_at=now_iso(), name=name,
                               status=status, unavailable=tuple(unavailable))

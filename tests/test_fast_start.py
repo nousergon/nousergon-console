@@ -2,10 +2,11 @@
 import json
 import threading
 from datetime import datetime, timezone
+from dataclasses import replace
 from urllib.request import Request, urlopen
 
 from console.index import warm_start
-from console.index.build import Supervisor
+from console.index.build import AdapterFetch, Supervisor
 from console.index.graph import Index
 from console.server.app import serve
 from console.render import json as render_json
@@ -30,7 +31,11 @@ def test_home_answers_during_cache_load_and_first_build(monkeypatch):
     def load(*args):
         loading.set()
         assert release_cache.wait(10)
-        return Index()
+        index = Index()
+        index.build_info = replace(index.build_info, adapters=(
+            AdapterFetch("previous", "ok", None, None, elapsed_seconds=1.2),
+        ))
+        return index
 
     def build():
         building.set()
@@ -51,7 +56,13 @@ def test_home_answers_during_cache_load_and_first_build(monkeypatch):
             with urlopen(url, timeout=2) as response:
                 assert response.status == 200
             with urlopen(Request(url, headers={"Accept": "application/json"}), timeout=2) as response:
-                assert json.load(response)["index"]["bootstrap"] is True
+                info = json.load(response)["index"]
+                assert info["bootstrap"] is True
+                if event is release_build:
+                    assert info["sources"][0]["name"] == "previous"
+                    assert info["sources"][0]["elapsed_seconds"] == 1.2
+                else:
+                    assert info["sources"] == []
             event.set()
             if event is release_cache:
                 assert building.wait(2)
@@ -100,3 +111,26 @@ def test_cache_failure_is_visible_and_next_refresh_recovers(monkeypatch):
     monkeypatch.setattr(warm_start, "save", lambda *a: True)
     assert sup.refresh_once()
     assert sup.current.build_info.last_error is None
+
+
+def test_bootstrap_home_does_not_render_the_index(monkeypatch):
+    from console.server import app
+    def forbidden(*args):
+        raise AssertionError("full index render during bootstrap")
+    monkeypatch.setattr(app, "_html", forbidden)
+    monkeypatch.setattr(render_json, "payload", forbidden)
+    sup = Supervisor(Index, 180, defer_first_build=True)
+    server = serve(sup, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/"
+        with urlopen(url, timeout=2) as response:
+            assert response.status == 200
+            assert "Building index" in response.read().decode()
+        with urlopen(Request(url, headers={"Accept": "application/json"}), timeout=2) as response:
+            assert json.load(response)["index"]["bootstrap"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(2)

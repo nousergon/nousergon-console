@@ -118,6 +118,33 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._fail(404, as_json, f"No view at {path}.")
             return
 
+        if req.view == "landing" and index.build_info.bootstrap:
+            # The deploy's root GET measures process availability. Do not make
+            # it materialize a landing model while cache/build work is in flight.
+            # JSON retains the actual previous sources and their as-of markers,
+            # so an apply probe still distinguishes a previous index from none.
+            if as_json:
+                self._send(200, render_json.dumps({
+                    "schema_version": render_json.SCHEMA_VERSION,
+                    "view": "landing",
+                    "index": render_json.index_freshness(index),
+                }), "application/json; charset=utf-8")
+            else:
+                previous = index.build_info.warm_start_from
+                detail = (
+                    "Serving the previous index built "
+                    + render_html.esc(previous) + "."
+                    if previous else "The first index is not available yet."
+                )
+                self._send(200,
+                           '<!doctype html><html><head><title>Building index</title>'
+                           '<meta http-equiv="refresh" content="5"></head><body>'
+                           '<h1>Building index</h1><p>' + detail + '</p>'
+                           '<p>This page refreshes automatically.</p>'
+                           '<a href="/dashboards">Browse the available index</a>'
+                           '</body></html>', "text/html; charset=utf-8")
+            return
+
         if req.view in {"entity", "history"} and index.entity(req.entity_id or "") is None:
             self._fail(404, as_json, f"No entity {req.entity_id}.")
             return

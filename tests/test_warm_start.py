@@ -40,12 +40,13 @@ def test_a_restart_serves_the_saved_index_marked_stale(tmp_path):
     restarted = Supervisor(lambda: (_ for _ in ()).throw(AssertionError("not yet")),
                            refresh_seconds=180, clock=lambda: T1,
                            defer_first_build=True, warm_start_path=str(path))
+    restarted._restore_warm()  # background startup, after the listener binds
     idx = restarted.current
     info = idx.build_info
     assert info.bootstrap is True
     assert info.warm_start_from == T0.isoformat()
     assert info.stale_since == T1.isoformat()
-    # The probes wait on this text; a warm index must not end the wait.
+    # The previous index remains explicitly marked until the new build lands.
     assert "has not completed yet" in info.last_error
     fresh = render_json.index_freshness(idx, now=T1)
     assert fresh["stale"] is True and fresh["sources"]
@@ -122,6 +123,7 @@ def test_a_failed_build_after_a_warm_start_says_it_failed(tmp_path):
                            refresh_seconds=180, clock=lambda: T1,
                            defer_first_build=True, warm_start_path=str(path))
     assert not restarted.refresh_once()
+    restarted._restore_warm()  # background startup, after the listener binds
     idx = restarted.current
     info = idx.build_info
     assert info.bootstrap is False and info.warm_start_from is None

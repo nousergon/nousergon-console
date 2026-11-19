@@ -529,9 +529,13 @@ class _Inbox:
                 index.add_result(slot)
 
 
-#: Concurrent adapter reads per build. The reads are network-bound; the cap
-#: keeps the burst on S3 / the git host polite.
-FETCH_WORKERS = 12
+#: Concurrent adapter reads per build. The reads are network-bound, but the
+#: service runs inside a 300 MiB MemoryHigh cgroup on a 2 vCPU box, and each
+#: read holds its whole result in memory (object_store adds its own pool of up
+#: to 8 per adapter). At 12 the first build went from ~1,460 s serial to 2,055 s
+#: with the box CPU-saturated, the unit pinned at MemoryHigh and two OOM kills
+#: (2026-11-19, aec#13625). 3 keeps some overlap without the memory pile-up.
+FETCH_WORKERS = 3
 
 
 def _fetch_all(

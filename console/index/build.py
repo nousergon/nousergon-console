@@ -29,7 +29,10 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from .graph import Index
 
 from ..model.envelope import AdapterResult, AdapterStatus
 
@@ -186,7 +189,7 @@ class Supervisor:
 
     def __init__(
         self,
-        builder: Callable[[], object],
+        builder: Callable[[], Index],
         refresh_seconds: float,
         clock: Callable[[], datetime] | None = None,
         *,
@@ -213,6 +216,7 @@ class Supervisor:
         self._wait = wait or self._stop.wait
         self._thread: threading.Thread | None = None
         self._built_once = False
+        self._warm_pending = defer_first_build
         # When the most recent build STARTED (not finished) — the anchor
         # `_loop` schedules the next one from (alpha-engine-config-I9003).
         # `None` only in the `defer_first_build` window before any real build
@@ -236,12 +240,9 @@ class Supervisor:
             # "not built yet" rather than refusing connections — the identical
             # argument that comment makes about a FAILED first build, applied to
             # a SLOW one.
-            self._current = (
-                self._warm_seed()
-                or self._blank_stale(
-                    RuntimeError("first index build has not completed yet"),
-                    bootstrap=True,
-                )
+            self._current = self._blank_stale(
+                RuntimeError("first index build has not completed yet"),
+                bootstrap=True,
             )
             return
         started = self._monotonic()
@@ -271,7 +272,7 @@ class Supervisor:
             self._digest = warm_start.code_digest()
         return self._digest
 
-    def _warm_seed(self):
+    def _warm_seed(self) -> Index | None:
         """The last good index from before the restart, marked, or None."""
         if not self._warm_start_path:
             return None
@@ -291,13 +292,24 @@ class Supervisor:
             f"built {built}, from before the restart"))
         return index
 
-    def _save_warm(self, index) -> None:
+    def _restore_warm(self) -> None:
+        # Only the background builder calls this in serving mode, AFTER bind.
+        # Disk reads, unpickling and compatibility renders can all be expensive.
+        if not self._warm_pending:
+            return
+        self._warm_pending = False
+        seed = self._warm_seed()
+        if seed is not None:
+            with self._lock:
+                self._current = seed
+
+    def _save_warm(self, index: Index) -> None:
         if not self._warm_start_path:
             return
         from . import warm_start
         warm_start.save(index, self._warm_start_path, self._code_digest())
 
-    def _blank_stale(self, exc: BaseException, *, bootstrap: bool = False):
+    def _blank_stale(self, exc: Exception, *, bootstrap: bool = False) -> Index:
         """An empty index carrying the reason it is empty.
 
         Shared by the two cases that have no index to serve yet — the first
@@ -323,7 +335,7 @@ class Supervisor:
         return index
 
     @property
-    def current(self):
+    def current(self) -> Index:
         with self._lock:
             return self._current
 
@@ -338,6 +350,7 @@ class Supervisor:
         started = self._monotonic()
         self._last_build_started = started
         try:
+            self._restore_warm()
             fresh = self._builder()
         except Exception as exc:  # noqa: BLE001 - the marker IS the handling
             with self._lock:
@@ -410,7 +423,7 @@ class Supervisor:
                 next_start += periods_missed * self._refresh_seconds
 
 
-def _stamp(index, clock, refresh_seconds: float,
+def _stamp(index: Index, clock: Callable[[], datetime], refresh_seconds: float,
            build_seconds: float | None = None) -> None:
     index.build_info = replace(
         index.build_info,
@@ -424,7 +437,7 @@ def _stamp(index, clock, refresh_seconds: float,
     )
 
 
-def _mark_stale(index, clock, exc: Exception) -> None:
+def _mark_stale(index: Index, clock: Callable[[], datetime], exc: Exception) -> None:
     index.build_info = replace(
         index.build_info,
         stale_since=now_iso(clock),

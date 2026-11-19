@@ -12,17 +12,19 @@ from console import config as cfg_mod
 
 
 def test_fetch_all_is_concurrent_and_ordered() -> None:
-    barrier = threading.Barrier(4, timeout=5)
+    n = cfg_mod.FETCH_WORKERS
+    assert n > 1
+    barrier = threading.Barrier(n, timeout=5)
 
     def make(i: int) -> Callable[[dict], int]:
         def fetch(_cfg: dict) -> int:
-            barrier.wait()  # only passes if all four run at once
-            time.sleep(0.01 * (4 - i))  # finish out of order
+            barrier.wait()  # only passes if all n run at once
+            time.sleep(0.01 * (n - i))  # finish out of order
             return i
         return fetch
 
-    out = cfg_mod._fetch_all([(make(i), {}) for i in range(4)])
-    assert [r for r, _ in out] == [0, 1, 2, 3]
+    out = cfg_mod._fetch_all([(make(i), {}) for i in range(n)])
+    assert [r for r, _ in out] == list(range(n))
     assert all(elapsed >= 0 for _, elapsed in out)
 
 

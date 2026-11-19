@@ -43,17 +43,25 @@ VENV_PY="$REPO_DIR/.venv/bin/python"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 fail() { log "FAIL $*"; exit 1; }
 
+# How long a restarted process gets to answer. 30 s was enough on an idle box;
+# on 2026-11-19 the box (2 vCPU, shared with the Codex chain) ran at 100% CPU
+# and three config applies failed here although the console came up and served
+# minutes later (alpha-engine-config-I13625). Since console#326 the process
+# binds BEFORE restoring or building its index, so this still measures "the
+# process is up", not "the index is built"; the apply workflow waits for the
+# index separately. Wall-clock bounded, so slow curls cannot stretch it.
+HEALTH_WAIT_SECONDS="${CONSOLE_HEALTH_WAIT_SECONDS:-180}"
+
 wait_for_health() {
-    local url="$1" label="$2" n=0
-    while [ $n -lt 30 ]; do
-        if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
-            log "OK   $label — health passed at t=${n}s"
+    local url="$1" label="$2" start=$SECONDS
+    while [ $((SECONDS - start)) -lt "$HEALTH_WAIT_SECONDS" ]; do
+        if curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then
+            log "OK   $label — health passed at t=$((SECONDS - start))s"
             return 0
         fi
-        sleep 1
-        n=$((n + 1))
+        sleep 2
     done
-    log "FAIL $label — health check timed out after 30s"
+    log "FAIL $label — health check timed out after ${HEALTH_WAIT_SECONDS}s"
     return 1
 }
 

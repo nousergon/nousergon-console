@@ -18,6 +18,8 @@ Two obligations are enforced here, not left to renderers:
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -27,6 +29,10 @@ from .cadence_state import resolve_cadence_state
 from .event_trigger import resolve_event_trigger_state
 from .duty_window import resolve_duty_window_state
 from .merge import Claim, NamespaceCollision, _declared_facets, is_namesake, merge
+
+if TYPE_CHECKING:
+    from .baseline import Baseline, TrendPoint
+    from .landing import LandingModel
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
 
@@ -186,7 +192,7 @@ class Index:
         """§9.4 — the last question-set run against this build."""
         return self._answer_latency
 
-    def set_landing_model(self, model: object) -> None:
+    def set_landing_model(self, model: LandingModel) -> None:
         """Record the §4.3 landing view's computed facts for this build
         (`console.config.build_index`, `console/index/landing.py::build`).
 
@@ -201,7 +207,7 @@ class Index:
         """
         self._landing_model = model
 
-    def landing_model(self):
+    def landing_model(self) -> LandingModel:
         """The §4.3 landing view's facts, computed exactly once per `Index`
         instance (alpha-engine-config-I10615) — never once per request, and
         never carried across a rebuild: a fresh `Index` starts with
@@ -413,18 +419,18 @@ class Index:
         self._finalized = True
         return self
 
-    def set_exceptions_baseline(self, base) -> None:
+    def set_exceptions_baseline(self, base: Baseline | None) -> None:
         """A previous day's exception list (`index/baseline.py`), or None."""
         self._exceptions_baseline = base
 
-    def exceptions_baseline(self):
+    def exceptions_baseline(self) -> Baseline | None:
         return getattr(self, "_exceptions_baseline", None)
 
-    def set_exceptions_trend(self, points) -> None:
+    def set_exceptions_trend(self, points: list[TrendPoint] | None) -> None:
         """Day-by-day exception counts (`index/baseline.py::read_trend`), or None."""
         self._exceptions_trend = points
 
-    def exceptions_trend(self):
+    def exceptions_trend(self) -> list[TrendPoint] | None:
         return getattr(self, "_exceptions_trend", None)
 
     def set_triage(self, marks: dict) -> None:
@@ -851,7 +857,9 @@ class Index:
                 "transparency gap (§5.3)"
             )
         unreported = [e for e in population if e.state is State.UNREPORTED]
-        return {"count": len(unreported), "of": len(population)}
+        unreported_ids = sorted(e.id for e in unreported)
+        return {"count": len(unreported_ids), "of": len(population),
+                "unreported_ids": unreported_ids}
 
     # ---- §9.5 / §9.6 --------------------------------------------------------
 
@@ -861,7 +869,9 @@ class Index:
 
         return _orphan_counts(self)
 
-    def staleness_honesty(self, now=None, staleness_factor: float = 1.5) -> dict[str, object]:
+    def staleness_honesty(
+        self, now: datetime | None = None, staleness_factor: float = 1.5,
+    ) -> dict[str, object]:
         """§9.6 — rows older than their own declared cadence with no marker."""
         from .numbers import staleness_honesty as _staleness_honesty
 

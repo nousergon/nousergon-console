@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from collections.abc import Iterable
 
 from console.index.graph import Index, NamespaceCollision
 from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -10,14 +11,17 @@ from tests.fixtures import component, fixture_graph, prov
 from console.model.entity import Edge, Entity
 
 
-def _index_with(entities, edges, status=AdapterStatus.OK) -> Index:
+def _index_with(
+    entities: Iterable[Entity], edges: Iterable[Edge],
+    status: AdapterStatus = AdapterStatus.OK,
+) -> Index:
     idx = Index()
     idx.add_result(AdapterResult(name="fixture", status=status,
                                  entities=tuple(entities), edges=tuple(edges)))
     return idx
 
 
-def test_reverse_edge_is_derived_not_stored():
+def test_reverse_edge_is_derived_not_stored() -> None:
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges)
     art = next(e for e in entities if e.kind is Kind.ARTIFACT)
@@ -28,7 +32,7 @@ def test_reverse_edge_is_derived_not_stored():
     assert "consumes" in preds
 
 
-def test_relation_traversable_from_both_ends():
+def test_relation_traversable_from_both_ends() -> None:
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges)
     producer = next(e for e in entities if e.id == "comp-producer")
@@ -40,7 +44,7 @@ def test_relation_traversable_from_both_ends():
     assert "comp-consumer" in consumers
 
 
-def test_same_kind_duplicate_merges_rather_than_raising():
+def test_same_kind_duplicate_merges_rather_than_raising() -> None:
     """§2.5: two sources describing one thing is the NORMAL case.
 
     This test previously asserted the opposite. The index raised on the second
@@ -72,7 +76,7 @@ def test_same_kind_duplicate_merges_rather_than_raising():
     assert merged.source_of("state").source == "telemetry"
 
 
-def test_different_kind_duplicate_still_fails_loudly():
+def test_different_kind_duplicate_still_fails_loudly() -> None:
     """§3.6 is unchanged: two DIFFERENT things sharing a name is a collision,
     and `kind` disagreement is the discriminator no precedence rule can fix."""
     idx = Index()
@@ -88,7 +92,7 @@ def test_different_kind_duplicate_still_fails_loudly():
         idx.all()
 
 
-def test_failed_adapter_marks_entities_unreported_not_dropped():
+def test_failed_adapter_marks_entities_unreported_not_dropped() -> None:
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges, status=AdapterStatus.FAILED)
     assert len(idx.all()) == 3  # nothing dropped
@@ -102,7 +106,7 @@ def test_failed_adapter_marks_entities_unreported_not_dropped():
             assert e.state == "unreported-by-source"
 
 
-def test_reachability_ratio_names_denominator():
+def test_reachability_ratio_names_denominator() -> None:
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges)
     r = idx.reachability()
@@ -115,7 +119,9 @@ def test_reachability_ratio_names_denominator():
     assert r["ratio"] == round(1 / 3, 4)
 
 
-def test_reachability_measures_each_path_independently(monkeypatch):
+def test_reachability_measures_each_path_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """§9.3 executes every path; a broken resolver lowers only its count."""
     entities, edges = fixture_graph()
     idx = _index_with(entities, edges)
@@ -131,11 +137,11 @@ def test_reachability_measures_each_path_independently(monkeypatch):
     assert broken_search["relation_reachable"] == baseline["relation_reachable"]
 
 
-def test_reachability_empty_index_is_null_not_zero():
+def test_reachability_empty_index_is_null_not_zero() -> None:
     assert Index().reachability()["ratio"] is None
 
 
-def test_unregistered_reconciler_leaves_run_state_alone():
+def test_unregistered_reconciler_leaves_run_state_alone() -> None:
     """alpha-engine-config-I8766: `_reconcile`'s UNREGISTERED/ABSENT branches
     are about a COMPONENT's declaration, not a RUN's own outcome. A run of an
     unregistered component (`checks_envelope`'s `<check_id>@<ran_at>` ids)
@@ -191,7 +197,7 @@ def test_unregistered_reconciler_leaves_run_state_alone():
 # rather than reading UNREGISTERED.
 
 
-def test_an_alias_declaration_does_not_inflate_the_denominator():
+def test_an_alias_declaration_does_not_inflate_the_denominator() -> None:
     idx = Index()
     idx.add_result(AdapterResult(
         name="registry", status=AdapterStatus.OK,
@@ -210,7 +216,7 @@ def test_an_alias_declaration_does_not_inflate_the_denominator():
     assert completeness["rendered"] == 1
 
 
-def test_alias_of_is_traversable_from_both_ends():
+def test_alias_of_is_traversable_from_both_ends() -> None:
     idx = Index()
     idx.add_result(AdapterResult(
         name="registry", status=AdapterStatus.OK,
@@ -235,7 +241,7 @@ def test_alias_of_is_traversable_from_both_ends():
     )
 
 
-def test_an_aliased_id_observed_but_never_declared_elsewhere_is_not_unregistered():
+def test_an_aliased_id_observed_but_never_declared_elsewhere_is_not_unregistered() -> None:
     """The acceptance case: the substrate reports under the alias id, and the
     registry's declaration (minted by `yaml-directory` under the SAME alias
     id) is what keeps it out of `unregistered`."""
@@ -276,7 +282,7 @@ def test_an_aliased_id_observed_but_never_declared_elsewhere_is_not_unregistered
 # be the one that never reports).
 
 
-def test_a_silent_alias_inherits_the_parents_state_and_as_of():
+def test_a_silent_alias_inherits_the_parents_state_and_as_of() -> None:
     """Rename-alias shape: `alias_ids: [old-name]` on a row now emitted under
     the new name (I6838). The alias carries only its own DECLARATION — no
     OBSERVATION/DISCOVERY ever arrives under the old name — and must inherit
@@ -312,10 +318,10 @@ def test_a_silent_alias_inherits_the_parents_state_and_as_of():
 
     # Excluded from BOTH the count and the denominator: it is a pointer to
     # the parent, already counted, not a second silent component.
-    assert idx.transparency_gap() == {"count": 0, "of": 1}
+    assert idx.transparency_gap() == {"count": 0, "of": 1, "unreported_ids": []}
 
 
-def test_an_observed_alias_keeps_its_own_state_and_the_unobserved_parent_inherits():
+def test_an_observed_alias_keeps_its_own_state_and_the_unobserved_parent_inherits() -> None:
     """#8779 shape: the substrate reports under the alias id, not the
     declared parent id. The alias keeps its own state (unchanged from
     PR115); the parent, carrying no report of its own, inherits FROM it —
@@ -355,7 +361,7 @@ def test_an_observed_alias_keeps_its_own_state_and_the_unobserved_parent_inherit
 
     # The alias DID receive its own report, so it stays counted; the parent
     # is no longer UNREPORTED either way.
-    assert idx.transparency_gap() == {"count": 0, "of": 2}
+    assert idx.transparency_gap() == {"count": 0, "of": 2, "unreported_ids": []}
 
 
 # ------------- inherited aliases on the exception view (alpha-engine-config-I13097) -
@@ -391,7 +397,9 @@ def _alias_index(parent_state: State, alias_reports: bool = False) -> Index:
     return idx
 
 
-def _namesake_alias_index(events_status=AdapterStatus.OK) -> Index:
+def _namesake_alias_index(
+    events_status: AdapterStatus = AdapterStatus.OK,
+) -> Index:
     """The live I12722 shape: a Lambda row whose `alias_ids` name the three
     EventBridge rules that trigger it. The aliases carry the parent row's
     facets (`substrate: lambda`); the AWS/Events pass is scoped to
@@ -434,7 +442,7 @@ def _namesake_alias_index(events_status=AdapterStatus.OK) -> Index:
     return idx
 
 
-def test_a_namesake_claim_is_not_the_alias_s_own_report():
+def test_a_namesake_claim_is_not_the_alias_s_own_report() -> None:
     """alpha-engine-config-I12722: the AWS/Events namesake contests no field
     on the alias, so the alias received no report of its own and must inherit
     the parent Lambda's state, not sit UNREPORTED beside a HEALTHY parent."""
@@ -446,7 +454,7 @@ def test_a_namesake_claim_is_not_the_alias_s_own_report():
     assert idx.transparency_gap()["count"] == 0
 
 
-def test_an_unreachable_claim_is_not_the_alias_s_own_report():
+def test_an_unreachable_claim_is_not_the_alias_s_own_report() -> None:
     """An unreachable source speaks only about itself, so it cannot be the
     report that stops an alias inheriting."""
     idx = Index()
@@ -480,7 +488,7 @@ def test_an_unreachable_claim_is_not_the_alias_s_own_report():
     assert alias.detail["alias_state"] == "inherited"
 
 
-def test_an_inherited_alias_does_not_list_beside_its_parent():
+def test_an_inherited_alias_does_not_list_beside_its_parent() -> None:
     """One problem, one row: the alias only repeats the parent's verdict.
     It stays in the index, still an exception on its own page."""
     from console.render.html import is_exception, landing_exceptions
@@ -494,7 +502,7 @@ def test_an_inherited_alias_does_not_list_beside_its_parent():
     assert ids == ["comp-parent"]
 
 
-def test_an_alias_with_its_own_report_still_lists():
+def test_an_alias_with_its_own_report_still_lists() -> None:
     """The #8779 shape keeps its own state, so it is its own fact and lists."""
     from console.render.html import landing_exceptions
 
@@ -504,7 +512,7 @@ def test_an_alias_with_its_own_report_still_lists():
     assert ids == {"comp-parent", "comp-alias"}
 
 
-def test_a_healthy_parent_lists_neither_row():
+def test_a_healthy_parent_lists_neither_row() -> None:
     """An inherited alias of a HEALTHY parent is HEALTHY too: nothing lists."""
     from console.render.html import landing_exceptions
 

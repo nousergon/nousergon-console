@@ -18,6 +18,8 @@ Two obligations are enforced here, not left to renderers:
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -27,6 +29,10 @@ from .cadence_state import resolve_cadence_state
 from .event_trigger import resolve_event_trigger_state
 from .duty_window import resolve_duty_window_state
 from .merge import Claim, NamespaceCollision, _declared_facets, is_namesake, merge
+
+if TYPE_CHECKING:
+    from .baseline import Baseline, TrendPoint
+    from .landing import LandingModel
 
 __all__ = ["Index", "NamespaceCollision", "DECISION_QUEUE_LABELS"]
 
@@ -93,6 +99,7 @@ class Index:
         # Row id -> tracking issue (`index/triage.py`), set by build_index.
         self._triage: dict = {}
         self._entities: dict[str, Entity] = {}
+        self._by_lower_id: dict[str, list[Entity]] = {}
         self._liveness_watcher: str | None = None
         self._by_kind: dict[Kind, list[Entity]] = {k: [] for k in Kind}
         # Forward and reverse adjacency, keyed by entity id. Reverse edges are
@@ -141,6 +148,20 @@ class Index:
         # instead — still exactly one computation per `Index` instance.
         self._landing_model = None
 
+    def __getstate__(self) -> dict[str, object]:
+        """Persist the graph without its derived identifier postings."""
+        return {key: value for key, value in self.__dict__.items() if key != "_by_lower_id"}
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore the graph and derive postings, including for old caches."""
+        self.__dict__.update(state)
+        self._build_lower_id_postings()
+
+    def _build_lower_id_postings(self) -> None:
+        self._by_lower_id = {}
+        for ent in self._entities.values():
+            self._by_lower_id.setdefault(ent.id.lower(), []).append(ent)
+
     def set_staleness_factor(self, factor: float) -> None:
         """The multiplier on a declared cadence before silence is a defect.
 
@@ -186,22 +207,16 @@ class Index:
         """§9.4 — the last question-set run against this build."""
         return self._answer_latency
 
-    def set_landing_model(self, model: object) -> None:
+    def set_landing_model(self, model: LandingModel | None) -> None:
         """Record the §4.3 landing view's computed facts for this build
         (`console.config.build_index`, `console/index/landing.py::build`).
 
-        Overwrites rather than merges — `add_result`/`set_staleness_factor`
-        both invalidate `_finalized` for exactly this reason: a claim or a
-        tolerance that lands after this was set would make the cached model
-        stale relative to the index it is attached to, and §5.6 forbids a
-        console-held fact that can drift from its source. Nothing calls this
-        twice on one `Index` in practice (`config.build_index` sets it once,
-        at the very end); if something did, the later call wins, matching
-        `set_answer_latency`/`set_onboarding_cost`.
+        Passing `None` clears the cached view so the next read derives it
+        from the graph under the current code.
         """
         self._landing_model = model
 
-    def landing_model(self):
+    def landing_model(self) -> LandingModel:
         """The §4.3 landing view's facts, computed exactly once per `Index`
         instance (alpha-engine-config-I10615) — never once per request, and
         never carried across a rebuild: a fresh `Index` starts with
@@ -410,21 +425,22 @@ class Index:
         self._apply_triage()
         for ent in self._entities.values():
             self._by_kind[ent.kind].append(ent)
+        self._build_lower_id_postings()
         self._finalized = True
         return self
 
-    def set_exceptions_baseline(self, base) -> None:
+    def set_exceptions_baseline(self, base: Baseline | None) -> None:
         """A previous day's exception list (`index/baseline.py`), or None."""
         self._exceptions_baseline = base
 
-    def exceptions_baseline(self):
+    def exceptions_baseline(self) -> Baseline | None:
         return getattr(self, "_exceptions_baseline", None)
 
-    def set_exceptions_trend(self, points) -> None:
+    def set_exceptions_trend(self, points: list[TrendPoint] | None) -> None:
         """Day-by-day exception counts (`index/baseline.py::read_trend`), or None."""
         self._exceptions_trend = points
 
-    def exceptions_trend(self):
+    def exceptions_trend(self) -> list[TrendPoint] | None:
         return getattr(self, "_exceptions_trend", None)
 
     def set_triage(self, marks: dict) -> None:
@@ -851,7 +867,9 @@ class Index:
                 "transparency gap (§5.3)"
             )
         unreported = [e for e in population if e.state is State.UNREPORTED]
-        return {"count": len(unreported), "of": len(population)}
+        unreported_ids = sorted(e.id for e in unreported)
+        return {"count": len(unreported_ids), "of": len(population),
+                "unreported_ids": unreported_ids}
 
     # ---- §9.5 / §9.6 --------------------------------------------------------
 
@@ -861,7 +879,9 @@ class Index:
 
         return _orphan_counts(self)
 
-    def staleness_honesty(self, now=None, staleness_factor: float = 1.5) -> dict[str, object]:
+    def staleness_honesty(
+        self, now: datetime | None = None, staleness_factor: float = 1.5,
+    ) -> dict[str, object]:
         """§9.6 — rows older than their own declared cadence with no marker."""
         from .numbers import staleness_honesty as _staleness_honesty
 
@@ -901,6 +921,11 @@ class Index:
 
     def entity(self, entity_id: str) -> Entity | None:
         return self.finalize()._entities.get(entity_id)
+
+    def entities_by_lower_id(self, lower_id: str) -> tuple[Entity, ...]:
+        """Return every entity with this lower-cased identifier, in index order."""
+        matches = self.finalize()._by_lower_id.get(lower_id)
+        return tuple(matches) if matches is not None else ()
 
     def of_kind(self, kind: Kind) -> list[Entity]:
         return list(self.finalize()._by_kind[kind])

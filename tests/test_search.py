@@ -1,7 +1,12 @@
 """Search tests — exact-first ranking, all kinds in scope, true negatives."""
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from console.index.graph import Index
+from console.model.entity import Entity
 from console.model.envelope import AdapterResult, AdapterStatus
 from console.search.resolve import search
 from tests.fixtures import artifact, component
@@ -49,8 +54,6 @@ def test_true_negative_is_empty_not_excluded_kind():
 # ---- declared labels (alpha-engine-config-I11805) ---------------------------
 
 def _labelled_index() -> Index:
-    from dataclasses import replace
-
     ents = [
         component("comp-alpha"),
         replace(component("ae-export.service"), detail={"label": "Nightly export"}),
@@ -95,3 +98,76 @@ def test_a_label_never_makes_an_exact_hit():
     # Exact is reserved for the identifier (§3.7), so reachability and
     # `doctor`, which read `exact`, are unchanged by labels.
     assert not any(h.exact for h in search(_labelled_index(), "Sweep"))
+
+
+def test_exact_search_shares_normal_ranking_and_preserves_case_collisions() -> None:
+    index = Index()
+    index.add_result(AdapterResult(name="ranked", status=AdapterStatus.OK, entities=(
+        artifact("artifact-alpha-tail"),
+        component("ALPHA"),
+        replace(component("label-prefix"), detail={"label": "Alpha tools"}),
+        component("alpha"),
+        replace(component("label-words"), detail={"job_label": "Tools for Alpha"}),
+        component("alpha-unrelated"),
+        replace(component("label-exact"), detail={"label": "Alpha"}),
+        component(" alpha "),
+    )))
+
+    hits = search(index, "  aLpHa \t")
+    assert [(hit.entity.id, hit.matched_on, hit.exact) for hit in hits] == [
+        ("ALPHA", "id", True),
+        ("alpha", "id", True),
+        ("alpha-unrelated", "id", False),
+        ("artifact-alpha-tail", "id", False),
+        (" alpha ", "id", False),
+        ("label-exact", "label", False),
+        ("label-prefix", "label", False),
+        ("label-words", "label", False),
+    ]
+    exact = search(index, "  aLpHa \t", exact_only=True)
+    assert exact == hits[:2]
+    exact.clear()
+    assert search(index, "alpha", exact_only=True) == hits[:2]
+    assert search(index, "Alpha tools", exact_only=True) == []
+    assert search(index, "  ", exact_only=True) == []
+
+
+def test_exact_postings_follow_refinalized_entities() -> None:
+    index = Index()
+    assert search(index, "alpha", exact_only=True) == []
+    index.add_result(AdapterResult(
+        name="first", status=AdapterStatus.OK, entities=(component("ALPHA"),),
+    ))
+    previous = search(index, "alpha", exact_only=True)
+    assert [hit.entity.id for hit in previous] == ["ALPHA"]
+
+    index.add_result(AdapterResult(
+        name="second", status=AdapterStatus.OK,
+        entities=(component("alpha"),),
+    ))
+    current = search(index, "alpha", exact_only=True)
+    assert [hit.entity.id for hit in current] == ["ALPHA", "alpha"]
+    assert all(hit.entity is index.entity(hit.entity.id) for hit in current)
+
+
+@pytest.mark.parametrize("size", [8, 128])
+def test_reachability_enumerates_each_snapshot_only_once(
+    size: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    index = Index()
+    index.add_result(AdapterResult(
+        name="labelled", status=AdapterStatus.OK,
+        entities=tuple(replace(component(f"job-{i:04}"), detail={"label": "Daily Job"})
+                       for i in range(size)),
+    ))
+    all_entities = index.all
+    calls = 0
+
+    def count_enumeration() -> list[Entity]:
+        nonlocal calls
+        calls += 1
+        return all_entities()
+
+    monkeypatch.setattr(index, "all", count_enumeration)
+    assert index.reachability()["search_reachable"] == size
+    assert calls == 1

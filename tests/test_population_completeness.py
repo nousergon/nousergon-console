@@ -20,6 +20,10 @@ second, broken registry did not exist.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from console.config import build_index
 from console.index.graph import Index
 from console.model.entity import Entity, Provenance
@@ -27,7 +31,9 @@ from console.model.envelope import AdapterResult, AdapterStatus, ClaimClass
 from console.model.kinds import Kind, State
 
 
-def _write_registry(dirpath, components):
+def _write_registry(
+    dirpath: str, components: dict[str, dict[str, object]],
+) -> None:
     import os
     import yaml
 
@@ -37,7 +43,9 @@ def _write_registry(dirpath, components):
             yaml.safe_dump(row, fh)
 
 
-def test_population_completeness_over_a_healthy_registry_is_1(tmp_path):
+def test_population_completeness_over_a_healthy_registry_is_1(
+    tmp_path: Path,
+) -> None:
     reg = tmp_path / "registry.d"
     reg.mkdir()
     _write_registry(str(reg), {"comp-one": {}, "comp-two": {}})
@@ -50,7 +58,7 @@ def test_population_completeness_over_a_healthy_registry_is_1(tmp_path):
     assert result["of"] == 2
 
 
-def test_population_completeness_names_its_denominator_not_total_entities():
+def test_population_completeness_names_its_denominator_not_total_entities() -> None:
     """The defect this replaces: denominator was `len(entities)` — every kind,
     including entities a registry never declared. Here a non-component entity
     must not inflate the registry-row denominator."""
@@ -71,7 +79,7 @@ def test_population_completeness_names_its_denominator_not_total_entities():
     assert result["of"] == 1  # ONE registry row, not two entities
 
 
-def test_population_completeness_uncomputable_with_no_registry():
+def test_population_completeness_uncomputable_with_no_registry() -> None:
     idx = Index()
     result = idx.population_completeness()
     assert result["ratio"] is None
@@ -79,7 +87,9 @@ def test_population_completeness_uncomputable_with_no_registry():
     assert "N/A-NOT-IMPL" not in str(result)  # the reserved token is forbidden here (§11)
 
 
-def test_population_completeness_uncomputable_when_a_second_registry_is_unreadable(tmp_path):
+def test_population_completeness_uncomputable_when_a_second_registry_is_unreadable(
+    tmp_path: Path,
+) -> None:
     reg = tmp_path / "registry.d"
     reg.mkdir()
     _write_registry(str(reg), {"comp-one": {}})
@@ -101,7 +111,9 @@ def test_population_completeness_uncomputable_when_a_second_registry_is_unreadab
     assert result["of"] is None
 
 
-def test_population_completeness_reports_unregistered_separately(tmp_path):
+def test_population_completeness_reports_unregistered_separately(
+    tmp_path: Path,
+) -> None:
     """§8.4: "the first says the surface shows what it knows about; the second
     says how much it did not know about" — two numbers, never blended."""
     reg = tmp_path / "registry.d"
@@ -122,7 +134,7 @@ def test_population_completeness_reports_unregistered_separately(tmp_path):
     assert result["unregistered"] == 1
 
 
-def test_population_completeness_unregistered_excludes_run_kind_entities():
+def test_population_completeness_unregistered_excludes_run_kind_entities() -> None:
     """alpha-engine-config-I6970: a RUN entity that never matched its own
     component's registry row must not count toward `unregistered` — the
     checks-envelope adapter mints run ids as `f"{check_id}@{ran_at}"`
@@ -150,7 +162,7 @@ def test_population_completeness_unregistered_excludes_run_kind_entities():
     assert result["unregistered"] == 0
 
 
-def test_transparency_gap_denominator_is_component_population_not_all_entities():
+def test_transparency_gap_denominator_is_component_population_not_all_entities() -> None:
     idx = Index()
     idx.add_result(AdapterResult(
         name="registry", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
@@ -167,17 +179,43 @@ def test_transparency_gap_denominator_is_component_population_not_all_entities()
                          provenance=Provenance("checks")),),
     ))
     result = idx.transparency_gap()
-    assert result == {"count": 1, "of": 2}  # 2 components, not 3 entities
+    assert result == {"count": 1, "of": 2,
+                      "unreported_ids": ["comp-silent"]}  # 2 components, not 3 entities
 
 
-def test_transparency_gap_is_zero_when_nothing_is_unreported():
+def test_transparency_gap_is_zero_when_nothing_is_unreported() -> None:
     idx = Index()
     idx.add_result(AdapterResult(
         name="registry", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
         entities=(Entity(kind=Kind.COMPONENT, id="comp-one", state=State.HEALTHY,
                          provenance=Provenance("registry")),),
     ))
-    assert idx.transparency_gap() == {"count": 0, "of": 1}
+    assert idx.transparency_gap() == {"count": 0, "of": 1, "unreported_ids": []}
+
+
+def test_transparency_gap_names_sorted_unreported_component_and_run_ids() -> None:
+    idx = Index()
+    idx.add_result(AdapterResult(
+        name="registry", status=AdapterStatus.OK, claim_class=ClaimClass.DECLARATION,
+        entities=(
+            Entity(kind=Kind.COMPONENT, id="z-component", state=State.UNREPORTED,
+                   provenance=Provenance("registry")),
+            Entity(kind=Kind.COMPONENT, id="a-component", state=State.UNREPORTED,
+                   provenance=Provenance("registry")),
+            Entity(kind=Kind.COMPONENT, id="reported", state=State.HEALTHY,
+                   provenance=Provenance("registry")),
+            Entity(kind=Kind.COMPONENT, id="inherited-alias", state=State.UNREPORTED,
+                   provenance=Provenance("registry"),
+                   detail={"alias_state": "inherited", "alias_of": "a-component"}),
+            Entity(kind=Kind.RUN, id="check@time", state=State.UNREPORTED,
+                   provenance=Provenance("registry")),
+        ),
+    ))
+
+    result = idx.transparency_gap()
+
+    assert result == {"count": 3, "of": 4,
+                      "unreported_ids": ["a-component", "check@time", "z-component"]}
 
 
 # ---- §9.1 names the rows it counted (alpha-engine-config-I7107) -----------
@@ -189,7 +227,7 @@ def test_transparency_gap_is_zero_when_nothing_is_unreported():
 # failed to name it. Same defect `nousergon-console-PR86` fixed for §9.6.
 
 
-def _index_with_one_unregistered(tmp_path):
+def _index_with_one_unregistered(tmp_path: Path) -> Index:
     reg = tmp_path / "registry.d"
     reg.mkdir()
     _write_registry(str(reg), {"comp-one": {}})
@@ -203,13 +241,17 @@ def _index_with_one_unregistered(tmp_path):
     return index
 
 
-def test_population_completeness_names_its_unregistered_members(tmp_path):
+def test_population_completeness_names_its_unregistered_members(
+    tmp_path: Path,
+) -> None:
     result = _index_with_one_unregistered(tmp_path).population_completeness()
     assert result["unregistered"] == 1
     assert result["unregistered_ids"] == ["recovery_path_staleness"]
 
 
-def test_population_completeness_member_lists_are_present_when_empty(tmp_path):
+def test_population_completeness_member_lists_are_present_when_empty(
+    tmp_path: Path,
+) -> None:
     """Always-present keys, empty when the count is 0. A key that appears only
     on failure makes every consumer write the absent-key branch, and one that
     skips it reads a healthy surface as a schema error."""
@@ -223,7 +265,7 @@ def test_population_completeness_member_lists_are_present_when_empty(tmp_path):
     assert result["unrendered_ids"] == []
 
 
-def test_population_completeness_names_members_on_the_uncomputable_branch():
+def test_population_completeness_names_members_on_the_uncomputable_branch() -> None:
     """`of`/`ratio` None is the uncomputable SIGNAL, not permission to drop the
     other count's evidence: an unreadable second registry is exactly when
     knowing WHICH rows are unregistered matters most."""
@@ -247,7 +289,9 @@ def test_population_completeness_names_members_on_the_uncomputable_branch():
     assert result["unregistered_ids"] == ["comp-wild"]
 
 
-def test_the_unregistered_members_are_navigable_by_state_url(tmp_path):
+def test_the_unregistered_members_are_navigable_by_state_url(
+    tmp_path: Path,
+) -> None:
     """§3.1's structure path: enumerable is not navigable. `/component?state=
     UNREGISTERED` reaches the rows behind the count, in BOTH representations
     of the same URL (§3.8)."""
@@ -270,7 +314,7 @@ def test_the_unregistered_members_are_navigable_by_state_url(tmp_path):
     assert "comp-one" not in page  # the filter is applied, not decorative
 
 
-def test_the_state_filter_is_case_insensitive(tmp_path):
+def test_the_state_filter_is_case_insensitive(tmp_path: Path) -> None:
     """An empty list reads as "nothing in this state", never as "you typed it
     wrong" (§5.4) — so casing must not be load-bearing."""
     from console.render import json as render_json
@@ -281,7 +325,7 @@ def test_the_state_filter_is_case_insensitive(tmp_path):
     assert [e["id"] for e in doc["entities"]] == ["recovery_path_staleness"]
 
 
-def test_the_landing_page_links_the_unregistered_members(tmp_path):
+def test_the_landing_page_links_the_unregistered_members(tmp_path: Path) -> None:
     """§5.1's evidence field on a NUMBER: the count links to the rows."""
     from console.render import html as render_html
 

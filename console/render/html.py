@@ -1487,7 +1487,7 @@ def landing_page(index: Index) -> str:
 {home_status(index)}
 {home_notes(home.notes(index))}
 {health_strip(home.health(index, model.exceptions))}
-{exception_summary(cast("LandingModel", model), index.exceptions_trend(), brief=True)}
+{exception_summary(model, index.exceptions_trend(), brief=True)}
 {headline_groups(home.headline_groups(index))}
 {headline_tiles(home.headline(index))}
 <form action="/search" method="get"><label for="global-search">search</label> <input id="global-search" name="q" accesskey="/" autocomplete="off"><button type="submit">search</button></form>
@@ -1625,8 +1625,7 @@ def health_page(index: Index) -> str:
     # (alpha-engine-config-I7107).
     unregistered_links = _member_links(
         Kind.COMPONENT, State.UNREGISTERED.value,
-        # The landing model is not typed yet (baselined); the ids are strings.
-        cast("Iterable[str]", completeness.get("unregistered_ids") or ()))  # pyright: ignore[reportUnknownMemberType]
+        cast("Iterable[str]", completeness.get("unregistered_ids") or ()))
     gap = model.gap
     gap_txt = (
         f'{gap["count"]} / {gap["of"]} unreported (transparency gap, §9.2)'
@@ -1642,7 +1641,7 @@ def health_page(index: Index) -> str:
 {index_freshness(index, detail=True)}
 <h2>registries</h2><ul>{registry_link_items(model.registry_links)}</ul>
 <p>registry pages {esc(registry_txt)}{missing} · {len(exceptions)} not healthy · {gap_txt} · {len(conflicts)} claim conflicts · index reachability {esc(ratio_txt)} · <a href="/exceptions">every exception, by priority</a></p>
-{_collapsed_milestones(cast("LandingModel", model))}
+{_collapsed_milestones(model)}
 <p>population completeness {esc(completeness_txt)} · {completeness["unregistered"]} unregistered (§9.1){unregistered_links}</p>
 {observation_coverage_line(index)}
 {numbers_section(index, exceptions, conflicts, gap, n)}

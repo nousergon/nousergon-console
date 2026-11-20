@@ -1,11 +1,14 @@
 """Executed §3.1 reachability checks used by the §9.3 published number."""
 from __future__ import annotations
 
+from ..model.entity import Entity
+from ..model.kinds import Kind
 from ..search.resolve import search
 from ..server.router import resolve
+from .graph import Index
 
 
-def measure(index) -> dict[str, object]:
+def measure(index: Index) -> dict[str, object]:
     """Execute name, structure, and relation paths for every indexed entity.
 
     Presence in the index is deliberately not evidence that either search or
@@ -24,28 +27,24 @@ def measure(index) -> dict[str, object]:
     building it once per kind turns an O(n) scan per entity into an O(1)
     lookup after the first.
 
-    `_search_reaches` still calls the real `search()` resolver once per
-    entity — deliberately not short-circuited to a cheaper index-only lookup
-    — because the point of this path is to prove the ACTUAL search resolver
-    still answers for this id, not to assume it does from the data search()
-    would use anyway (`test_reachability_measures_each_path_independently`
-    asserts this by monkeypatching `search` itself and expecting the count to
-    go to 0). `search()`'s own O(n) per-query scan is therefore the
-    irreducible cost of this path; only the STRUCTURE path's repeated re-scan
-    was avoidable, and it now composes to one dict-build per kind.
+    The name path calls the search resolver for each entity's exact hits.
+    These use the same snapshot lookup that ranks exact hits first in a full
+    search. The check therefore executes the resolver without scanning every
+    other entity's identifier and labels for each query.
     """
     entities = index.all()
     total = len(entities)
-    by_kind_ids: dict[object, set[str]] = {}
+    by_kind_ids: dict[Kind, set[str]] = {}
 
-    def structure_reaches(entity) -> bool:
-        request = resolve(f"/{entity.kind.route}")
-        if request.kind is not entity.kind:
+    def structure_reaches(entity: Entity) -> bool:
+        kind = entity.kind
+        request = resolve(f"/{kind.route}")
+        if request.kind is not kind:
             return False
-        ids = by_kind_ids.get(request.kind)
+        ids = by_kind_ids.get(kind)
         if ids is None:
-            ids = {e.id for e in index.of_kind(request.kind)}
-            by_kind_ids[request.kind] = ids
+            ids = {e.id for e in index.of_kind(kind)}
+            by_kind_ids[kind] = ids
         return entity.id in ids
 
     search_reachable = 0
@@ -71,6 +70,9 @@ def measure(index) -> dict[str, object]:
     }
 
 
-def _search_reaches(index, entity_id: str) -> bool:
+def _search_reaches(index: Index, entity_id: str) -> bool:
     """The search resolver must return the entity for its exact identifier."""
-    return any(hit.exact and hit.entity.id == entity_id for hit in search(index, entity_id))
+    return any(
+        hit.exact and hit.entity.id == entity_id
+        for hit in search(index, entity_id, exact_only=True)
+    )

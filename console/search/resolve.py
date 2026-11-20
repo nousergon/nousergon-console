@@ -51,7 +51,7 @@ def _labels(ent: Entity) -> list[str]:
     return out
 
 
-def search(index: Index, query: str) -> list[Hit]:
+def search(index: Index, query: str, *, exact_only: bool = False) -> list[Hit]:
     """Resolve a query string to ranked hits over every kind.
 
     Ranking: exact id matches first, then id prefix matches, then id
@@ -60,14 +60,18 @@ def search(index: Index, query: str) -> list[Hit]:
     identifier match come rows whose id did not match but whose declared
     label does: the label equal to the query, then starting with it, then
     containing every word of it in any order. Case is ignored throughout.
-    All kinds are searched.
+    All kinds are searched. With `exact_only`, return the same exact hits
+    without evaluating the lower-ranked matches.
     """
     q = query.strip()
     if not q:
         return []
     ql = q.lower()
+    exact = [Hit(ent, exact=True) for ent in index.entities_by_lower_id(ql)]
+    if exact_only:
+        return exact
+
     words = ql.split()
-    exact: list[Hit] = []
     prefix: list[Hit] = []
     substring: list[Hit] = []
     label_exact: list[Hit] = []
@@ -76,8 +80,8 @@ def search(index: Index, query: str) -> list[Hit]:
     for ent in index.all():
         eid = ent.id.lower()
         if eid == ql:
-            exact.append(Hit(ent, exact=True))
-        elif eid.startswith(ql):
+            continue
+        if eid.startswith(ql):
             prefix.append(Hit(ent, exact=False))
         elif ql in eid:
             substring.append(Hit(ent, exact=False))

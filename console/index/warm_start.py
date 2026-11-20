@@ -97,6 +97,9 @@ def _renders(index: Any) -> bool:
     from ..render import html, json as render_json
 
     try:
+        # The saved graph can be compatible even when its derived view has
+        # fields computed under an older renderer.
+        index.set_landing_model(None)
         html.landing_page(index)
         html.dashboards_page(index)
         render_json.dumps(render_json.index_freshness(index))

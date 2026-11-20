@@ -129,7 +129,7 @@ def test_reachability_measures_each_path_independently(
     from console.index import reachability
 
     baseline = idx.reachability()
-    monkeypatch.setattr(reachability, "search", lambda index, query: [])
+    monkeypatch.setattr(reachability, "search", lambda index, query, *, exact_only: [])
     broken_search = idx.reachability()
 
     assert broken_search["search_reachable"] == 0

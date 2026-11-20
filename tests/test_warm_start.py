@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import os
 import pickle
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from console.index import warm_start
 from console.index.build import Supervisor
 from console.render import json as render_json
 from console.render.html import landing_page
+from console.search.resolve import search
+from console.server.router import resolve
 
 from tests.test_home import _index
 
@@ -131,3 +135,29 @@ def test_a_failed_build_after_a_warm_start_says_it_failed(tmp_path):
     page = landing_page(idx)
     assert "The last refresh failed" in page and "Restarted" not in page
     assert "Trading" in page  # the last good rows are still served
+
+
+def test_previous_code_cache_restores_search_and_transparency_payload(tmp_path: Path) -> None:
+    index = _index()
+    path = tmp_path / "last_index.pickle"
+    # A successful build has a finalized graph and a cached landing model.
+    model = index.landing_model()
+    before = index.transparency_gap()
+    query = index.all()[0].id
+    del index._by_lower_id
+    model.gap.pop("unreported_ids", None)
+    model.numbers["transparency_gap"].pop("unreported_ids", None)
+    index.build_info = replace(index.build_info, built_at=T0.isoformat())
+    assert warm_start.save(index, str(path), "previous-code")
+
+    restarted = Supervisor(_index, refresh_seconds=180, clock=lambda: T1,
+                           defer_first_build=True, warm_start_path=str(path))
+    restarted._restore_warm()
+    restored = restarted.current
+    assert restored.build_info.bootstrap is True
+    assert restored.build_info.warm_start_from == T0.isoformat()
+    assert restored.build_info.stale_since == T1.isoformat()
+    assert search(restored, query)[0].entity.id == query
+    assert [h.entity.id for h in search(restored, query, exact_only=True)] == [query]
+    payload = render_json.payload(restored, resolve("/"))
+    assert payload["numbers"]["transparency_gap"] == before

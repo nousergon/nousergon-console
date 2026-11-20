@@ -95,6 +95,7 @@ def aggregate(count: int, denominator: int | None) -> dict[str, int]:
 
 def payload(index: Index, req: Resolved) -> dict[str, Any]:
     """The JSON body for a resolved request — the same query the HTML renders."""
+    doc: dict[str, object]
     if req.view in ("landing", "health"):
         doc = _landing(index)
     elif req.view == "list":

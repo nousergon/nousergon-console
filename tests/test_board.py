@@ -597,3 +597,45 @@ def test_the_page_posts_what_each_box_displayed() -> None:
     s3 = FakeS3()
     page = render_html.planner_page(_index(s3))
     assert 'name="was_final.beta"' in page and 'name="was_complete.alpha" value="0"' in page
+
+
+def test_explicit_pause_has_no_expiry_and_requires_explicit_resume() -> None:
+    raw = _raw()
+    raw['projects'][0]['paused'] = True
+    idx = _index(FakeS3(), raw)
+    for day in (date(2026, 11, 22), date(2030, 1, 1)):
+        result = board.evaluate(idx, day)
+        row = next(r for r in result['active'] if r['id'] == 'alpha')
+        assert row['status_reason'] == 'paused until explicitly resumed'
+        assert row['paused'] is True and row['paused_until'] is None
+        assert 'alpha' not in result['sweep_order']
+        assert 'alpha' in result['paused']
+    assert 'paused until explicitly resumed' in render_html.planner_page(idx)
+    raw['projects'][0]['paused'] = False
+    assert 'alpha' in board.evaluate(_index(FakeS3(), raw), date(2030, 1, 1))['sweep_order']
+
+
+@pytest.mark.parametrize('value', ['true', 1, None])
+def test_explicit_pause_requires_boolean(value: object) -> None:
+    raw = _raw()
+    raw['projects'][0]['paused'] = value
+    with pytest.raises(planner.PlannerConfigError, match='paused'):
+        planner.parse(raw)
+
+
+def test_initial_rank_inserts_new_project_and_saved_rank_wins() -> None:
+    raw = _raw()
+    raw['projects'][2]['initial_rank'] = 2
+    s3 = FakeS3(json.dumps({'projects': {'alpha': {'rank': 1}, 'beta': {'rank': 2}}}).encode())
+    idx = _index(s3, raw)
+    assert [r['id'] for r in board.evaluate(idx)['active']] == ['alpha', 'gamma', 'beta']
+    _save_all(idx, s3, row__gamma='2', rank__gamma='3')
+    assert [r['id'] for r in board.evaluate(_index(s3, raw))['active']] == ['alpha', 'beta', 'gamma']
+
+
+@pytest.mark.parametrize('value', [0, -1, True, '2', 1000])
+def test_initial_rank_requires_bounded_integer(value: object) -> None:
+    raw = _raw()
+    raw['projects'][0]['initial_rank'] = value
+    with pytest.raises(planner.PlannerConfigError, match='initial_rank'):
+        planner.parse(raw)

@@ -173,6 +173,7 @@ class BoardRow(TypedDict):
     review_reason: str | None
     kind: str
     health: str | None
+    paused: bool
     paused_until: str | None
 
 
@@ -300,7 +301,8 @@ def _opt_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _active_order(project_ids: list[str], entries: Mapping[str, Entry]) -> list[str]:
+def _active_order(project_ids: list[str], entries: Mapping[str, Entry],
+                  initial_ranks: Mapping[str, int] | None = None) -> list[str]:
     """Active (not complete) project ids: ranked ones by rank, then the rest
     in declared order."""
     def key(slot_pid: tuple[int, str]) -> tuple[bool, int, int]:
@@ -309,7 +311,25 @@ def _active_order(project_ids: list[str], entries: Mapping[str, Entry]) -> list[
 
     active = [(slot, pid) for slot, pid in enumerate(project_ids)
               if not (entries.get(pid) or {}).get("complete")]
-    return [pid for _, pid in sorted(active, key=key)]
+    ordered = [pid for _, pid in sorted(active, key=key)]
+    seeds = [(rank, pid) for pid, rank in (initial_ranks or {}).items()
+             if pid in ordered and _rank((entries.get(pid) or {}).get("rank")) is None]
+    # Initial positions apply only until a board save records an explicit rank.
+    for _, pid in seeds:
+        ordered.remove(pid)
+    last_position = -1
+    for rank, pid in sorted(seeds, key=lambda item: (item[0], project_ids.index(item[1]))):
+        position = min(max(rank - 1, last_position + 1), len(ordered))
+        ordered.insert(position, pid)
+        last_position = position
+    return ordered
+
+
+def _initial_ranks(index: object) -> dict[str, int]:
+    from . import planner
+
+    return {p.id: p.initial_rank for p in planner.declared(index).projects
+            if p.initial_rank is not None}
 
 
 def _issue(ref: str, title: str | None, url: str | None, labels: list[str],
@@ -494,10 +514,12 @@ def evaluate(index: object, today: date | None = None,
                                                    else "standing work, no end date")
         paused = _date_or_none(p.get("paused_until"))
         paused = paused if paused and not complete and today.isoformat() < paused else None
-        if paused:
+        is_paused = not complete and (p.get("paused") is True or paused is not None)
+        if is_paused:
             # Paused by ruling: not judged against its dates, not swept.
             status, status_reason, review, late = (
-                PAUSED_WORD, f"paused until {paused}", None, [])
+                PAUSED_WORD, ("paused until explicitly resumed" if p.get("paused") is True
+                              else f"paused until {paused}"), None, [])
         rows[pid] = BoardRow(
             id=pid, title=str(p["title"]), url=str(p["url"]),
             tracker=_opt_str(p.get("tracker")), owner=_opt_str(p.get("owner")),
@@ -512,13 +534,13 @@ def evaluate(index: object, today: date | None = None,
             n_in_progress=sum(1 for i in open_items if i["in_progress"]),
             unread_epics=unread, closed_recent=recent,
             review=review is not None, review_reason=review,
-            kind=kind, health=health, paused_until=paused,
+            kind=kind, health=health, paused=is_paused, paused_until=paused,
         )
     perm = {pid for pid, r in rows.items() if r["kind"] == "permanent"}
-    active = [rows[i] for i in _active_order(ids, _never_done(entries, perm))]
+    active = [rows[i] for i in _active_order(ids, _never_done(entries, perm), _initial_ranks(index))]
     for pos, r in enumerate(active, start=1):
         r["position"] = pos
-    sweep = _sweep_order([r for r in active if not r["paused_until"]])
+    sweep = _sweep_order([r for r in active if not r["paused"]])
     for r in active:
         r["sweep_position"] = sweep.index(r["id"]) + 1 if r["id"] in sweep else 0
     archive = sorted((r for r in rows.values() if r["complete"]),
@@ -537,7 +559,7 @@ def evaluate(index: object, today: date | None = None,
         active=active, archive=archive, sweep_order=sweep, sweep_rule=SWEEP_RULE,
         review=[r["id"] for r in active if r["review"]],
         permanent=[r["id"] for r in active if r["kind"] == "permanent"],
-        paused=[r["id"] for r in active if r["paused_until"]],
+        paused=[r["id"] for r in active if r["paused"]],
     )
 
 
@@ -592,7 +614,7 @@ def save(index: object, project_id: str, form: Mapping[str, str], actor: str | N
             raise SaveRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
         before: Entry = dict(entries.get(project_id) or {})
         entries = _never_done(entries, _permanent(index))
-        prior = _active_order(ids, entries)
+        prior = _active_order(ids, entries, _initial_ranks(index))
         entry: Entry = {**before, "next_milestone": nxt, "final": fin,
                         "updated_at": now, "updated_by": actor}
         if complete and not before.get("complete"):
@@ -710,7 +732,7 @@ def save_all(index: object, form: Mapping[str, str], actor: str | None, now: str
         except Exception as exc:  # noqa: BLE001 - nothing was written
             raise SaveRefused(f"could not read {decl.uri}: {str(exc)[:160]}", 502) from None
         entries = _never_done(entries, _permanent(index))
-        prior = _active_order(ids, entries)
+        prior = _active_order(ids, entries, _initial_ranks(index))
         changed: list[str] = []
         for pid, (_, _, nxt, fin, complete) in parsed.items():
             before: Entry = dict(entries.get(pid) or {})

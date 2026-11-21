@@ -2159,7 +2159,7 @@ def _planning_board(index: Index) -> tuple[str, str]:
             f'<td>{_board_issues(r)}</td>'
             + _board_date(r, "next_milestone", "next milestone", fid, disabled)
             + final + done + "</tr>")
-        (paused_rows if r["paused_until"] else perm_rows if permanent
+        (paused_rows if r["paused"] else perm_rows if permanent
          else temp_rows).append(row)
     head = ("<tr><th>rank</th><th>sweep</th><th>project</th><th>status</th><th>active issues</th>"
             "<th>next milestone</th><th>{final}</th><th>{done}</th></tr>")
@@ -2180,7 +2180,7 @@ def _planning_board(index: Index) -> tuple[str, str]:
                    f'{head.format(final="end", done="")}{"".join(perm_rows)}</table>')
     if paused_rows:
         tables += ('<h3>paused</h3><p class="board-hint">paused by your ruling: not judged '
-                   'against their dates and left out of the sweep until the date shown</p>'
+                   'against their dates and left out of the sweep until explicitly resumed or the date shown</p>'
                    f'<table class="plan-table board-table">'
                    f'{head.format(final="final phase", done="done")}{"".join(paused_rows)}</table>')
     active = tables + save if tables else '<p class="absent">no active projects</p>'

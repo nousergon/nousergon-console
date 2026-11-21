@@ -154,3 +154,16 @@ This repository is public, so some details in the source obligations were stated
 - `CN-2.6-log-location-referenced-not-restated` — the path of the fleet's private log-location registry file (in a private repository) was generalised to "the fleet's declared log location".
 - `CN-3.8-every-view-serves-json-at-the-same-url`, `.2`, `.3` — the hostname of the maintainer's own instance was dropped from the scope line; the scope is "every instance of nousergon-console", which includes it.
 - `CN-2.6-onboarding-costs-no-console-code.3` (and the authority line of every record) — the maintainer's personal name was replaced with "the maintainer (the repository owner)"; the ruling's date and substance are carried as written.
+
+### Planner explicit pauses and initial placement
+
+A project may declare `paused: true` to remain paused until that declaration is
+explicitly cleared. This takes precedence over `paused_until`; dated pauses
+retain their existing expiry behavior. Paused rows are grouped separately, are
+not judged against deadlines, and are excluded from `board.sweep_order`. JSON
+rows expose the effective `paused` boolean separately from `paused_until`.
+
+`initial_rank: 1..999` places a project that has no saved rank into the existing
+board order. It is only an initial position: the first board save persists the
+resulting ranks, and saved ranks always take precedence. Other projects retain
+their relative order. Equal initial positions follow declaration order.

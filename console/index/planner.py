@@ -206,6 +206,8 @@ class Project:
     #: while today < this date). A paused project reads "paused", is not off
     #: track, and leaves the sweep order (Brian 2026-11-16, focus on three).
     paused_until: date | None = None
+    paused: bool = False
+    initial_rank: int | None = None
 
 
 #: Project kinds (Brian 2026-11-15): a temporary project ends; a permanent one
@@ -429,6 +431,12 @@ def parse(raw: Any) -> Plan:
             raise PlannerConfigError(
                 f"planner project {pid!r}: `health` is for permanent projects; a temporary "
                 "project is judged by its milestones")
+        paused = spec.get("paused", False)
+        if type(paused) is not bool:
+            raise PlannerConfigError(f"planner project {pid!r}: paused must be boolean")
+        initial_rank = spec.get("initial_rank")
+        if initial_rank is not None and (type(initial_rank) is not int or not 1 <= initial_rank <= 999):
+            raise PlannerConfigError(f"planner project {pid!r}: initial_rank must be an integer from 1 to 999")
         paused_raw = spec.get("paused_until")
         paused_until = (_date(paused_raw, f"planner project {pid!r}", "paused_until")
                         if paused_raw is not None else None)
@@ -442,7 +450,7 @@ def parse(raw: Any) -> Plan:
             epics=_parse_refs(cast(Mapping[str, object], p).get("epics"), pid, "epics"),
             issues=_parse_refs(cast(Mapping[str, object], p).get("issues"), pid, "issues"),
             kind=kind, health=(health.strip() if isinstance(health, str) else None),
-            paused_until=paused_until,
+            paused_until=paused_until, paused=paused, initial_rank=initial_rank,
         ))
     labels = raw.get("blocker_labels")
     return Plan(
@@ -707,6 +715,8 @@ def evaluate(index: Any, now: datetime | date | None = None,
             "kind": p.kind,
             "health": p.health,
             "paused_until": p.paused_until.isoformat() if p.paused_until else None,
+            "paused": p.paused,
+            "initial_rank": p.initial_rank,
             # Declared position: the project's colour on the calendar follows
             # the project, so a project page draws it in the same colour.
             "slot": slot,

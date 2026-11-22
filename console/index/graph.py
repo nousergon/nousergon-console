@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from ..model.entity import RELATIONS, Edge, Entity
 from ..model.envelope import AdapterResult, AdapterStatus, ClaimClass
@@ -32,6 +32,7 @@ from .duty_window import resolve_duty_window_state
 from .merge import Claim, NamespaceCollision, _declared_facets, is_namesake, merge
 
 if TYPE_CHECKING:
+    from ..model.descriptor import Descriptor
     from .baseline import Baseline, TrendPoint
     from .landing import LandingModel
 
@@ -91,6 +92,9 @@ class Index:
         self._horizon_scope: dict[tuple[str, str], float] = {}
         self._horizon_fleetwide: float | None = None
         self._saw_ok_declaration = False
+        # Descriptor-declared facet families: literal id prefix -> declared
+        # parent component id (`Descriptor.facet_families`).
+        self._facet_families: dict[str, str] = {}
         # §8.3's DISABLED/MISSED separation is a comparison between a declared
         # cadence and an observed silence, so it needs the same tolerance
         # `staleness_honesty` uses — one factor, set from configuration, never
@@ -160,6 +164,7 @@ class Index:
     def __setstate__(self, state: dict[str, object]) -> None:
         """Restore the graph and derive postings, including for old caches."""
         self.__dict__.update(state)
+        self.__dict__.setdefault("_facet_families", {})
         self._build_lower_id_postings()
 
     def _build_lower_id_postings(self) -> None:
@@ -183,6 +188,31 @@ class Index:
         """Record a configured registry even when its adapter cannot build it."""
         self._declared_registries.add(name)
         self._landing_model = None
+
+    def declare_facet_families(self, descriptors: Iterable[Descriptor]) -> None:
+        """Record each descriptor's declared facet-family prefixes.
+
+        An observed component whose id starts with a declared prefix is a facet
+        of that descriptor's component, so `_reconcile` does not mark it
+        UNREGISTERED. Nothing is added to the registry: the denominator is
+        unchanged. A prefix declared by two components keeps its first parent
+        (descriptors arrive in sorted file order), deterministically.
+        """
+        for descriptor in descriptors:
+            for prefix in descriptor.facet_families:
+                self._facet_families.setdefault(prefix, descriptor.component_id)
+        self._finalized = False
+        self._landing_model = None
+
+    def facet_family_parent(self, entity_id: str) -> str | None:
+        """The declared parent of an observed id under a facet family, if any.
+
+        The longest matching prefix wins so nested families resolve the same
+        way on every build.
+        """
+        families: dict[str, str] = self._facet_families
+        matches: list[str] = [p for p in families if entity_id.startswith(p)]
+        return families[max(matches, key=len)] if matches else None
 
     def declare_manifest_registry(self, name: str) -> None:
         """Record a registry the fleet declares, wired to an adapter or not.
@@ -537,6 +567,10 @@ class Index:
             discovered = any(c.claim_class is ClaimClass.DISCOVERY
                              and not is_namesake(c, facets) for c in claims)
             if not declared and self._saw_ok_declaration:
+                parent = self.facet_family_parent(ent.id)
+                if parent is not None and parent != ent.id:
+                    return dataclasses.replace(
+                        ent, detail={**ent.detail, "facet_family_of": parent})
                 return _unregistered(ent)
             if declared and not discovered and self._saw_ok_discovery:
                 if (ent.state is State.UNREPORTED

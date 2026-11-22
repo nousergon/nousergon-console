@@ -38,6 +38,12 @@
       "items": {"type": "string"},
       "description": "Artifact keys this component writes. Not a binding — nothing is read to satisfy it; it is the component stating its own edges (6)."
     },
+    "facet_families": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S"},
+      "uniqueItems": true,
+      "description": "Literal component-id PREFIXES naming families of observed facets of this component (a per-stage or per-check family the observed side mints ids for). An observed component whose id starts with a declared prefix is attributed to THIS declared parent and is not counted unregistered (9.1); no registry row is added and the declared-component denominator is unchanged. Matched literally with startswith, never as a pattern; a nonempty prefix is required, since an empty one would claim every observed id. Ids outside every declared prefix stay unregistered, and a descriptor without this key behaves exactly as before."
+    },
     "consumes": {
       "type": "array",
       "items": {"type": "string"},

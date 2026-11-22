@@ -21,7 +21,7 @@ here, never in driver source and never in console configuration.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 #: Descriptor keys that declare bindings, and the entity kind each produces.
 #: A closed set: adding one is a change to this model and to §2.6, not a string
@@ -74,6 +74,10 @@ class Descriptor:
     bindings: tuple[Binding, ...] = ()
     produces: tuple[str, ...] = ()
     consumes: tuple[str, ...] = ()
+    #: Literal component-id prefixes this component declares as its own facet
+    #: families: observed components whose id starts with one are facets of
+    #: this declared parent, not unregistered components. Empty by default.
+    facet_families: tuple[str, ...] = ()
     source_file: str | None = None
 
 
@@ -132,6 +136,7 @@ def parse(row: Mapping[str, Any], component_id: str,
         bindings=tuple(bindings),
         produces=_string_list(row.get("produces")),
         consumes=_string_list(row.get("consumes")),
+        facet_families=_facet_families(row.get("facet_families"), component_id),
         source_file=source_file,
     )
 
@@ -142,6 +147,38 @@ def _string_list(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,)
     return tuple(str(v) for v in value if v)
+
+
+def _facet_families(value: object, component_id: str) -> tuple[str, ...]:
+    """The literal id prefixes a descriptor declares as facet families.
+
+    A prefix is matched literally (`str.startswith`), never as a pattern, and
+    must be a nonempty string: an empty prefix would claim every observed id
+    and silently turn the UNREGISTERED count off.
+    """
+    if value is None:
+        return ()
+    items: list[object]
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple)):
+        items = list(cast("list[object]", value))
+    else:
+        raise DescriptorError(
+            f"{component_id}: `facet_families` must be a list of nonempty "
+            f"component-id prefixes ({type(value).__name__} given)."
+        )
+    prefixes: list[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            raise DescriptorError(
+                f"{component_id}: `facet_families` entry {item!r} is not a "
+                "nonempty string. An empty prefix would claim every observed "
+                "component and hide the UNREGISTERED count."
+            )
+        if item not in prefixes:
+            prefixes.append(item)
+    return tuple(prefixes)
 
 
 def _validate_sql_source(spec: Mapping[str, Any], component_id: str) -> None:

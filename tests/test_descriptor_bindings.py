@@ -429,3 +429,34 @@ def _console_files() -> list[str]:
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         found.extend(os.path.join(dirpath, f) for f in filenames)
     return found
+
+
+# ------------------------------------------------------ facet families ------
+
+def test_facet_families_parse_and_default_to_none():
+    assert parse({"component_id": "c"}, "c").facet_families == ()
+    assert parse({"component_id": "c", "facet_families": ["s-", "t-", "s-"]},
+                 "c").facet_families == ("s-", "t-")
+    assert parse({"component_id": "c", "facet_families": "s-"},
+                 "c").facet_families == ("s-",)
+
+
+@pytest.mark.parametrize("bad", [[""], ["  "], [3], 7, {"a": "b"}])
+def test_an_empty_or_malformed_facet_family_is_rejected(bad):
+    with pytest.raises(DescriptorError, match="facet_families"):
+        parse({"component_id": "c", "facet_families": bad}, "c")
+
+
+def test_the_schema_documents_and_validates_facet_families():
+    path = os.path.join(CONSOLE_PACKAGE, "schemas",
+                        "component_descriptor.schema.json")
+    prop = json.load(open(path))["properties"]["facet_families"]
+    assert prop["type"] == "array"
+    assert prop["items"]["minLength"] == 1
+    assert "facet_families" not in json.load(open(path))["required"]
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.load(open(path))
+    jsonschema.validate({"component_id": "c", "facet_families": ["s-"]}, schema)
+    for bad in ([""], ["  "], [1]):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"component_id": "c", "facet_families": bad}, schema)

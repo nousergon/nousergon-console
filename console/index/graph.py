@@ -18,6 +18,7 @@ Two obligations are enforced here, not left to renderers:
 from __future__ import annotations
 
 import dataclasses
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -96,6 +97,10 @@ class Index:
         # two that can disagree. See `index/cadence_state.py`.
         self._staleness_factor = 1.5
         self._finalized = False
+        # Summed wall time of every non-cached `finalize()` this instance ran
+        # (alpha-engine-config-I13957). The build reports it as the NESTED
+        # `graph_fold` stage: it overlaps whichever stage triggered the fold.
+        self.fold_seconds = 0.0
         # Row id -> tracking issue (`index/triage.py`), set by build_index.
         self._triage: dict = {}
         self._entities: dict[str, Entity] = {}
@@ -404,6 +409,7 @@ class Index:
         """
         if self._finalized:
             return self
+        fold_started = time.monotonic()
         self._entities = {}
         self._by_kind = {k: [] for k in Kind}
         for entity_id, claims in self._claims.items():
@@ -427,6 +433,7 @@ class Index:
             self._by_kind[ent.kind].append(ent)
         self._build_lower_id_postings()
         self._finalized = True
+        self.fold_seconds += time.monotonic() - fold_started
         return self
 
     def set_exceptions_baseline(self, base: Baseline | None) -> None:

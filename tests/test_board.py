@@ -5,7 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -331,21 +331,28 @@ def test_kind_is_checked_and_health_is_for_permanent_only() -> None:
 
 # ------------------------------------------------------------- paused --
 
-def test_a_paused_project_reads_paused_and_leaves_the_sweep() -> None:
+def test_a_paused_project_reads_paused_and_leaves_the_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The clock is injected, never the wall: every date below is derived from
+    # one fixed "today", so the test cannot expire as real time passes.
+    today = date(2026, 11, 16)
+    resume = today + timedelta(days=6)
+    monkeypatch.setattr(render_html, "render_now",
+                        lambda: datetime(today.year, today.month, today.day, tzinfo=timezone.utc))
     raw = _raw()
-    raw["projects"][0]["paused_until"] = "2026-11-22"
+    raw["projects"][0]["paused_until"] = resume.isoformat()
     s3 = FakeS3()
     idx = _index(s3, raw)
-    _save(idx, s3, "alpha", next_milestone="2026-11-01")  # a past date: not overdue while paused
-    b = board.evaluate(idx, date(2026, 11, 16))
+    # a past date: not overdue while paused
+    _save(idx, s3, "alpha", next_milestone=(today - timedelta(days=15)).isoformat())
+    b = board.evaluate(idx, today)
     alpha = next(r for r in b["active"] if r["id"] == "alpha")
-    assert alpha["status"] == "paused" and alpha["status_reason"] == "paused until 2026-11-22"
+    assert alpha["status"] == "paused" and alpha["status_reason"] == f"paused until {resume.isoformat()}"
     assert alpha["overdue"] == [] and alpha["sweep_position"] == 0
     assert "alpha" not in b["sweep_order"] and b["paused"] == ["alpha"]
     page = render_html.planner_page(idx)
     assert "<h3>paused</h3>" in page
     # On the date the pause ends, the project is back in the sweep.
-    after = board.evaluate(idx, date(2026, 11, 22))
+    after = board.evaluate(idx, resume)
     assert "alpha" in after["sweep_order"] and after["paused"] == []
 
 

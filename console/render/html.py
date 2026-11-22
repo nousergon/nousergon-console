@@ -2118,7 +2118,7 @@ def _planning_board(index: Index) -> tuple[str, str]:
     final-phase dates and a complete checkbox, then the archive."""
     from ..index import board, planner
 
-    b = board.evaluate(index)
+    b = board.evaluate(index, now=render_now())
     if not b["declared"]:
         return "", ""
     org = planner.declared(index).org

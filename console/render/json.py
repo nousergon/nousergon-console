@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from ..index.build import NESTED_STAGES, STAGE_DEFINITIONS, STAGE_ORDER, BuildStage
 from ..index.graph import Index
 from ..index.numbers import artifact_observation_coverage as _artifact_observation_coverage
 from ..index.numbers import claim_conflicts as _claim_conflicts
@@ -230,6 +231,39 @@ def payload(index: Index, req: Resolved) -> dict[str, Any]:
     return doc
 
 
+TIMING_DEFINITIONS: dict[str, str] = {
+    "build_seconds": (
+        "Wall-clock time of the whole build pass on the supervisor thread."),
+    "stages[].seconds": (
+        "Wall-clock span of one build stage, boundaries in "
+        "stages[].definition. Stages run in sequence and do not overlap, except "
+        "a stage with nested=true, whose time is already inside another "
+        "stage. Null means the stage did not run or was not measured; it is "
+        "never 0 and never computed by subtraction."),
+    "sources[].elapsed_seconds": (
+        "Duration of that one source's own read. Sources are read "
+        "concurrently (FETCH_WORKERS), so these durations overlap and their "
+        "sum is NOT build time. Null means no read was timed for the source "
+        "(none happened, or it was served without one); never 0."),
+}
+
+
+def _stage_rows(stages: tuple[BuildStage, ...]) -> list[dict[str, object]]:
+    """Every known stage in build order; absent ones are reported as null."""
+    seen = {st.name: st for st in stages}
+    rows: list[dict[str, object]] = []
+    for name in STAGE_ORDER:
+        st = seen.get(name)
+        rows.append({
+            "name": name,
+            "seconds": st.seconds if st is not None else None,
+            "outcome": st.outcome if st is not None else None,
+            "nested": name in NESTED_STAGES,
+            "definition": STAGE_DEFINITIONS[name],
+        })
+    return rows
+
+
 def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]:
     """The index's own as-of and every source's read (§5.9)."""
     info = index.build_info
@@ -251,6 +285,13 @@ def index_freshness(index: Index, now: datetime | None = None) -> dict[str, Any]
         # bootstrap read rather than treat its zeroed §9 numbers as fleet
         # state.
         "bootstrap": info.bootstrap,
+        # alpha-engine-config-I13957: where the build's wall time went. Spans
+        # are measured, never inferred; see `timing_definitions`.
+        "stages": _stage_rows(info.stages),
+        "last_failed_stages": (
+            _stage_rows(info.last_failed_stages) if info.last_failed_stages else None),
+        "restart_cache": info.restart_cache,
+        "timing_definitions": TIMING_DEFINITIONS,
         "sources": [
             {
                 "name": a.name, "status": a.status, "fetched_at": a.fetched_at,

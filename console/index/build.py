@@ -67,6 +67,71 @@ class AdapterFetch:
         )
 
 
+#: The build stages, in the order a build runs them, each with the boundary it
+#: measures (alpha-engine-config-I13957). A stage is a WALL-CLOCK span on the
+#: build thread; the stages tile the build and never overlap, with the two
+#: marked exceptions below. A stage that did not run on a pass is reported with
+#: `seconds: null` -- never 0.0, which would claim a free stage -- and nothing
+#: here is ever derived by subtracting one number from another.
+STAGE_DEFINITIONS: dict[str, str] = {
+    "warm_restore": (
+        "Supervisor: load the last-good index cache after a restart, before "
+        "the build proper. Null on every build that is not the first build "
+        "of a process."),
+    "config_parse": (
+        "Parse and validate every declared block (milestones, planner, pages, "
+        "products and so on) before any source is read."),
+    "registry_read": "Read each registry, serially, one read at a time.",
+    "adapter_fetch": (
+        "Run every enabled adapter's read (up to FETCH_WORKERS at once) and "
+        "fold the results into the index in declared order. The individual "
+        "source reads inside it overlap each other."),
+    "planner_reads": (
+        "Read the delivery planner's required issues and the planning "
+        "board's epic sub-issues. Null when the config declares neither."),
+    "planning_board_read": "Read the planning board's saved ranks and dates.",
+    "your_actions_read": (
+        "Read the open issues behind Your actions. Null when not declared."),
+    "tick_lists_read": "Read each tick list's marks. Null when none declared.",
+    "driver_bindings": (
+        "Resolve every descriptor binding through its driver, serially."),
+    "triage_overlay_read": "Read the triage overlay. Null when not declared.",
+    "exceptions_baseline_read": (
+        "Read the exceptions baseline and its trend. Null when not declared."),
+    "onboarding_cost": "Compute section 9.8's onboarding cost (git history).",
+    "answer_latency": (
+        "Run the standing question set against the index just built "
+        "(section 9.4). Any graph fold it triggers is inside this span."),
+    "milestone_journal": (
+        "Attach the declared views and write the milestone clause journal."),
+    "landing_model": "Construct the landing view's model once for the build.",
+    "publish": (
+        "Render and write the planner document to its declared object. Null "
+        "when no publish target is declared."),
+    "graph_fold": (
+        "NESTED, overlaps the stages above: the summed wall time of every "
+        "non-cached Index.finalize() (claim merge and resolution) during the "
+        "build. Its time is already inside whichever stage triggered it; "
+        "never add it to them."),
+}
+
+STAGE_ORDER: tuple[str, ...] = tuple(STAGE_DEFINITIONS)
+
+#: Stages whose time is contained in another stage's span.
+NESTED_STAGES: frozenset[str] = frozenset({"graph_fold"})
+
+
+@dataclass(frozen=True)
+class BuildStage:
+    """One build stage's wall-clock span (see `STAGE_DEFINITIONS`)."""
+
+    name: str
+    #: None means the stage did not run or was not measured -- never 0.0.
+    seconds: float | None
+    #: "ok", "failed" (the stage raised, or recorded a failure), or None.
+    outcome: str | None = None
+
+
 @dataclass(frozen=True)
 class BuildInfo:
     """When this index was built and from what. Rendered, never inferred."""
@@ -101,6 +166,17 @@ class BuildInfo:
     #: (`warm_start.py`): the `built_at` of the build it came from. Always
     #: paired with `bootstrap=True` and `stale_since`, never served as current.
     warm_start_from: str | None = None
+    #: Wall-clock spans of this build's stages (alpha-engine-config-I13957).
+    #: Distinct from each source's `elapsed_seconds`, which is one read's
+    #: duration and overlaps its siblings.
+    stages: tuple[BuildStage, ...] = ()
+    #: The stages a build that FAILED got through, recorded on the still-served
+    #: previous index beside `last_error`. Empty when the last build worked.
+    last_failed_stages: tuple[BuildStage, ...] = ()
+    #: "warm" / "cold" for the first build after a restart (a last-good cache
+    #: was / was not restored), None for every steady-state rebuild, so warm and
+    #: cold starts are never averaged together.
+    restart_cache: str | None = None
 
     @property
     def cadence_overrun(self) -> bool:
@@ -292,16 +368,28 @@ class Supervisor:
             f"built {built}, from before the restart"))
         return index
 
-    def _restore_warm(self) -> None:
+    def _restore_warm(self) -> tuple[BuildStage | None, str | None]:
+        """Restore the last-good cache once; return its span and warm/cold.
+
+        (None, None) when no restore was attempted this pass.
+        """
         # Only the background builder calls this in serving mode, AFTER bind.
         # Disk reads, unpickling and compatibility renders can all be expensive.
         if not self._warm_pending:
-            return
+            return None, None
         self._warm_pending = False
-        seed = self._warm_seed()
+        started = self._monotonic()
+        try:
+            seed = self._warm_seed()
+        except BaseException as exc:
+            setattr(exc, "build_stages", (BuildStage(
+                "warm_restore", self._monotonic() - started, "failed"),))
+            raise
         if seed is not None:
             with self._lock:
                 self._current = seed
+        return (BuildStage("warm_restore", self._monotonic() - started, "ok"),
+                "warm" if seed is not None else "cold")
 
     def _save_warm(self, index: Index) -> None:
         if not self._warm_start_path:
@@ -349,12 +437,18 @@ class Supervisor:
         """
         started = self._monotonic()
         self._last_build_started = started
+        warm: BuildStage | None = None
+        restart_cache: str | None = None
         try:
-            self._restore_warm()
+            warm, restart_cache = self._restore_warm()
             fresh = self._builder()
         except Exception as exc:  # noqa: BLE001 - the marker IS the handling
             with self._lock:
                 _mark_stale(self._current, self._clock, exc)
+                self._current.build_info = replace(
+                    self._current.build_info,
+                    last_failed_stages=_with_warm(
+                        warm, getattr(exc, "build_stages", ())))
                 # A failed build ENDS the bootstrap window: it is no longer
                 # "has not finished" but "failed", the distinction `bootstrap`
                 # exists to carry (see `_blank_stale`). Left set, a warm-started
@@ -367,6 +461,10 @@ class Supervisor:
             return False
         _stamp(fresh, self._clock, self._refresh_seconds,
                build_seconds=self._monotonic() - started)
+        fresh.build_info = replace(
+            fresh.build_info,
+            stages=_with_warm(warm, fresh.build_info.stages),
+            restart_cache=restart_cache)
         with self._lock:
             self._current = fresh
             self._built_once = True
@@ -423,6 +521,14 @@ class Supervisor:
                 next_start += periods_missed * self._refresh_seconds
 
 
+def _with_warm(warm: BuildStage | None,
+               stages: tuple[BuildStage, ...]) -> tuple[BuildStage, ...]:
+    """The supervisor's own span in front of the builder's, never twice."""
+    if warm is None:
+        return tuple(stages)
+    return (warm,) + tuple(st for st in stages if st.name != "warm_restore")
+
+
 def _stamp(index: Index, clock: Callable[[], datetime], refresh_seconds: float,
            build_seconds: float | None = None) -> None:
     index.build_info = replace(
@@ -434,6 +540,7 @@ def _stamp(index: Index, clock: Callable[[], datetime], refresh_seconds: float,
         last_error=None,
         bootstrap=False,
         warm_start_from=None,
+        last_failed_stages=(),
     )
 
 

@@ -9,9 +9,12 @@ holds no topology of its own.
 """
 from __future__ import annotations
 
+import functools
 import os
 import time
-from typing import Any, Callable, cast
+from contextvars import ContextVar
+from dataclasses import replace
+from typing import Any, Callable, ParamSpec, cast
 
 import yaml
 
@@ -46,7 +49,7 @@ from .index import products as products_config
 from .index import reports as report_feeds
 from .index import triage as triage_overlay
 from .index import baseline as exceptions_baseline
-from .index.build import Supervisor, now_iso
+from .index.build import BuildStage, Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
 from .model.envelope import AdapterResult, AdapterStatus
@@ -204,6 +207,83 @@ def registry_manifest_names(config: dict[str, Any]) -> list[str]:
     return names
 
 
+P = ParamSpec("P")
+
+
+class _StageClock:
+    """Wall-clock spans for the build's stages (alpha-engine-config-I13957).
+
+    `enter(name)` closes the stage in progress and opens the next, so the
+    stages tile the build and never overlap. A stage that is never entered on a
+    pass is simply absent, which the status reports as null -- not 0.0. If the
+    build raises, the open stage is recorded `failed` and the stages so far ride
+    on the exception (`build_stages`) for the supervisor to show.
+    """
+
+    def __init__(self) -> None:
+        self.stages: list[BuildStage] = []
+        self._open: tuple[str, float] | None = None
+
+    def enter(self, name: str) -> None:
+        self.close()
+        self._open = (name, time.monotonic())
+
+    def close(self, outcome: str = "ok") -> None:
+        if self._open is not None:
+            name, started = self._open
+            self._open = None
+            self.stages.append(BuildStage(name, time.monotonic() - started, outcome))
+
+    def mark_failed(self) -> None:
+        """The stage in progress did its work but reported a failure."""
+        if self._open is not None:
+            name, started = self._open
+            self._open = None
+            self.stages.append(BuildStage(name, time.monotonic() - started, "failed"))
+
+    def fail(self, exc: BaseException) -> None:
+        self.close("failed")
+        setattr(exc, "build_stages", tuple(self.stages))
+
+
+_CLOCK: ContextVar[_StageClock | None] = ContextVar("build_stage_clock", default=None)
+
+
+def _enter(name: str) -> None:
+    """Open build stage `name` on the running build's clock (no-op outside one)."""
+    clock = _CLOCK.get()
+    if clock is not None:
+        clock.enter(name)
+
+
+def _mark_stage_failed() -> None:
+    clock = _CLOCK.get()
+    if clock is not None:
+        clock.mark_failed()
+
+
+def _staged(build: Callable[P, Index]) -> Callable[P, Index]:
+    """Record the build's stage spans on the index it returns, or on the
+    exception it raises (`build_stages`), without touching its signature."""
+    @functools.wraps(build)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Index:
+        clock = _StageClock()
+        token = _CLOCK.set(clock)
+        try:
+            index = build(*args, **kwargs)
+        except BaseException as exc:
+            clock.fail(exc)
+            raise
+        finally:
+            _CLOCK.reset(token)
+        clock.close()
+        stages = [*clock.stages, BuildStage("graph_fold", index.fold_seconds, "ok")]
+        index.build_info = replace(index.build_info, stages=tuple(stages))
+        return index
+    return wrapper
+
+
+@_staged
 def build_index(config: dict[str, Any]) -> Index:
     """Run every enabled adapter once and fold its projection into the index.
 
@@ -221,6 +301,7 @@ def build_index(config: dict[str, Any]) -> Index:
     introduces the mistake.
     """
     index = Index()
+    _enter("config_parse")
     # Parsed FIRST, before any adapter runs: an unknown binding kind or
     # comparator must fail the build naming the milestone and clause, not
     # render as an absence on a page that otherwise looks fine (§4.5). This is
@@ -285,6 +366,7 @@ def build_index(config: dict[str, Any]) -> Index:
     except ConfigError as exc:
         index.add_result(_config_error_result("registry_manifest", exc))
     descriptors: list = []
+    _enter("registry_read")
     # The registry adapter is configured under its own `registry:` block.
     registry_entries = ([config["registry"]] if config.get("registry") else [])
     registry_entries.extend(config.get("registries") or [])
@@ -320,6 +402,7 @@ def build_index(config: dict[str, Any]) -> Index:
     # 709s on 2026-11-10, ~1460s on 11-12, past the config-apply probe's
     # 1500s deadline (alpha-engine-config-I13625). Folding stays serial and
     # ordered, so the index is identical to the serial build.
+    _enter("adapter_fetch")
     inbox = _Inbox()
     for entry in config.get("adapters", []) or []:
         if not entry.get("enabled"):
@@ -344,6 +427,8 @@ def build_index(config: dict[str, Any]) -> Index:
     # repos adapter lists only the newest issues per repo. One read for every
     # ref any milestone declares, so the list lives in the plan and nowhere
     # else.
+    if declared_plan.refs or (declared_board is not None and declared_plan.epics):
+        _enter("planner_reads")
     if declared_plan.refs:
         from .adapters import git_host as _git_host
 
@@ -374,9 +459,13 @@ def build_index(config: dict[str, Any]) -> Index:
         board_epics = planning_board.Epics(
             rows=epic_rows,
             unread=tuple(e for e in declared_plan.epics if e not in epic_rows))
+    if declared_board is not None:
+        _enter("planning_board_read")
+    started = time.monotonic()
     board_store, board_results = planning_board.read(declared_board, now_iso())
+    elapsed = time.monotonic() - started
     for result in board_results:
-        index.add_result(result)
+        index.add_result(result, elapsed_seconds=elapsed)
     planning_board.attach(index, board_store, board_epics)
 
     # Your actions: open issues carrying a declared label, read from the
@@ -386,23 +475,33 @@ def build_index(config: dict[str, Any]) -> Index:
         index.add_result(_config_error_result(your_actions.SOURCE_NAME,
                                               ConfigError(str(actions_error))))
     elif declared_actions is not None:
+        _enter("your_actions_read")
+        started = time.monotonic()
         actions_listing, actions_result = your_actions.read(declared_actions, now_iso())
-        index.add_result(actions_result)
+        index.add_result(actions_result, elapsed_seconds=time.monotonic() - started)
         your_actions.attach(index, actions_listing)
 
     # Tick lists: each declared list's marks, read from its store on every
     # build (`index/ticks.py`). A store that cannot be read is a FAILED source.
+    if declared_ticks:
+        _enter("tick_lists_read")
+    started = time.monotonic()
     tick_stores, tick_results = tick_lists.read(declared_ticks, now_iso())
+    elapsed = time.monotonic() - started
     for result in tick_results:
-        index.add_result(result)
+        index.add_result(result, elapsed_seconds=elapsed)
     tick_lists.attach(index, tick_stores)
 
     # §2.6: every component's own descriptor said where its facts live. Walking
     # those bindings is what makes onboarding cost ONE FILE — a component whose
     # data lands somewhere no adapter points is read because it said where, not
     # because somebody added a prefix to this file.
-    for result in resolve_bindings(descriptors, _driver_context(config)):
-        index.add_result(result)
+    _enter("driver_bindings")
+    driver_seconds: dict[str, float] = {}
+    for result in resolve_bindings(descriptors, _driver_context(config),
+                                   timings=driver_seconds):
+        index.add_result(result, elapsed_seconds=driver_seconds.get(
+            result.name.removeprefix("driver:")))
 
     # Which issue tracks each red row, and at what priority (`index/triage.py`).
     # Without it every component and run row reads "untriaged" on /exceptions.
@@ -412,8 +511,10 @@ def build_index(config: dict[str, Any]) -> Index:
         index.add_result(_config_error_result(triage_overlay.SOURCE_NAME, ConfigError(str(exc))))
         triage_source = None
     if triage_source is not None:
+        _enter("triage_overlay_read")
+        started = time.monotonic()
         marks, result = triage_overlay.read(triage_source, now_iso())
-        index.add_result(result)
+        index.add_result(result, elapsed_seconds=time.monotonic() - started)
         index.set_triage(marks)
 
     # Which red rows are new since yesterday's published list (`index/baseline.py`).
@@ -426,13 +527,17 @@ def build_index(config: dict[str, Any]) -> Index:
     if baseline_source is not None:
         from datetime import datetime, timezone
 
+        _enter("exceptions_baseline_read")
+        started = time.monotonic()
         base, result = exceptions_baseline.read(baseline_source, datetime.now(timezone.utc))
-        index.add_result(result)
+        index.add_result(result, elapsed_seconds=time.monotonic() - started)
         index.set_exceptions_baseline(base)
+        started = time.monotonic()
         points, trend_result = exceptions_baseline.read_trend(
             baseline_source, datetime.now(timezone.utc))
+        trend_elapsed = time.monotonic() - started
         if trend_result is not None:
-            index.add_result(trend_result)
+            index.add_result(trend_result, elapsed_seconds=trend_elapsed)
         index.set_exceptions_trend(points)
 
     # §9.8: computed once per build (a git subprocess per registry row is not
@@ -450,13 +555,16 @@ def build_index(config: dict[str, Any]) -> Index:
         (r.get("id_field", "component_id") for r in registry_entries if r.get("path")),
         "component_id",
     )
+    _enter("onboarding_cost")
     index.set_onboarding_cost(
         compute_onboarding_cost(repo_root, registry_paths, id_field=registry_id_field)
     )
     # §9.4: run the standing question set against the index just built.
+    _enter("answer_latency")
     index.set_answer_latency(measure_answer_latency(index))
     # Declarations only — evaluation is per query, over the built graph, and
     # nothing about it is cached (§5.6).
+    _enter("milestone_journal")
     milestone_predicates.attach(index, declared_milestones)
     delivery_planner.attach(index, declared_plan)
     report_feeds.attach(index, declared_feeds)
@@ -494,11 +602,17 @@ def build_index(config: dict[str, Any]) -> Index:
     # returns.
     from .index.landing import build as _build_landing_model
 
+    _enter("landing_model")
     index.set_landing_model(_build_landing_model(index))
     # The planner, published for readers that cannot reach the console (the
     # cloud plan and nightly sessions read the board from S3). After the
     # landing model, so the document matches what /planner.json serves.
-    planning_board.publish(index, now_iso())
+    published = planning_board.store(index)
+    if published is not None and published.declaration.publish is not None:
+        _enter("publish")
+        planning_board.publish(index, now_iso())
+        if published.publish_error:
+            _mark_stage_failed()
     return index
 
 

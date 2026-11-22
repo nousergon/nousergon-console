@@ -12,6 +12,7 @@ source in the fleet.
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from ..model.descriptor import Binding, Descriptor
@@ -44,8 +45,17 @@ __all__ = ["DRIVERS", "KNOWN_DRIVERS", "Cost", "DriverResult",
 def resolve_bindings(
     descriptors: list[Descriptor],
     context: dict[str, Any] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> list[AdapterResult]:
     """Read every binding every descriptor declared, one result per driver.
+
+    ``timings``, when given, is filled with ``driver name -> seconds`` for every
+    driver a read happened for (alpha-engine-config-I13957): the sum of that
+    driver's individual binding reads, which run one after another here, so it
+    is time spent reading that driver and not a share of anything else. A
+    failed read is timed like a successful one; a driver no read happened for
+    (a binding naming an unregistered driver) gets no entry, so the caller sees
+    None, never 0.0.
 
     Grouped **by driver**, not by component, so the index sees one claim source
     per shape — which is what makes `§5.9`'s per-source fetch record and
@@ -58,6 +68,7 @@ def resolve_bindings(
     """
     context = dict(context or {})
     by_driver: dict[str, list[DriverResult]] = {}
+    spent: dict[str, float] = {} if timings is None else timings
 
     for descriptor in descriptors:
         for binding in descriptor.bindings:
@@ -70,7 +81,12 @@ def resolve_bindings(
                 result = DriverResult.failed(
                     binding, f"driver {binding.driver!r} is not registered")
             else:
-                result = module.read(binding, context)
+                started = time.monotonic()
+                try:
+                    result = module.read(binding, context)
+                finally:
+                    spent[binding.driver] = (spent.get(binding.driver, 0.0)
+                                             + time.monotonic() - started)
             by_driver.setdefault(binding.driver, []).append(result)
 
     return [_fold(driver, results) for driver, results in sorted(by_driver.items())]

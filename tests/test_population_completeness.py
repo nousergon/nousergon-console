@@ -332,3 +332,69 @@ def test_the_landing_page_links_the_unregistered_members(tmp_path: Path) -> None
     page = render_html.health_page(_index_with_one_unregistered(tmp_path))
     assert "/component?state=UNREGISTERED" in page
     assert '<a href="/component/recovery_path_staleness">' in page
+
+
+# ------------------------------------------------ descriptor facet families ---
+
+def _family_index(tmp_path: Path, observed: list[str],
+                  families: object = ("stage-",)) -> Index:
+    reg = tmp_path / "registry.d"
+    reg.mkdir()
+    _write_registry(str(reg), {"comp-parent": {"facet_families": families},
+                               "comp-other": {}})
+    index = build_index({"registry": {"adapter": "yaml-directory", "path": str(reg),
+                                      "id_field": "component_id"}})
+    index.add_result(AdapterResult(
+        name="discovery", status=AdapterStatus.OK, claim_class=ClaimClass.DISCOVERY,
+        entities=tuple(
+            Entity(kind=Kind.COMPONENT, id=oid, state=State.UNREPORTED,
+                   provenance=Provenance("discovery"))
+            for oid in observed),
+    ))
+    return index
+
+
+def test_observed_ids_under_a_declared_family_are_not_unregistered(
+    tmp_path: Path,
+) -> None:
+    index = _family_index(tmp_path, ["stage-a", "stage-b", "wild-x"])
+    result = index.population_completeness()
+    assert result["unregistered_ids"] == ["wild-x"]
+    assert result["unregistered"] == 1
+    # Denominator is the two registry rows, unchanged by the family.
+    assert result["of"] == 2 and result["rendered"] == 2
+    assert result["unrendered_ids"] == []
+    facet = index.entity("stage-a")
+    assert facet is not None and facet.state is not State.UNREGISTERED
+    assert facet.detail["facet_family_of"] == "comp-parent"
+
+
+def test_a_newly_introduced_stage_id_is_attributed_without_a_registry_edit(
+    tmp_path: Path,
+) -> None:
+    before = _family_index(tmp_path, ["stage-a"])
+    assert before.population_completeness()["unregistered_ids"] == []
+    again = tmp_path / "again"
+    again.mkdir()
+    after = _family_index(again, ["stage-a", "stage-brand-new"])
+    result = after.population_completeness()
+    assert result["unregistered_ids"] == []
+    assert result["of"] == 2
+
+
+def test_ids_outside_every_declared_prefix_remain_unregistered(
+    tmp_path: Path,
+) -> None:
+    # `stage` without the trailing separator is not under `stage-`.
+    result = _family_index(tmp_path, ["stage", "xstage-a", "other"]
+                           ).population_completeness()
+    assert result["unregistered_ids"] == ["other", "stage", "xstage-a"]
+    assert result["unregistered"] == 3
+
+
+def test_without_a_family_declaration_behaviour_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    result = _family_index(tmp_path, ["stage-a"], families=None
+                           ).population_completeness()
+    assert result["unregistered_ids"] == ["stage-a"]

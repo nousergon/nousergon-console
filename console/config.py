@@ -52,6 +52,7 @@ from .index import baseline as exceptions_baseline
 from .index.build import BuildStage, Supervisor, now_iso
 from .index.graph import Index
 from .index.onboarding import compute_onboarding_cost
+from .model.descriptor import Descriptor
 from .model.envelope import AdapterResult, AdapterStatus
 from .model.kinds import EXCEPTION_VALUES
 from .qa.questions import measure as measure_answer_latency
@@ -365,7 +366,7 @@ def build_index(config: dict[str, Any]) -> Index:
             index.declare_manifest_registry(manifest_name)
     except ConfigError as exc:
         index.add_result(_config_error_result("registry_manifest", exc))
-    descriptors: list = []
+    descriptors: list[Descriptor] = []
     _enter("registry_read")
     # The registry adapter is configured under its own `registry:` block.
     registry_entries = ([config["registry"]] if config.get("registry") else [])
@@ -395,6 +396,8 @@ def build_index(config: dict[str, Any]) -> Index:
             name, count=len(result.entities), ok=result.status is AdapterStatus.OK,
         )
         descriptors.extend(result.descriptors)
+
+    index.declare_facet_families(descriptors)
 
     # Declared adapters are independent reads (each is its own S3/API/SQL
     # round trip), so they are fetched CONCURRENTLY and folded into the index

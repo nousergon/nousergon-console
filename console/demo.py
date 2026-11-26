@@ -199,20 +199,18 @@ class Demo:
                     continue
             elif sec["type"] == "chart" and sec.get("field") in hidden:
                 continue
-            elif sec["type"] == "grid":
-                # A grid's `columns` are x VALUES (days) and its rows carry
-                # `cells`, not `fields`: the table branch below raised KeyError
-                # here and the order book's demo view answered with an empty
-                # reply (alpha-engine-config-I14579). Its one field is all a
-                # hide can name.
-                if sec.get("field") in hidden:
-                    continue
             elif sec["type"] == "report":
                 # Free text from a source: shown to exist, never what it says.
                 sections.append({"type": "report", "title": sec.get("title", ""),
                                  "withheld": "not shown in the demo view"})
                 continue
-            elif "columns" in sec:
+            elif sec["type"] == "grid" and sec["field"] in hidden:
+                continue
+            # A grid's `columns` are x VALUES (days) and its rows carry `cells`,
+            # not `fields`: the table branch raised KeyError on it and the order
+            # book's demo view answered with an empty reply
+            # (alpha-engine-config-I14579). Its one field is handled above.
+            elif "columns" in sec and sec["type"] != "grid":
                 sec["columns"] = [c for c in sec["columns"] if c not in hidden]
                 sec["rows"] = [{**r, "fields": {k: v for k, v in r["fields"].items()
                                                 if k not in hidden}}

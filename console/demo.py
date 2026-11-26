@@ -52,7 +52,7 @@ import html as _html
 import re
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 PREFIX = "/demo"
 _ATTR = "_console_demo"
@@ -349,7 +349,7 @@ class DemoIndex:
     hidden fields are stripped from the rest. Everything else — the declared
     pages, citations, build info — is the real index's, read through."""
 
-    def __init__(self, index: Any, demo: Demo):
+    def __init__(self, index: Any, demo: Demo) -> None:
         self._index = index
         self._demo = demo
         self._rows: dict[str, Any] = {}
@@ -467,7 +467,7 @@ def _link_kept(demo: Demo, href: str) -> bool:
     return href.startswith("/") and not href.startswith("//") and internal_allowed(demo, href)
 
 
-def _anchors(body: str):
+def _anchors(body: str) -> Iterator[tuple[int, int, str, str]]:
     """Each ``<a ... href="X" ...>text</a>`` as (start, end, href, text).
 
     A scan with str.find, not one regex: the body is rendered from declared and

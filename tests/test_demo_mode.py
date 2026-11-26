@@ -482,3 +482,19 @@ def test_declared_external_links_null_the_json_url():
                                  {"title": "b", "url": "https://elsewhere.example/x"},
                                  {"title": "c", "url": "#anchor"}]}, d)
     assert [link["url"] for link in out["links"]] == ["https://example.org/x", None, "#anchor"]
+
+
+def test_a_grid_section_survives_the_demo_view():
+    # alpha-engine-config-I14579: a grid's rows carry `cells`, not `fields`,
+    # and its `columns` are days; the table branch raised KeyError and the
+    # order book's demo view answered with an empty reply.
+    from console.demo import Demo
+
+    grid = {"type": "grid", "x": "trading_day", "y": "ticker",
+            "field": "target_weight_pct", "columns": ["2026-11-24", "2026-11-25"],
+            "rows": [{"label": "AAA", "cells": [{"value": 1.0, "url": None},
+                                                {"value": 2.0, "url": None}]}]}
+    out = Demo(hide_fields=frozenset({"secret"})).page_doc({"sections": [grid]})
+    assert out["sections"] == [grid]
+    hidden = Demo(hide_fields=frozenset({"target_weight_pct"}))
+    assert hidden.page_doc({"sections": [grid]})["sections"] == []

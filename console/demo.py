@@ -199,6 +199,14 @@ class Demo:
                     continue
             elif sec["type"] == "chart" and sec.get("field") in hidden:
                 continue
+            elif sec["type"] == "grid":
+                # A grid's `columns` are x VALUES (days) and its rows carry
+                # `cells`, not `fields`: the table branch below raised KeyError
+                # here and the order book's demo view answered with an empty
+                # reply (alpha-engine-config-I14579). Its one field is all a
+                # hide can name.
+                if sec.get("field") in hidden:
+                    continue
             elif sec["type"] == "report":
                 # Free text from a source: shown to exist, never what it says.
                 sections.append({"type": "report", "title": sec.get("title", ""),

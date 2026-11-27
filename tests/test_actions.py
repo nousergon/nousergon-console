@@ -1032,3 +1032,24 @@ def test_a_well_formed_options_block_ignores_a_stray_loose_marker_in_its_text():
             "B) Drop it — recommended")
     assert [letter for letter, _ in act.options(body)] == ["A", "B"]
     assert act.recommended(body) == "B"
+
+
+def test_waiting_list_is_read_and_rendered_and_a_missing_one_is_an_error():
+    from console.render.html import _waiting_section
+
+    rec = {"rows": [{"repo": "acme/ops", "number": 7, "url": "https://x/7", "title": "T", "age_days": 2,
+                     "red_line": "3", "ci": "green", "mergeable": "clean",
+                     "reason": "no review verdict at the current head"}],
+           "errors": ["acme/bad: could not list pull requests"]}
+    body = f"table\n<!-- waiting-json: {json.dumps(rec)} -->"
+    d = actions.parse(DECL)
+
+    def host(method, url, token, b):
+        return [{"number": 99, "title": "w", "body": body, "labels": []}] if "merge-waiting" in url else []
+
+    found, _ = actions.read(d, "2026-11-04T12:00:00Z", request=host)
+    html = _waiting_section(found)
+    assert "Waiting to reach you" in html and "no review verdict at the current head" in html
+    assert "could not read: acme/bad" in html
+    missing, _ = actions.read(d, "2026-11-04T12:00:00Z", request=lambda *a: [])
+    assert "could not read the waiting list" in _waiting_section(missing)

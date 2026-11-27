@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 
     from ..demo import Demo
     from ..index import board as board_types
-    from ..index.actions import Action
+    from ..index.actions import Action, Listing
     from ..index.actions import Declaration as ActionsDeclaration
     from ..index.baseline import TrendPoint
     from ..index.landing import LandingModel
@@ -2883,6 +2883,30 @@ def action_section(index: Index, a: "Action") -> str:
     return "todo" if a.actionable else "done"
 
 
+def _waiting_section(found: "Listing") -> str:
+    """The "Waiting to reach you" section: PRs waiting for Brian and what each waits on.
+    Never asks him to merge (the ready list above does); a failed read is shown
+    as an error, not as an empty list (alpha-engine-config-I14642)."""
+    out = '<section class="actions-reach"><h2>Waiting to reach you</h2>'
+    if found.waiting_error:
+        return out + f'<p class="state-MISSED">could not read the waiting list: {esc(found.waiting_error)}</p></section>'
+    out += "".join(f'<p class="state-MISSED">could not read: {esc(e)}</p>' for e in found.waiting_errors)
+    if not found.waiting:
+        return out + "</section>"
+    rows = ""
+    for r in found.waiting:
+        ref = f"{str(r.get('repo', '?')).split('/')[-1]}#{r.get('number', '?')}"
+        rows += (f'<tr><td><a href="{esc(str(r.get("url", "")))}">{esc(ref)}</a></td>'
+                 f'<td>{esc(str(r.get("title", "")))}</td><td>{esc(str(r.get("age_days", "")))}d</td>'
+                 f'<td>{esc(str(r.get("red_line", "")))}</td><td>{esc(str(r.get("ci", "")))}</td>'
+                 f'<td>{esc(str(r.get("mergeable", "")))}</td><td>{esc(str(r.get("reason", "")))}</td></tr>')
+    return (out + '<p class="muted">Not asks: these cannot be merged yet or have no review verdict. '
+            'When one is ready it moves to the list above.</p>'
+            '<table class="actions"><thead><tr><th>PR</th><th>title</th><th>age</th><th>red line</th>'
+            '<th>CI</th><th>mergeable</th><th>waiting on</th></tr></thead><tbody>'
+            + rows + '</tbody></table></section>')
+
+
 def actions_page(index: Index, notice: str | None = None) -> str:
     """Your actions (`index/actions.py`): every open issue carrying a declared
     label, not yet done first, oldest first. A tick writes the done label to
@@ -2963,6 +2987,7 @@ def actions_page(index: Index, notice: str | None = None) -> str:
                          '<button type="button" class="docket-submit"'
                          + (' disabled' if not decl.writable or missing else '')
                          + '>Submit decisions</button></aside>')
+            body += _waiting_section(found)
             if found.archive_error:
                 body += (f'<p class="absent">could not read closed actions: '
                          f'{esc(found.archive_error)}</p>')

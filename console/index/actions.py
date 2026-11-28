@@ -217,6 +217,13 @@ class Listing:
     archive_error: str | None = None
     #: True when some label had more open issues than `MAX_PAGES` pages hold.
     truncated: bool = False
+    #: "Waiting to reach you" (alpha-engine-config-I14642): the PRs waiting for
+    #: Brian with the one thing each waits on, published by `merge_asks.py` as
+    #: the JSON record in one tracker issue. A failed or missing read is
+    #: ``waiting_error``, never an empty list.
+    waiting: tuple[Mapping[str, object], ...] = ()
+    waiting_errors: tuple[str, ...] = ()
+    waiting_error: str | None = None
 
     @property
     def todo(self) -> tuple[Action, ...]:
@@ -979,10 +986,65 @@ def read(decl: Declaration, now: str, request: Request | None = None,
     actions = tuple(sorted(seen.values(), key=lambda a: (
         not a.actionable, a.due is None, a.due or "", a.created_at or "", a.number)))
     archive, archive_error = _archive(decl, call, tok, base)
+    waiting, waiting_errors, waiting_error = _waiting(decl, call, tok, base)
     return (Listing(declaration=decl, actions=actions, read_at=now, read_started=started,
-                    archive=archive, archive_error=archive_error, truncated=truncated),
+                    archive=archive, archive_error=archive_error, truncated=truncated,
+                    waiting=waiting, waiting_errors=waiting_errors, waiting_error=waiting_error),
             AdapterResult(name=SOURCE_NAME, status=AdapterStatus.OK,
                           claim_class=ClaimClass.OBSERVATION, fetched_at=now))
+
+
+WAITING_LABEL = "merge-waiting"
+_WAITING_RE = re.compile(r"<!-- waiting-json: (.*?) -->", re.DOTALL)
+
+
+def _waiting(decl: Declaration, call: Request, tok: str,
+             base: str) -> tuple[tuple[Mapping[str, object], ...], tuple[str, ...], str | None]:
+    """(rows, per-repo read errors, error) of the published waiting list."""
+    try:
+        q = urllib.parse.urlencode({"state": "open", "labels": WAITING_LABEL, "per_page": 5})
+        rows = cast("list[Mapping[str, object]]", call("GET", f"{base}/repos/{decl.org}/{decl.repo}/issues?{q}",
+                                                       tok, None) or [])
+        for issue in rows:
+            if "pull_request" in issue:
+                continue
+            m = _WAITING_RE.search(str(issue.get("body") or ""))
+            if m:
+                return _waiting_record(json.loads(m.group(1)))
+        return (), (), "no waiting list is published yet"
+    except Exception as exc:  # noqa: BLE001 - shown as the reason, never an empty list
+        return (), (), str(exc)[:240] or type(exc).__name__
+
+
+#: Every field the "Waiting to reach you" table renders; a row missing one is
+#: malformed publisher output, not a row to show with blanks.
+WAITING_FIELDS = ("repo", "number", "url", "title", "age_days", "red_line", "ci", "mergeable", "reason")
+
+
+def _waiting_record(
+        record: object) -> tuple[tuple[Mapping[str, object], ...], tuple[str, ...], str | None]:
+    """Validate a published waiting record. Anything malformed is the error, never
+    an empty list: only a well-formed record with ``"rows": []`` reads as empty."""
+    if not isinstance(record, dict):
+        return (), (), f"malformed waiting record: expected an object, got {type(record).__name__}"
+    rec = cast("dict[str, object]", record)
+    if "rows" not in rec:
+        return (), (), "malformed waiting record: no \"rows\" list"
+    raw_rows, raw_errors = rec["rows"], rec.get("errors", [])
+    if not isinstance(raw_rows, list):
+        return (), (), "malformed waiting record: \"rows\" is not a list"
+    if not isinstance(raw_errors, list):
+        return (), (), "malformed waiting record: \"errors\" is not a list"
+    rows: list[Mapping[str, object]] = []
+    for i, r in enumerate(cast("list[object]", raw_rows)):
+        if not isinstance(r, dict):
+            return (), (), f"malformed waiting record: row {i} is not an object"
+        row = cast("dict[str, object]", r)
+        missing = [f for f in WAITING_FIELDS if f not in row]
+        if missing:
+            return (), (), f"malformed waiting record: row {i} is missing {', '.join(missing)}"
+        rows.append(row)
+    return tuple(rows), tuple(str(e) for e in cast("list[object]", raw_errors)), None
 
 
 def _archive(decl: Declaration, call: Request, tok: str,

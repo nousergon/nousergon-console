@@ -1032,3 +1032,95 @@ def test_a_well_formed_options_block_ignores_a_stray_loose_marker_in_its_text():
             "B) Drop it — recommended")
     assert [letter for letter, _ in act.options(body)] == ["A", "B"]
     assert act.recommended(body) == "B"
+
+
+def test_waiting_list_is_read_and_rendered_and_a_missing_one_is_an_error():
+    from console.render.html import _waiting_section
+
+    rec = {"rows": [{"repo": "acme/ops", "number": 7, "url": "https://x/7", "title": "T", "age_days": 2,
+                     "red_line": "3", "ci": "green", "mergeable": "clean",
+                     "reason": "no review verdict at the current head"}],
+           "errors": ["acme/bad: could not list pull requests"]}
+    body = f"table\n<!-- waiting-json: {json.dumps(rec)} -->"
+    d = actions.parse(DECL)
+
+    def host(method, url, token, b):
+        return [{"number": 99, "title": "w", "body": body, "labels": []}] if "merge-waiting" in url else []
+
+    found, _ = actions.read(d, "2026-11-04T12:00:00Z", request=host)
+    html = _waiting_section(found)
+    assert "Waiting to reach you" in html and "no review verdict at the current head" in html
+    assert "could not read: acme/bad" in html
+    missing, _ = actions.read(d, "2026-11-04T12:00:00Z", request=lambda *a: [])
+    assert "could not read the waiting list" in _waiting_section(missing)
+
+
+_WAITING_ROW = {"repo": "acme/ops", "number": 7, "url": "https://github.com/acme/ops/pull/7", "title": "T",
+                "age_days": 2, "red_line": "3", "ci": "green", "mergeable": "clean", "reason": "no verdict"}
+
+
+def _waiting_found(marker: str):
+    body = f"table\n<!-- waiting-json: {marker} -->"
+
+    def host(method, url, token, b):
+        return [{"number": 99, "title": "w", "body": body, "labels": []}] if "merge-waiting" in url else []
+
+    found, _ = actions.read(actions.parse(DECL), "2026-11-04T12:00:00Z", request=host)
+    return found
+
+
+@pytest.mark.parametrize("url", [
+    "javascript:alert(document.domain)",
+    "https://example.com/acme/ops/pull/7",
+    "https://github.com/acme/ops/issues/7",
+    "https://github.com/acme/ops/pull/7/files",
+    "https://github.com/acme/ops/pull/7\n",
+])
+def test_a_waiting_row_links_only_a_github_pull_request_url(url):
+    from console.render.html import _waiting_section
+
+    found = _waiting_found(json.dumps({"rows": [dict(_WAITING_ROW, url=url)], "errors": []}))
+    assert found.waiting_error is None and len(found.waiting) == 1
+    html = _waiting_section(found)
+    assert "href=" not in html
+    assert "not a GitHub pull request link" in html
+    assert "<a " not in html
+
+
+def test_a_waiting_row_with_a_github_pull_request_url_is_a_link():
+    from console.render.html import _waiting_section
+
+    html = _waiting_section(_waiting_found(json.dumps({"rows": [_WAITING_ROW], "errors": []})))
+    assert '<a href="https://github.com/acme/ops/pull/7">ops#7</a>' in html
+    assert "not a GitHub pull request link" not in html
+
+
+@pytest.mark.parametrize("marker", [
+    "{}",
+    '{"rows":["invalid"],"errors":[]}',
+    json.dumps({"rows": [{k: v for k, v in _WAITING_ROW.items() if k != "reason"}], "errors": []}),
+    '{"rows": null, "errors": []}',
+    '{"rows": [], "errors": "oops"}',
+    "[]",
+])
+def test_a_malformed_waiting_record_is_the_error_state_not_an_empty_list(marker):
+    from console.render.html import _waiting_section
+
+    found = _waiting_found(marker)
+    assert found.waiting == () and found.waiting_error
+    assert found.waiting_error.startswith("malformed waiting record")
+    assert "could not read the waiting list: malformed waiting record" in _waiting_section(found)
+
+
+def test_a_row_missing_a_field_names_the_field():
+    row = {k: v for k, v in _WAITING_ROW.items() if k != "reason"}
+    found = _waiting_found(json.dumps({"rows": [_WAITING_ROW, row], "errors": []}))
+    assert found.waiting_error == "malformed waiting record: row 1 is missing reason"
+
+
+def test_a_well_formed_empty_waiting_record_is_empty_without_an_error():
+    from console.render.html import _waiting_section
+
+    found = _waiting_found('{"rows": [], "errors": []}')
+    assert found.waiting == () and found.waiting_error is None
+    assert "could not read" not in _waiting_section(found)

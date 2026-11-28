@@ -487,12 +487,22 @@ def _item(index: Any, ref: str, blocker_labels: Sequence[str]) -> dict[str, Any]
         return {"ref": ref, "readable": False, "closed": False, "blocker": None,
                 "title": None, "url": None, "labels": [], "blocked_by": []}
     detail = ent.detail or {}
-    closed = str(ent.state).lower() in {"closed", "resolved"}
     labels = list(detail.get("labels") or [])
+    # A required item closed as NOT PLANNED was set aside, not delivered
+    # (alpha-engine-config-I14663 parked ~1,500 issues that way on 2026-11-27,
+    # including the only requirement of a dated milestone). Counting it as
+    # closed would render that milestone MET for work nobody did, so it stays
+    # open and says why. Either signal is enough: the REST ``state_reason``,
+    # or a ``parked-*`` label where the reader carries no reason.
+    parked = [lab for lab in labels if lab.startswith("parked-")]
+    not_planned = str(detail.get("state_reason") or "").lower() == "not_planned" or bool(parked)
+    closed = str(ent.state).lower() in {"closed", "resolved"} and not not_planned
     blocked_by = list(detail.get("blocked_by") or [])
     gating = [lab for lab in labels if lab in blocker_labels]
     blocker = None
-    if not closed and gating:
+    if not_planned:
+        blocker = "closed as not planned" + (f" ({', '.join(parked)})" if parked else "") + ": not delivered"
+    elif not closed and gating:
         blocker = f"gated: {', '.join(gating)}"
     elif not closed and blocked_by:
         blocker = f"blocked by {', '.join(blocked_by)}"

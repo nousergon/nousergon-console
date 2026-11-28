@@ -26,6 +26,12 @@ ISSUES = {
     4: {"number": 4, "title": "plain open", "state": "OPEN", "labels": [],
         "updatedAt": "2026-10-02T00:00:00Z", "closedAt": None,
         "url": "https://example/4", "blockedBy": []},
+    5: {"number": 5, "title": "set aside", "state": "CLOSED", "labels": [],
+        "updatedAt": "2026-10-03T00:00:00Z", "closedAt": "2026-10-03T00:00:00Z",
+        "stateReason": "not_planned", "url": "https://example/5", "blockedBy": []},
+    6: {"number": 6, "title": "parked by label", "state": "CLOSED",
+        "labels": [{"name": "parked-261127"}], "updatedAt": "2026-10-03T00:00:00Z",
+        "closedAt": "2026-10-03T00:00:00Z", "url": "https://example/6", "blockedBy": []},
 }
 
 
@@ -57,6 +63,20 @@ def _ms(requires, start="2026-10-01", target="2026-10-31", **kw):
 def test_all_closed_is_met():
     m = _one(_plan([_ms(["repo-I1"])]), date(2026, 10, 5))
     assert m["state"] == planner.MET and m["closed"] == 1 and m["of"] == 1
+
+
+def test_closed_as_not_planned_is_not_delivered():
+    # alpha-engine-config-I14663: a parked requirement must never make a milestone MET.
+    m = _one(_plan([_ms(["repo-I5"])]), date(2026, 10, 5))
+    assert m["state"] != planner.MET and m["closed"] == 0
+    assert "not planned" in m["items"][0]["blocker"]
+
+
+def test_parked_label_is_not_delivered_without_a_state_reason():
+    m = _one(_plan([_ms(["repo-I1", "repo-I6"])]), date(2026, 10, 5))
+    assert m["state"] != planner.MET and m["closed"] == 1
+    item = next(i for i in m["items"] if i["ref"] == "repo-I6")
+    assert item["closed"] is False and "parked-261127" in item["blocker"]
 
 
 def test_on_track_when_work_keeps_pace_with_the_calendar():

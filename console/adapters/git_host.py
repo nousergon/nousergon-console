@@ -217,6 +217,7 @@ def _issue_row(get_json: Callable[[str], Any], repo: str,
         "labels": [{"name": lab.get("name", "")} for lab in issue.get("labels", [])],
         "updatedAt": issue.get("updated_at"),
         "closedAt": issue.get("closed_at"),
+        "stateReason": issue.get("state_reason"),  # pyright: ignore[reportUnknownMemberType]
         "url": issue.get("html_url"),
         "blockedBy": blocked_by,
     }
@@ -610,6 +611,7 @@ def fetch_refs(
             ent = _to_entity(org, repo, item, incident_label)
             detail = dict(ent.detail)
             detail["closed_at"] = item.get("closedAt")
+            detail["state_reason"] = item.get("stateReason")
             detail["blocked_by"] = sorted(item.get("blockedBy") or [])
             entities.append(dataclasses.replace(ent, detail=detail))
             seen.add(item.get("number"))

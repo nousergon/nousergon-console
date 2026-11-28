@@ -1010,13 +1010,41 @@ def _waiting(decl: Declaration, call: Request, tok: str,
                 continue
             m = _WAITING_RE.search(str(issue.get("body") or ""))
             if m:
-                record = cast("Mapping[str, object]", json.loads(m.group(1)))
-                return (tuple(cast("Mapping[str, object]", r)
-                              for r in cast("list[object]", record.get("rows") or []) if isinstance(r, dict)),
-                        tuple(str(e) for e in cast("list[object]", record.get("errors") or [])), None)
+                return _waiting_record(json.loads(m.group(1)))
         return (), (), "no waiting list is published yet"
     except Exception as exc:  # noqa: BLE001 - shown as the reason, never an empty list
         return (), (), str(exc)[:240] or type(exc).__name__
+
+
+#: Every field the "Waiting to reach you" table renders; a row missing one is
+#: malformed publisher output, not a row to show with blanks.
+WAITING_FIELDS = ("repo", "number", "url", "title", "age_days", "red_line", "ci", "mergeable", "reason")
+
+
+def _waiting_record(
+        record: object) -> tuple[tuple[Mapping[str, object], ...], tuple[str, ...], str | None]:
+    """Validate a published waiting record. Anything malformed is the error, never
+    an empty list: only a well-formed record with ``"rows": []`` reads as empty."""
+    if not isinstance(record, dict):
+        return (), (), f"malformed waiting record: expected an object, got {type(record).__name__}"
+    rec = cast("dict[str, object]", record)
+    if "rows" not in rec:
+        return (), (), "malformed waiting record: no \"rows\" list"
+    raw_rows, raw_errors = rec["rows"], rec.get("errors", [])
+    if not isinstance(raw_rows, list):
+        return (), (), "malformed waiting record: \"rows\" is not a list"
+    if not isinstance(raw_errors, list):
+        return (), (), "malformed waiting record: \"errors\" is not a list"
+    rows: list[Mapping[str, object]] = []
+    for i, r in enumerate(cast("list[object]", raw_rows)):
+        if not isinstance(r, dict):
+            return (), (), f"malformed waiting record: row {i} is not an object"
+        row = cast("dict[str, object]", r)
+        missing = [f for f in WAITING_FIELDS if f not in row]
+        if missing:
+            return (), (), f"malformed waiting record: row {i} is missing {', '.join(missing)}"
+        rows.append(row)
+    return tuple(rows), tuple(str(e) for e in cast("list[object]", raw_errors)), None
 
 
 def _archive(decl: Declaration, call: Request, tok: str,

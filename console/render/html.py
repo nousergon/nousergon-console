@@ -2883,6 +2883,15 @@ def action_section(index: Index, a: "Action") -> str:
     return "todo" if a.actionable else "done"
 
 
+#: The only URL a waiting row may link to: an https GitHub pull request, owner
+#: and repo in GitHub's allowed characters, nothing after the number. The
+#: record comes from an issue body anyone with write access can edit, so any
+#: other URL (``javascript:`` included) is shown as text, never as an href.
+_GITHUB_PR_URL = re.compile(
+    r"https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.{1,2}/)[A-Za-z0-9._-]{1,100}/pull/[1-9][0-9]*",
+    re.ASCII)
+
+
 def _waiting_section(found: "Listing") -> str:
     """The "Waiting to reach you" section: PRs waiting for Brian and what each waits on.
     Never asks him to merge (the ready list above does); a failed read is shown
@@ -2896,7 +2905,10 @@ def _waiting_section(found: "Listing") -> str:
     rows = ""
     for r in found.waiting:
         ref = f"{str(r.get('repo', '?')).split('/')[-1]}#{r.get('number', '?')}"
-        rows += (f'<tr><td><a href="{esc(str(r.get("url", "")))}">{esc(ref)}</a></td>'
+        url = str(r.get("url", ""))
+        link = (f'<a href="{esc(url)}">{esc(ref)}</a>' if _GITHUB_PR_URL.fullmatch(url)
+                else f'{esc(ref)} <span class="state-MISSED">not a GitHub pull request link: {esc(url)}</span>')
+        rows += (f'<tr><td>{link}</td>'
                  f'<td>{esc(str(r.get("title", "")))}</td><td>{esc(str(r.get("age_days", "")))}d</td>'
                  f'<td>{esc(str(r.get("red_line", "")))}</td><td>{esc(str(r.get("ci", "")))}</td>'
                  f'<td>{esc(str(r.get("mergeable", "")))}</td><td>{esc(str(r.get("reason", "")))}</td></tr>')

@@ -495,7 +495,8 @@ def _item(index: Any, ref: str, blocker_labels: Sequence[str]) -> dict[str, Any]
     # open and says why. Either signal is enough: the REST ``state_reason``,
     # or a ``parked-*`` label where the reader carries no reason.
     parked = [lab for lab in labels if lab.startswith("parked-")]
-    not_planned = str(detail.get("state_reason") or "").lower() == "not_planned" or bool(parked)
+    state_reason = str(detail.get("state_reason") or "")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    not_planned = state_reason.lower() == "not_planned" or bool(parked)
     closed = str(ent.state).lower() in {"closed", "resolved"} and not not_planned
     blocked_by = list(detail.get("blocked_by") or [])
     gating = [lab for lab in labels if lab in blocker_labels]

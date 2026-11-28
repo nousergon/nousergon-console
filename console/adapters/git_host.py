@@ -217,7 +217,7 @@ def _issue_row(get_json: Callable[[str], Any], repo: str,
         "labels": [{"name": lab.get("name", "")} for lab in issue.get("labels", [])],
         "updatedAt": issue.get("updated_at"),
         "closedAt": issue.get("closed_at"),
-        "stateReason": issue.get("state_reason"),
+        "stateReason": issue.get("state_reason"),  # pyright: ignore[reportUnknownMemberType]
         "url": issue.get("html_url"),
         "blockedBy": blocked_by,
     }
